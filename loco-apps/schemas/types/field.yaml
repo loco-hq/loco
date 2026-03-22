@@ -1,0 +1,10 @@
+version: 1
+description: "A field belonging to a collection"
+filePathTemplate: "${collection}/${name}"
+properties:
+  name:
+    type: string
+  collection:
+    type: string
+  type:
+    type: string

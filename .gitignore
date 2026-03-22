@@ -1,0 +1,23 @@
+# Build artifacts
+target/
+
+# Cargo.lock is typically committed for binaries but ignored for libraries.
+# Since this is a workspace with both, we commit it — but noting for reference.
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+
+# SQLite database
+*.db

@@ -1,0 +1,3 @@
+name: "last_name"
+collection: "contact"
+type: "string"
