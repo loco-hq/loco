@@ -85,7 +85,7 @@ pub fn scan_instances(
         return Ok(instances);
     }
 
-    // Walk: instances_dir / user / project / type_name / item.yaml
+    // Walk: instances_dir / user / project / version / type_name / item.yaml
     for user_entry in std::fs::read_dir(instances_dir)? {
         let user_entry = user_entry?;
         let user_path = user_entry.path();
@@ -110,43 +110,51 @@ pub fn scan_instances(
                 .unwrap_or("")
                 .to_string();
 
-            for type_entry in std::fs::read_dir(&project_path)? {
-                let type_entry = type_entry?;
-                let type_path = type_entry.path();
-                if !type_path.is_dir() {
+            for version_entry in std::fs::read_dir(&project_path)? {
+                let version_entry = version_entry?;
+                let version_path = version_entry.path();
+                if !version_path.is_dir() {
                     continue;
                 }
-                let type_folder = type_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
 
-                // Find matching TypeDef (case-insensitive match on folder name)
-                let type_def = type_defs.iter().find(|td| {
-                    td.name.to_lowercase() == type_folder.to_lowercase()
-                });
-                let type_def = match type_def {
-                    Some(td) => td,
-                    None => continue,
-                };
-
-                // Recursively find all .yaml files under the type folder
-                let yaml_files = collect_yaml_files(&type_path)?;
-                for item_path in yaml_files {
-                    let rel = item_path
-                        .strip_prefix(&type_path)
-                        .unwrap_or(&item_path);
-                    // Build key from relative path minus .yaml extension
-                    let key = rel
-                        .with_extension("")
-                        .to_string_lossy()
+                for type_entry in std::fs::read_dir(&version_path)? {
+                    let type_entry = type_entry?;
+                    let type_path = type_entry.path();
+                    if !type_path.is_dir() {
+                        continue;
+                    }
+                    let type_folder = type_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
                         .to_string();
 
-                    let namespace = format!("{user}/{project}.{key}");
-                    let yaml = std::fs::read_to_string(&item_path)?;
-                    let instance = parse_instance(&yaml, type_def, &namespace)?;
-                    instances.push(instance);
+                    // Find matching TypeDef (case-insensitive match on folder name)
+                    let type_def = type_defs.iter().find(|td| {
+                        td.name.to_lowercase() == type_folder.to_lowercase()
+                    });
+                    let type_def = match type_def {
+                        Some(td) => td,
+                        None => continue,
+                    };
+
+                    // Recursively find all .yaml files under the type folder
+                    let yaml_files = collect_yaml_files(&type_path)?;
+                    for item_path in yaml_files {
+                        let rel = item_path
+                            .strip_prefix(&type_path)
+                            .unwrap_or(&item_path);
+                        // Build key from relative path minus .yaml extension
+                        let key = rel
+                            .with_extension("")
+                            .to_string_lossy()
+                            .to_string();
+
+                        let namespace = format!("{user}/{project}.{key}");
+                        let yaml = std::fs::read_to_string(&item_path)?;
+                        let instance = parse_instance(&yaml, type_def, &namespace)?;
+                        instances.push(instance);
+                    }
                 }
             }
         }
@@ -235,8 +243,8 @@ label_plural: "Opportunities"
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
 
-        // Create: base/ben/crm/collection/opportunity.yaml
-        let collection_dir = base.join("ben").join("crm").join("collection");
+        // Create: base/ben/crm/0.0.1-dev/collection/opportunity.yaml
+        let collection_dir = base.join("ben").join("crm").join("0.0.1-dev").join("collection");
         std::fs::create_dir_all(&collection_dir).unwrap();
         std::fs::write(
             collection_dir.join("opportunity.yaml"),
@@ -280,8 +288,8 @@ label_plural: "Opportunities"
             }
         }
 
-        // Create nested: base/ben/crm/field/account/company.yaml
-        let account_dir = base.join("ben").join("crm").join("field").join("account");
+        // Create nested: base/ben/crm/0.0.1-dev/field/account/company.yaml
+        let account_dir = base.join("ben").join("crm").join("0.0.1-dev").join("field").join("account");
         std::fs::create_dir_all(&account_dir).unwrap();
         std::fs::write(
             account_dir.join("company.yaml"),
@@ -289,7 +297,7 @@ label_plural: "Opportunities"
         )
         .unwrap();
 
-        let contact_dir = base.join("ben").join("crm").join("field").join("contact");
+        let contact_dir = base.join("ben").join("crm").join("0.0.1-dev").join("field").join("contact");
         std::fs::create_dir_all(&contact_dir).unwrap();
         std::fs::write(
             contact_dir.join("first_name.yaml"),

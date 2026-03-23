@@ -13,6 +13,7 @@ Traditional low-code platforms invest heavily in drag-and-drop UIs, form builder
 - **Multi-tenant by default** — every operation is scoped to a tenant. Security is not bolted on later.
 - **Composable namespaces** — functionality is packaged into installable namespaces (like `loco/core`, `ben/crm`). Mix and match to build your app.
 - **AI-native interfaces** — MCP servers, CLI tools, and agent APIs are the primary way people interact with the platform.
+- **Loose on load, strict on save** — the data lake is schemaless, so reads must tolerate missing fields, extra fields, and type mismatches without crashing. The app does the best it can with what it has. Writes are strict — you cannot save data that doesn't conform to the current schema. This ensures schema evolution never breaks existing data.
 
 ---
 
@@ -29,15 +30,79 @@ What we have today.
 - [x] Namespace convention (`{user}/{project}`)
 - [x] Core namespace (`loco/core`) with user collection
 
-## Phase 2: Runtime Schema Management
+## Phase 2: Schema Sources & Runtime Loading
 
-Move from build-time-only schemas to runtime schema creation and modification. Users should be able to define collections and fields without recompiling.
+Schemas (collections, fields) are just YAML files in a known folder structure. A `SchemaSource` trait with pluggable adapters determines *where* those files come from. This replaces the current build-time-only codegen with runtime schema loading, and lays the groundwork for the namespace marketplace.
 
-- [ ] API endpoints for creating/updating/deleting collections and fields
-- [ ] Store schema metadata in the lake itself (self-describing system)
-- [ ] Schema versioning and migration support
-- [ ] Validate records against their collection's field definitions at write time
-- [ ] Support additional field types: date, datetime, reference (foreign key to another collection), picklist, multi-select, rich text, file/attachment
+### Schema Source URIs
+
+Each namespace is referenced by a URI that tells loco where to load it from:
+
+```
+file://schemas/instances/ben/crm           → local filesystem (today)
+git://github.com/ben/loco-crm@v0.0.1      → git repo + tag (future)
+git://github.com/ben/loco-crm#main        → git repo + branch (future, for drafts)
+npm://@ben/loco-crm@0.0.1                 → npm registry (future)
+```
+
+### Namespace Folder Structure
+
+Every namespace, regardless of source, follows the same layout:
+
+```
+ben/crm/
+├── loco.yaml              # namespace metadata (name, version, dependencies)
+├── collections/
+│   ├── account.yaml
+│   ├── contact.yaml
+│   └── opportunity.yaml
+└── fields/
+    ├── account/
+    │   ├── company.yaml
+    │   └── active.yaml
+    └── contact/
+        ├── first_name.yaml
+        └── last_name.yaml
+```
+
+### Data Model
+
+```
+user (ben)
+└── project (crm)
+    ├── namespace source (file://, git://, npm://)
+    │   ├── branches/tags = drafts/versions (managed by git, not loco)
+    │   └── folder structure defines collections + fields
+    └── tenants (acme, globex, dev-sandbox, ...)
+        ├── pinned ref (git tag, branch, or just "local")
+        ├── installed namespaces (loco/core@0.1.0, ...)
+        └── data (in the lake, isolated per tenant)
+```
+
+- **Schemas are files, versioned by their source** — git tags for published versions, branches for drafts, local filesystem for development. Loco doesn't reinvent version control.
+- **Projects own namespaces** — `ben/crm` is a namespace. Tenants are instances that install it.
+- **`loco/core` ships as a built-in namespace** — always installed, provides foundational collections (user, etc.).
+
+### New User Flow
+
+1. **Sign up** → get a username (`ben`)
+2. **Create a project** → `ben/crm` — initialize a namespace folder (or git repo) with the standard structure and a default `dev` tenant
+3. **Build your schema** → edit YAML files locally, or via MCP/CLI. With the local filesystem adapter, changes are picked up on reload.
+4. **Create tenants** → add `acme`, `globex`, etc.
+5. **Publish (optional)** → `git tag v0.0.1 && git push --tags`, or `npm publish`. Pin production tenants to the tag.
+
+### Implementation
+
+- [ ] **`SchemaSource` trait** — `load(uri) -> Vec<TypeDef>` with adapters for resolving namespace URIs to parsed schema files
+- [ ] **Local filesystem adapter** — reads from a local path (`file://`). This is what exists today, just formalized behind the trait.
+- [ ] **Runtime schema loading** — load schemas at server startup (and optionally reload on change) instead of only at build time
+- [ ] **Project config file** — list of namespace source URIs + tenant configurations with pinned refs
+- [ ] **Tenant namespace pinning** — each tenant specifies which namespaces and versions/refs it uses
+- [ ] **`loco/core` as built-in** — bundled with loco-apps, always available
+- [ ] **Validate records against schema at write time** — enforce field types, required fields (loose on load, strict on save)
+- [ ] **Support additional field types** — date, datetime, reference (foreign key), picklist, multi-select, rich text, file/attachment
+- [ ] **Git adapter (future)** — clone/fetch a repo, checkout a ref, load schemas from the working tree
+- [ ] **npm adapter (future)** — download a package, extract, load schemas
 
 ## Phase 3: API Key Authentication
 
@@ -114,14 +179,13 @@ Offer loco as a managed service.
 
 ## Phase 8: Namespace Marketplace
 
-A registry where people publish and install namespace packages.
+Since namespaces are just folders published to git or npm (see Phase 2), the marketplace is a discovery and curation layer on top of existing package infrastructure — not a custom registry.
 
-- [ ] Package format for namespaces (schema definitions + seed data + optional logic)
-- [ ] `loco install <namespace>` — add a namespace to your app
-- [ ] Dependency resolution (e.g., `ben/crm` depends on `loco/core`)
-- [ ] Marketplace catalog — browse, search, and rate published namespaces
-- [ ] Versioning and upgrade paths for installed namespaces
-- [ ] Templates for common use cases: CRM, project management, inventory, HR, etc.
+- [ ] **`loco install <namespace>`** — resolve a namespace URI, add it to the project config, pull the schema files
+- [ ] **Dependency resolution** — `loco.yaml` declares dependencies (e.g., `ben/crm` depends on `loco/core`), resolved transitively on install
+- [ ] **Marketplace catalog** — a web directory (or CLI-searchable index) of published namespaces with descriptions, ratings, and install counts
+- [ ] **Templates** — starter namespaces for common use cases: CRM, project management, inventory, HR, etc.
+- [ ] **Upgrade paths** — `loco upgrade ben/crm@0.0.2` updates the pinned version, shows schema diff, flags breaking changes
 
 ## Phase 9: Scripting Engine
 
