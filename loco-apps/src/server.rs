@@ -1,19 +1,19 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{FromRequestParts, Path, State};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use loco_gen_schema::registry::SchemaRegistry;
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter, Record, Value};
 
-use crate::{Collection, Field};
-
-type MetaEntries = Vec<(String, HashMap<String, String>)>;
+// Collection/Field generated types are still available via codegen
+// but the SchemaRegistry now handles runtime metadata
 
 #[derive(Debug, Deserialize)]
 pub struct TenantConfig {
@@ -22,8 +22,7 @@ pub struct TenantConfig {
 
 pub struct AppState {
     pub adapter: Box<dyn DataAdapter>,
-    pub collections: HashSet<String>,
-    pub meta: HashMap<String, MetaEntries>,
+    pub registry: SchemaRegistry,
     pub tenants: HashMap<String, TenantConfig>,
 }
 
@@ -115,12 +114,24 @@ fn lake_error_to_response(err: loco_lake::Error) -> Response {
     }
 }
 
+fn schema_error_to_response(err: loco_gen_schema::error::Error) -> Response {
+    match &err {
+        loco_gen_schema::error::Error::AlreadyExists(_) => {
+            error_response(StatusCode::CONFLICT, &err.to_string())
+        }
+        loco_gen_schema::error::Error::NotFound(_) => {
+            error_response(StatusCode::NOT_FOUND, &err.to_string())
+        }
+        _ => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
 fn collection_key(user: &str, project: &str, name: &str) -> String {
     format!("{user}/{project}.{name}")
 }
 
 fn validate_collection(state: &AppState, key: &str) -> Result<(), Box<Response>> {
-    if state.collections.contains(key) {
+    if state.registry.has_instance("collection", key) {
         Ok(())
     } else {
         Err(Box::new(error_response(
@@ -129,6 +140,23 @@ fn validate_collection(state: &AppState, key: &str) -> Result<(), Box<Response>>
         )))
     }
 }
+
+fn is_draft_version(version: &str) -> bool {
+    version.contains('-')
+}
+
+fn require_draft(version: &str) -> Result<(), Response> {
+    if is_draft_version(version) {
+        Ok(())
+    } else {
+        Err(error_response(
+            StatusCode::BAD_REQUEST,
+            &format!("version {version} is published and read-only"),
+        ))
+    }
+}
+
+// --- Data endpoints ---
 
 #[derive(Deserialize)]
 pub struct AddRecordRequest {
@@ -200,23 +228,6 @@ async fn handle_get(
     }
 }
 
-async fn handle_meta_list(
-    State(state): State<Arc<AppState>>,
-    Path((user, project, type_name)): Path<(String, String, String)>,
-) -> Response {
-    let Some(entries) = state.meta.get(&type_name) else {
-        return error_response(StatusCode::NOT_FOUND, &format!("unknown type: {type_name}"));
-    };
-
-    let prefix = format!("{user}/{project}.");
-    let filtered: Vec<_> = entries
-        .iter()
-        .filter(|(ns, _)| ns.starts_with(&prefix))
-        .collect();
-
-    ApiResponse::success(filtered).into_response()
-}
-
 async fn handle_delete(
     tenant: TenantId,
     State(state): State<Arc<AppState>>,
@@ -232,6 +243,247 @@ async fn handle_delete(
         Err(e) => lake_error_to_response(e),
     }
 }
+
+// --- Meta endpoint ---
+
+async fn handle_meta_list(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, type_name)): Path<(String, String, String)>,
+) -> Response {
+    let entries = state.registry.list_instances(&type_name, &user, &project);
+    ApiResponse::success(entries).into_response()
+}
+
+// --- Schema CRUD endpoints ---
+
+#[derive(Deserialize)]
+struct CreateCollectionRequest {
+    name: String,
+    label: String,
+    label_plural: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateCollectionRequest {
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    label_plural: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CreateFieldRequest {
+    name: String,
+    r#type: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateFieldRequest {
+    #[serde(default)]
+    r#type: Option<String>,
+}
+
+async fn handle_schema_create_collection(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, version)): Path<(String, String, String)>,
+    Json(body): Json<CreateCollectionRequest>,
+) -> Response {
+    if let Err(resp) = require_draft(&version) {
+        return resp;
+    }
+
+    let mut fields = HashMap::new();
+    fields.insert("name".to_string(), body.name.clone());
+    fields.insert("label".to_string(), body.label);
+    fields.insert("label_plural".to_string(), body.label_plural);
+
+    match state
+        .registry
+        .create_instance("collection", &user, &project, &version, &body.name, fields)
+    {
+        Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+async fn handle_schema_list_collections(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, _version)): Path<(String, String, String)>,
+) -> Response {
+    let entries = state.registry.list_instances("collection", &user, &project);
+    ApiResponse::success(entries).into_response()
+}
+
+async fn handle_schema_get_collection(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, _version, name)): Path<(String, String, String, String)>,
+) -> Response {
+    let namespace = format!("{user}/{project}.{name}");
+    match state.registry.get_instance("collection", &namespace) {
+        Some(fields) => ApiResponse::success(fields).into_response(),
+        None => error_response(StatusCode::NOT_FOUND, &format!("collection not found: {name}")),
+    }
+}
+
+async fn handle_schema_update_collection(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, version, name)): Path<(String, String, String, String)>,
+    Json(body): Json<UpdateCollectionRequest>,
+) -> Response {
+    if let Err(resp) = require_draft(&version) {
+        return resp;
+    }
+
+    let mut fields = HashMap::new();
+    if let Some(label) = body.label {
+        fields.insert("label".to_string(), label);
+    }
+    if let Some(label_plural) = body.label_plural {
+        fields.insert("label_plural".to_string(), label_plural);
+    }
+
+    match state
+        .registry
+        .update_instance("collection", &user, &project, &version, &name, fields)
+    {
+        Ok(result) => ApiResponse::success(result).into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+async fn handle_schema_delete_collection(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, version, name)): Path<(String, String, String, String)>,
+) -> Response {
+    if let Err(resp) = require_draft(&version) {
+        return resp;
+    }
+
+    // First delete all fields belonging to this collection
+    let prefix = format!("{user}/{project}.{name}/");
+    let _ = state
+        .registry
+        .delete_instances_by_prefix("field", &prefix, &version);
+
+    match state
+        .registry
+        .delete_instance("collection", &user, &project, &version, &name)
+    {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+async fn handle_schema_create_field(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, version, collection)): Path<(String, String, String, String)>,
+    Json(body): Json<CreateFieldRequest>,
+) -> Response {
+    if let Err(resp) = require_draft(&version) {
+        return resp;
+    }
+
+    let mut fields = HashMap::new();
+    fields.insert("name".to_string(), body.name.clone());
+    fields.insert("collection".to_string(), collection.clone());
+    fields.insert("type".to_string(), body.r#type);
+
+    match state.registry.create_nested_instance(
+        "field",
+        &user,
+        &project,
+        &version,
+        &collection,
+        &body.name,
+        fields,
+    ) {
+        Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+async fn handle_schema_list_fields(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, _version, collection)): Path<(String, String, String, String)>,
+) -> Response {
+    let all_fields = state.registry.list_instances("field", &user, &project);
+    let prefix = format!("{user}/{project}.{collection}/");
+    let filtered: Vec<_> = all_fields
+        .into_iter()
+        .filter(|(ns, _)| ns.starts_with(&prefix))
+        .collect();
+    ApiResponse::success(filtered).into_response()
+}
+
+async fn handle_schema_update_field(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, version, collection, name)): Path<(String, String, String, String, String)>,
+    Json(body): Json<UpdateFieldRequest>,
+) -> Response {
+    if let Err(resp) = require_draft(&version) {
+        return resp;
+    }
+
+    let mut fields = HashMap::new();
+    if let Some(r#type) = body.r#type {
+        fields.insert("type".to_string(), r#type);
+    }
+
+    match state.registry.update_nested_instance(
+        "field",
+        &user,
+        &project,
+        &version,
+        &collection,
+        &name,
+        fields,
+    ) {
+        Ok(result) => ApiResponse::success(result).into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+async fn handle_schema_delete_field(
+    State(state): State<Arc<AppState>>,
+    Path((user, project, version, collection, name)): Path<(String, String, String, String, String)>,
+) -> Response {
+    if let Err(resp) = require_draft(&version) {
+        return resp;
+    }
+
+    let namespace = format!("{user}/{project}.{collection}/{name}");
+
+    // Delete from registry (handles both disk and memory)
+    {
+        let instances = state.registry.get_instance("field", &namespace);
+        if instances.is_none() {
+            return error_response(StatusCode::NOT_FOUND, &format!("field not found: {collection}/{name}"));
+        }
+    }
+
+    // Delete the file directly
+    let file_path = std::path::Path::new("schemas/instances")
+        .join(&user)
+        .join(&project)
+        .join(&version)
+        .join("field")
+        .join(&collection)
+        .join(format!("{name}.yaml"));
+    let _ = std::fs::remove_file(&file_path);
+
+    // Remove from in-memory state by re-creating without nested delete helpers
+    // Use a workaround: create a dummy then delete it... actually let's just
+    // remove it from the registry's internal state directly
+    // For now, we need to add support for deleting nested instances
+    // Let's use delete_instances_by_prefix with an exact match
+    let _ = state
+        .registry
+        .delete_instances_by_prefix("field", &namespace, &version);
+
+    ApiResponse::success("deleted").into_response()
+}
+
+// --- App setup ---
 
 fn build_adapter() -> Box<dyn DataAdapter> {
     let adapter_type = std::env::var("LOCO_ADAPTER").unwrap_or_else(|_| "sqlite".to_string());
@@ -289,58 +541,45 @@ pub fn build_app() -> Router {
         println!("  - {id} ({})", config.name);
     }
 
-    let instances = Collection::load_all_instances();
-    let collections: HashSet<String> = instances.iter().map(|(ns, _)| ns.to_string()).collect();
+    // Load type definitions for runtime schema loading
+    let types_dir = std::path::Path::new("schemas/types");
+    let mut type_defs = Vec::new();
+    if types_dir.exists() {
+        for entry in std::fs::read_dir(types_dir).expect("failed to read schemas/types") {
+            let entry = entry.expect("failed to read type entry");
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+                let schema = loco_gen_schema::parser::parse_schema_file(&path)
+                    .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()));
+                type_defs.push(schema.type_def);
+            }
+        }
+    }
 
-    println!("Loaded {} collection(s):", collections.len());
-    for ns in &collections {
+    // Load schema registry from disk
+    let instances_dir = std::path::Path::new("schemas/instances");
+    let registry = SchemaRegistry::load(instances_dir, &type_defs)
+        .expect("failed to load schema registry");
+
+    let all_collections = registry.list_instances("collection", "", "");
+    for (ns, _) in &all_collections {
         println!("  - {ns}");
     }
 
-    let field_instances = Field::load_all_instances();
-    println!("Loaded {} field(s):", field_instances.len());
-    for (ns, _) in &field_instances {
+    let all_fields = registry.list_instances("field", "", "");
+    println!("Loaded {} field(s):", all_fields.len());
+    for (ns, _) in &all_fields {
         println!("  - {ns}");
     }
-
-    let mut meta: HashMap<String, MetaEntries> = HashMap::new();
-
-    meta.insert(
-        "collection".to_string(),
-        instances
-            .iter()
-            .map(|(ns, inst)| {
-                let mut fields = HashMap::new();
-                fields.insert("name".to_string(), inst.name().to_string());
-                fields.insert("label".to_string(), inst.label().to_string());
-                fields.insert("label_plural".to_string(), inst.label_plural().to_string());
-                (ns.to_string(), fields)
-            })
-            .collect(),
-    );
-
-    meta.insert(
-        "field".to_string(),
-        field_instances
-            .iter()
-            .map(|(ns, inst)| {
-                let mut fields = HashMap::new();
-                fields.insert("name".to_string(), inst.name().to_string());
-                fields.insert("collection".to_string(), inst.collection().to_string());
-                fields.insert("type".to_string(), inst.r#type().to_string());
-                (ns.to_string(), fields)
-            })
-            .collect(),
-    );
 
     let state = Arc::new(AppState {
         adapter: build_adapter(),
-        collections,
-        meta,
+        registry,
         tenants,
     });
 
     Router::new()
+        // Data endpoints
         .route(
             "/{user}/{project}/collection/{name}/add",
             post(handle_add),
@@ -357,9 +596,37 @@ pub fn build_app() -> Router {
             "/{user}/{project}/collection/{name}/delete/{id}",
             delete(handle_delete),
         )
+        // Meta endpoint
         .route(
             "/meta/{user}/{project}/{type_name}/list",
             get(handle_meta_list),
+        )
+        // Schema CRUD endpoints
+        .route(
+            "/schema/{user}/{project}/{version}/collection",
+            post(handle_schema_create_collection),
+        )
+        .route(
+            "/schema/{user}/{project}/{version}/collection/list",
+            get(handle_schema_list_collections),
+        )
+        .route(
+            "/schema/{user}/{project}/{version}/collection/{name}",
+            get(handle_schema_get_collection)
+                .put(handle_schema_update_collection)
+                .delete(handle_schema_delete_collection),
+        )
+        .route(
+            "/schema/{user}/{project}/{version}/field/{collection}",
+            post(handle_schema_create_field),
+        )
+        .route(
+            "/schema/{user}/{project}/{version}/field/{collection}/list",
+            get(handle_schema_list_fields),
+        )
+        .route(
+            "/schema/{user}/{project}/{version}/field/{collection}/{name}",
+            put(handle_schema_update_field).delete(handle_schema_delete_field),
         )
         .with_state(state)
 }

@@ -8,6 +8,8 @@ pub enum Error {
     MissingField(&'static str),
     InvalidValue(String),
     MissingDependency(String),
+    AlreadyExists(String),
+    NotFound(String),
 }
 
 impl fmt::Display for Error {
@@ -19,6 +21,8 @@ impl fmt::Display for Error {
             Error::MissingField(name) => write!(f, "missing required field: {name}"),
             Error::InvalidValue(msg) => write!(f, "invalid value: {msg}"),
             Error::MissingDependency(dep) => write!(f, "missing dependency: {dep}"),
+            Error::AlreadyExists(name) => write!(f, "already exists: {name}"),
+            Error::NotFound(name) => write!(f, "not found: {name}"),
         }
     }
 }

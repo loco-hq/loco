@@ -437,6 +437,7 @@ dependencies = [
  "chrono",
  "loco-gen-codegen-build",
  "loco-gen-runtime",
+ "loco-gen-schema",
  "loco-lake",
  "serde",
  "serde_json",
