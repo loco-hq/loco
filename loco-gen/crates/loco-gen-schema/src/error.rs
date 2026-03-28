@@ -7,6 +7,7 @@ pub enum Error {
     InvalidFieldType(String),
     MissingField(&'static str),
     InvalidValue(String),
+    MissingDependency(String),
 }
 
 impl fmt::Display for Error {
@@ -17,6 +18,7 @@ impl fmt::Display for Error {
             Error::InvalidFieldType(t) => write!(f, "invalid field type: {t}"),
             Error::MissingField(name) => write!(f, "missing required field: {name}"),
             Error::InvalidValue(msg) => write!(f, "invalid value: {msg}"),
+            Error::MissingDependency(dep) => write!(f, "missing dependency: {dep}"),
         }
     }
 }
