@@ -8,66 +8,93 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{Any, CorsLayer};
 
 use loco_gen_schema::registry::SchemaRegistry;
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter, Record, Value};
 
-// Collection/Field generated types are still available via codegen
-// but the SchemaRegistry now handles runtime metadata
-
-#[derive(Debug, Deserialize)]
-pub struct TenantConfig {
-    pub name: String,
-}
+use crate::auth::{
+    AuthAdapter, AuthenticatedUser, CreateUserRequest, LoginCredentials, UpdateUserRequest,
+    auth_error_to_response,
+};
+use crate::auth::local::LocalAuthAdapter;
 
 pub struct AppState {
     pub adapter: Box<dyn DataAdapter>,
     pub registry: SchemaRegistry,
-    pub tenants: HashMap<String, TenantConfig>,
+    pub auth: Box<dyn AuthAdapter>,
 }
 
-pub struct TenantId(pub String);
+pub struct SiteId(pub String);
 
-impl FromRequestParts<Arc<AppState>> for TenantId {
+/// Look up a site from the lake. "studio" is always valid (bootstrapped).
+fn lookup_site(adapter: &dyn DataAdapter, site_id: &str) -> Option<HashMap<String, Value>> {
+    // Studio is always valid
+    if site_id == "studio" {
+        let mut fields = HashMap::new();
+        fields.insert("site_id".to_string(), Value::String("studio".to_string()));
+        fields.insert("name".to_string(), Value::String("Loco Studio".to_string()));
+        fields.insert("namespace".to_string(), Value::String("loco/studio@0.0.1-dev".to_string()));
+        fields.insert("dataset".to_string(), Value::String("studio".to_string()));
+        return Some(fields);
+    }
+
+    // Look up in the lake
+    let records = adapter.list("studio", "loco/studio.site").ok()?;
+    records.into_iter().find(|r| {
+        r.fields.get("site_id").map(|v| matches!(v, Value::String(s) if s == site_id)).unwrap_or(false)
+    }).map(|r| r.fields)
+}
+
+fn resolve_dataset_id(adapter: &dyn DataAdapter, site_id: &str) -> String {
+    lookup_site(adapter, site_id)
+        .and_then(|fields| match fields.get("dataset") {
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| site_id.to_string())
+}
+
+impl FromRequestParts<Arc<AppState>> for SiteId {
     type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // 1. X-Tenant-Id header
-        let tenant_id = parts
+        // 1. X-Site-Id header
+        let site_id = parts
             .headers
-            .get("x-tenant-id")
+            .get("x-site-id")
             .and_then(|v| v.to_str().ok())
             .filter(|v| !v.is_empty())
             .map(|v| v.to_string());
 
-        // 2. ?tenant= query param (for browser testing)
-        let tenant_id = tenant_id.or_else(|| {
+        // 2. ?site= query param (for browser testing)
+        let site_id = site_id.or_else(|| {
             parts.uri.query().and_then(|q| {
                 q.split('&')
                     .filter_map(|pair| pair.split_once('='))
-                    .find(|(k, _)| *k == "tenant")
+                    .find(|(k, _)| *k == "site")
                     .map(|(_, v)| v.to_string())
                     .filter(|v| !v.is_empty())
             })
         });
 
-        match tenant_id {
+        match site_id {
             Some(id) => {
-                if state.tenants.contains_key(&id) {
-                    Ok(TenantId(id))
+                if lookup_site(state.adapter.as_ref(), &id).is_some() {
+                    Ok(SiteId(id))
                 } else {
                     Err(error_response(
                         StatusCode::BAD_REQUEST,
-                        &format!("unknown tenant: {id}"),
+                        &format!("unknown site: {id}"),
                     ))
                 }
             }
             None => Err(error_response(
                 StatusCode::BAD_REQUEST,
-                "missing tenant: use X-Tenant-Id header or ?tenant= query param",
+                "missing site: use X-Site-Id header or ?site= query param",
             )),
         }
     }
@@ -105,8 +132,8 @@ fn lake_error_to_response(err: loco_lake::Error) -> Response {
     match err {
         loco_lake::Error::NotFound => error_response(StatusCode::NOT_FOUND, "not found"),
         loco_lake::Error::AlreadyExists => error_response(StatusCode::CONFLICT, "already exists"),
-        loco_lake::Error::InvalidTenant(msg) => {
-            error_response(StatusCode::BAD_REQUEST, &format!("invalid tenant: {msg}"))
+        loco_lake::Error::InvalidDataset(msg) => {
+            error_response(StatusCode::BAD_REQUEST, &format!("invalid dataset: {msg}"))
         }
         loco_lake::Error::Internal(msg) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
@@ -156,6 +183,7 @@ fn require_draft(version: &str) -> Result<(), Response> {
     }
 }
 
+
 // --- Data endpoints ---
 
 #[derive(Deserialize)]
@@ -166,7 +194,7 @@ pub struct AddRecordRequest {
 }
 
 async fn handle_add(
-    tenant: TenantId,
+    site: SiteId,
     State(state): State<Arc<AppState>>,
     Path((user, project, name)): Path<(String, String, String)>,
     Json(body): Json<AddRecordRequest>,
@@ -176,11 +204,12 @@ async fn handle_add(
         return *resp;
     }
 
+    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
     let now = chrono::Utc::now().to_rfc3339();
     let owner = body.owner.unwrap_or_default();
     let record = Record {
         id: uuid::Uuid::new_v4().to_string(),
-        tenant_id: Some(tenant.0.clone()),
+        dataset_id: Some(dataset_id.clone()),
         created_at: now.clone(),
         created_by: owner.clone(),
         updated_at: now,
@@ -189,14 +218,14 @@ async fn handle_add(
         fields: body.fields,
     };
 
-    match state.adapter.insert(&tenant.0, &key, record) {
+    match state.adapter.insert(&dataset_id, &key, record) {
         Ok(rec) => (StatusCode::CREATED, ApiResponse::success(rec)).into_response(),
         Err(e) => lake_error_to_response(e),
     }
 }
 
 async fn handle_list(
-    tenant: TenantId,
+    site: SiteId,
     State(state): State<Arc<AppState>>,
     Path((user, project, name)): Path<(String, String, String)>,
 ) -> Response {
@@ -205,14 +234,15 @@ async fn handle_list(
         return *resp;
     }
 
-    match state.adapter.list(&tenant.0, &key) {
+    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+    match state.adapter.list(&dataset_id, &key) {
         Ok(records) => ApiResponse::success(records).into_response(),
         Err(e) => lake_error_to_response(e),
     }
 }
 
 async fn handle_get(
-    tenant: TenantId,
+    site: SiteId,
     State(state): State<Arc<AppState>>,
     Path((user, project, name, id)): Path<(String, String, String, String)>,
 ) -> Response {
@@ -221,7 +251,8 @@ async fn handle_get(
         return *resp;
     }
 
-    match state.adapter.get(&tenant.0, &key, &id) {
+    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+    match state.adapter.get(&dataset_id, &key, &id) {
         Ok(Some(record)) => ApiResponse::success(record).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
         Err(e) => lake_error_to_response(e),
@@ -229,7 +260,7 @@ async fn handle_get(
 }
 
 async fn handle_delete(
-    tenant: TenantId,
+    site: SiteId,
     State(state): State<Arc<AppState>>,
     Path((user, project, name, id)): Path<(String, String, String, String)>,
 ) -> Response {
@@ -238,7 +269,8 @@ async fn handle_delete(
         return *resp;
     }
 
-    match state.adapter.delete(&tenant.0, &key, &id) {
+    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+    match state.adapter.delete(&dataset_id, &key, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => lake_error_to_response(e),
     }
@@ -483,6 +515,233 @@ async fn handle_schema_delete_field(
     ApiResponse::success("deleted").into_response()
 }
 
+// --- Schema introspection ---
+
+#[derive(Serialize)]
+struct CollectionWithFields {
+    name: String,
+    fields: HashMap<String, String>,
+    collection_fields: Vec<(String, HashMap<String, String>)>,
+}
+
+#[derive(Serialize)]
+struct NamespaceCollections {
+    namespace: String,
+    collections: Vec<CollectionWithFields>,
+}
+
+async fn handle_schema_introspect(
+    site: SiteId,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let site_fields = match lookup_site(state.adapter.as_ref(), &site.0) {
+        Some(f) => f,
+        None => return error_response(StatusCode::NOT_FOUND, "site not found"),
+    };
+
+    let namespace_str = match site_fields.get("namespace") {
+        Some(Value::String(ns)) => ns.clone(),
+        _ => return error_response(StatusCode::BAD_REQUEST, "site has no namespace configured"),
+    };
+
+    // Resolve the full dependency tree
+    let ns_pairs = match state.registry.resolve_namespace_tree(&namespace_str) {
+        Ok(pairs) => pairs,
+        Err(e) => return schema_error_to_response(e),
+    };
+
+    // For each namespace, gather collections and their fields
+    let mut result: Vec<NamespaceCollections> = Vec::new();
+    for (user, project) in &ns_pairs {
+        let collections = state.registry.list_instances("collection", user, project);
+        let all_fields = state.registry.list_instances("field", user, project);
+
+        let mut coll_with_fields: Vec<CollectionWithFields> = Vec::new();
+        for (col_ns, col_fields) in &collections {
+            let col_name = col_ns.split_once('.').map(|(_, n)| n).unwrap_or("");
+            let field_prefix = format!("{col_ns}/");
+            let matching_fields: Vec<_> = all_fields
+                .iter()
+                .filter(|(ns, _)| ns.starts_with(&field_prefix))
+                .map(|(ns, f)| (ns.clone(), f.clone()))
+                .collect();
+
+            coll_with_fields.push(CollectionWithFields {
+                name: col_name.to_string(),
+                fields: col_fields.clone(),
+                collection_fields: matching_fields,
+            });
+        }
+
+        result.push(NamespaceCollections {
+            namespace: format!("{user}/{project}"),
+            collections: coll_with_fields,
+        });
+    }
+
+    ApiResponse::success(result).into_response()
+}
+
+// --- Auth endpoints ---
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    username: String,
+    site_id: String,
+}
+
+async fn handle_auth_login(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    if lookup_site(state.adapter.as_ref(), &body.site_id).is_none() {
+        return error_response(StatusCode::BAD_REQUEST, &format!("unknown site: {}", body.site_id));
+    }
+
+    let credentials = LoginCredentials {
+        username: body.username,
+        password: None,
+        site_id: body.site_id.clone(),
+    };
+
+    match state.auth.login(&body.site_id, &credentials) {
+        Ok(session) => ApiResponse::success(session).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+async fn handle_auth_logout(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    match state.auth.logout(&user.0.token) {
+        Ok(()) => ApiResponse::success("logged out").into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+async fn handle_auth_me(user: AuthenticatedUser) -> Response {
+    ApiResponse::success(user.0.user).into_response()
+}
+
+#[derive(Deserialize)]
+struct CreateUserHttpRequest {
+    username: String,
+    name: String,
+    #[serde(default)]
+    role: Option<String>,
+}
+
+async fn handle_auth_create_user(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateUserHttpRequest>,
+) -> Response {
+    let req = CreateUserRequest {
+        username: body.username,
+        name: body.name,
+        role: body.role,
+        password: None,
+    };
+
+    match state.auth.create_user(&user.0.user.site_id, &req) {
+        Ok(new_user) => (StatusCode::CREATED, ApiResponse::success(new_user)).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+async fn handle_auth_list_users(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    match state.auth.list_users(&user.0.user.site_id) {
+        Ok(users) => ApiResponse::success(users).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateUserHttpRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+async fn handle_auth_update_user(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateUserHttpRequest>,
+) -> Response {
+    let updates = UpdateUserRequest {
+        name: body.name,
+        role: body.role,
+        status: body.status,
+    };
+
+    match state.auth.update_user(&user.0.user.site_id, &id, &updates) {
+        Ok(updated) => ApiResponse::success(updated).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+async fn handle_auth_delete_user(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.auth.delete_user(&user.0.user.site_id, &id) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateApiKeyRequest {
+    label: String,
+}
+
+async fn handle_auth_create_api_key(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateApiKeyRequest>,
+) -> Response {
+    match state
+        .auth
+        .create_api_key(&user.0.user.site_id, &user.0.user.id, &body.label)
+    {
+        Ok(key) => (StatusCode::CREATED, ApiResponse::success(key)).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+async fn handle_auth_list_api_keys(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    match state
+        .auth
+        .list_api_keys(&user.0.user.site_id, &user.0.user.id)
+    {
+        Ok(keys) => ApiResponse::success(keys).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+async fn handle_auth_revoke_api_key(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.auth.revoke_api_key(&user.0.user.site_id, &id) {
+        Ok(()) => ApiResponse::success("revoked").into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
 // --- App setup ---
 
 fn build_adapter() -> Box<dyn DataAdapter> {
@@ -504,43 +763,7 @@ fn build_adapter() -> Box<dyn DataAdapter> {
     }
 }
 
-fn load_tenants() -> HashMap<String, TenantConfig> {
-    let tenants_dir = std::path::Path::new("tenants");
-    let mut tenants = HashMap::new();
-
-    if !tenants_dir.exists() {
-        println!("Warning: tenants/ directory not found, no tenants loaded");
-        return tenants;
-    }
-
-    let entries = std::fs::read_dir(tenants_dir).expect("failed to read tenants/ directory");
-    for entry in entries {
-        let entry = entry.expect("failed to read tenant file entry");
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-            let tenant_id = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .expect("invalid tenant filename")
-                .to_string();
-            let contents = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-            let config: TenantConfig = serde_yaml::from_str(&contents)
-                .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()));
-            tenants.insert(tenant_id, config);
-        }
-    }
-
-    tenants
-}
-
 pub fn build_app() -> Router {
-    let tenants = load_tenants();
-    println!("Loaded {} tenant(s):", tenants.len());
-    for (id, config) in &tenants {
-        println!("  - {id} ({})", config.name);
-    }
-
     // Load type definitions for runtime schema loading
     let types_dir = std::path::Path::new("schemas/types");
     let mut type_defs = Vec::new();
@@ -572,11 +795,25 @@ pub fn build_app() -> Router {
         println!("  - {ns}");
     }
 
+    // Initialize data adapter
+    let adapter = build_adapter();
+
+    // Initialize auth adapter
+    let auth_adapter: Box<dyn AuthAdapter> =
+        Box::new(LocalAuthAdapter::new(std::path::Path::new("auth")));
+    println!("Using local filesystem auth adapter (auth/)");
+    println!("Sites are managed in the lake (studio dataset, loco/studio.site collection)");
+
     let state = Arc::new(AppState {
-        adapter: build_adapter(),
+        adapter,
         registry,
-        tenants,
+        auth: auth_adapter,
     });
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     Router::new()
         // Data endpoints
@@ -628,5 +865,21 @@ pub fn build_app() -> Router {
             "/schema/{user}/{project}/{version}/field/{collection}/{name}",
             put(handle_schema_update_field).delete(handle_schema_delete_field),
         )
+        // Schema introspection
+        .route("/schema/collections", get(handle_schema_introspect))
+        // Auth endpoints
+        .route("/auth/login", post(handle_auth_login))
+        .route("/auth/logout", post(handle_auth_logout))
+        .route("/auth/me", get(handle_auth_me))
+        .route("/auth/users", post(handle_auth_create_user))
+        .route("/auth/users/list", get(handle_auth_list_users))
+        .route(
+            "/auth/users/{id}",
+            put(handle_auth_update_user).delete(handle_auth_delete_user),
+        )
+        .route("/auth/api-keys", post(handle_auth_create_api_key))
+        .route("/auth/api-keys/list", get(handle_auth_list_api_keys))
+        .route("/auth/api-keys/{id}", delete(handle_auth_revoke_api_key))
+        .layer(cors)
         .with_state(state)
 }

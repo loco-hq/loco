@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::error::Error;
-use crate::instance;
+use crate::instance::{self, ScannedNamespace};
+use crate::namespace;
 use crate::types::TypeDef;
 
 /// Thread-safe in-memory registry for instances of any TypeDef.
@@ -14,6 +15,8 @@ type InstanceMap = HashMap<String, HashMap<String, HashMap<String, String>>>;
 pub struct SchemaRegistry {
     /// type_name → { namespace → field_values }
     instances: RwLock<InstanceMap>,
+    /// Namespace configs from loco.yaml files, keyed by (user, project, version)
+    namespaces: RwLock<Vec<ScannedNamespace>>,
     instances_dir: PathBuf,
 }
 
@@ -42,6 +45,7 @@ impl SchemaRegistry {
 
         Ok(SchemaRegistry {
             instances: RwLock::new(instances),
+            namespaces: RwLock::new(scan.namespaces),
             instances_dir: instances_dir.to_path_buf(),
         })
     }
@@ -339,6 +343,42 @@ impl SchemaRegistry {
         Ok(to_delete)
     }
 
+    /// Given a namespace string like "ben/cars@0.0.1-dev", resolve the full
+    /// transitive dependency tree. Returns all (user, project) pairs including
+    /// the root namespace.
+    pub fn resolve_namespace_tree(
+        &self,
+        namespace_str: &str,
+    ) -> Result<Vec<(String, String)>, Error> {
+        let (root_user, root_project, _root_version) =
+            namespace::parse_dependency(namespace_str)?;
+
+        let namespaces = self.namespaces.read().unwrap();
+        let mut visited: HashSet<(String, String)> = HashSet::new();
+        let mut result = Vec::new();
+        let mut queue: VecDeque<(String, String)> = VecDeque::new();
+
+        queue.push_back((root_user.to_string(), root_project.to_string()));
+
+        while let Some((user, project)) = queue.pop_front() {
+            if !visited.insert((user.clone(), project.clone())) {
+                continue;
+            }
+            result.push((user.clone(), project.clone()));
+
+            // Find the ScannedNamespace for this (user, project) and walk its deps
+            if let Some(ns) = namespaces.iter().find(|n| n.user == user && n.project == project) {
+                for dep in &ns.config.dependencies {
+                    if let Ok((dep_user, dep_project, _)) = namespace::parse_dependency(dep) {
+                        queue.push_back((dep_user.to_string(), dep_project.to_string()));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     fn instance_path(
         &self,
         user: &str,
@@ -381,6 +421,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -409,6 +450,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -428,6 +470,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -447,6 +490,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -477,6 +521,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -504,6 +549,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -523,6 +569,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -550,6 +597,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -563,6 +611,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 
@@ -589,6 +638,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
             instances_dir: dir.path().to_path_buf(),
         };
 

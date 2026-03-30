@@ -8,7 +8,7 @@ use crate::value::Value;
 pub struct Record {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tenant_id: Option<String>,
+    pub dataset_id: Option<String>,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,

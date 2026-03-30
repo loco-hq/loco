@@ -6,7 +6,7 @@ use serde::Serialize;
 pub enum Error {
     NotFound,
     AlreadyExists,
-    InvalidTenant(String),
+    InvalidDataset(String),
     Internal(String),
 }
 
@@ -15,7 +15,7 @@ impl fmt::Display for Error {
         match self {
             Error::NotFound => write!(f, "not found"),
             Error::AlreadyExists => write!(f, "already exists"),
-            Error::InvalidTenant(msg) => write!(f, "invalid tenant: {msg}"),
+            Error::InvalidDataset(msg) => write!(f, "invalid dataset: {msg}"),
             Error::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }

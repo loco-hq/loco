@@ -1,7 +1,7 @@
-const TENANT = 'acme';
+const SITE = 'acme';
 
 async function request(path, options = {}) {
-  const url = `/api${path}${path.includes('?') ? '&' : '?'}tenant=${TENANT}`;
+  const url = `/api${path}${path.includes('?') ? '&' : '?'}site=${SITE}`;
   const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json', ...options.headers },
     ...options,
@@ -30,4 +30,8 @@ export function deleteRecord(user, project, collection, id) {
   return request(`/${user}/${project}/collection/${collection}/delete/${id}`, {
     method: 'DELETE',
   });
+}
+
+export function getSchemaCollections() {
+  return request('/schema/collections');
 }

@@ -21,3 +21,6 @@ Thumbs.db
 
 # SQLite database
 *.db
+
+# Auth session/user data (local dev)
+auth/

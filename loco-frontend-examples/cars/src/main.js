@@ -1,16 +1,36 @@
-import { listRecords, addRecord, deleteRecord } from './loco.js';
+import { listRecords, addRecord, deleteRecord, getSchemaCollections } from './loco.js';
 import './style.css';
 
-const collections = [
-  { user: 'ben', project: 'cars', name: 'vehicle', fields: ['make', 'model', 'year'] },
-  { user: 'ben', project: 'crm', name: 'account', fields: ['company', 'active'] },
-  { user: 'ben', project: 'crm', name: 'contact', fields: ['first_name', 'last_name'] },
-];
+async function renderApp() {
+  const app = document.querySelector('#app');
+  app.innerHTML = '<p>Loading schema...</p>';
 
-function renderApp() {
-  document.querySelector('#app').innerHTML = `
+  let schema;
+  try {
+    schema = await getSchemaCollections();
+  } catch (err) {
+    app.innerHTML = `<p class="error">Error loading schema: ${err.message}</p>`;
+    return;
+  }
+
+  // Flatten all collections from all namespaces, extracting user/project from namespace
+  const collections = schema.flatMap((ns) => {
+    const [user, project] = ns.namespace.split('/');
+    return ns.collections.map((col) => ({
+      user,
+      project,
+      name: col.name,
+      label: col.fields.label || col.name,
+      fields: col.collection_fields.map(([, f]) => ({
+        name: f.name,
+        type: f.type,
+      })),
+    }));
+  });
+
+  app.innerHTML = `
     <h1>Loco Cars Demo</h1>
-    <nav>${collections.map((c) => `<button data-collection="${c.name}">${c.name}</button>`).join(' ')}</nav>
+    <nav>${collections.map((c) => `<button data-collection="${c.name}" data-user="${c.user}" data-project="${c.project}">${c.label}</button>`).join(' ')}</nav>
     <div id="content"></div>
   `;
 
@@ -18,12 +38,16 @@ function renderApp() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('nav button').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
-      const col = collections.find((c) => c.name === btn.dataset.collection);
+      const col = collections.find(
+        (c) => c.name === btn.dataset.collection && c.user === btn.dataset.user && c.project === btn.dataset.project,
+      );
       renderCollection(col);
     });
   });
 
-  document.querySelector('nav button').click();
+  if (collections.length > 0) {
+    document.querySelector('nav button').click();
+  }
 }
 
 async function renderCollection(col) {
@@ -33,17 +57,17 @@ async function renderCollection(col) {
   try {
     const records = await listRecords(col.user, col.project, col.name);
     content.innerHTML = `
-      <h2>${col.name} <span class="count">(${records.length})</span></h2>
+      <h2>${col.label} <span class="count">(${records.length})</span></h2>
       <form id="add-form">
         ${col.fields
-          .map((f) => `<input name="${f}" placeholder="${f}" required />`)
+          .map((f) => `<input name="${f.name}" placeholder="${f.name}" required />`)
           .join('')}
         <button type="submit">Add</button>
       </form>
       <table>
         <thead>
           <tr>
-            ${col.fields.map((f) => `<th>${f}</th>`).join('')}
+            ${col.fields.map((f) => `<th>${f.name}</th>`).join('')}
             <th></th>
           </tr>
         </thead>
@@ -52,9 +76,9 @@ async function renderCollection(col) {
             .map(
               (r) => `
             <tr>
-              ${col.fields.map((f) => `<td>${r.fields[f] ?? ''}</td>`).join('')}
+              ${col.fields.map((f) => `<td>${r.fields[f.name] ?? ''}</td>`).join('')}
               <td><button class="delete" data-id="${r.id}">delete</button></td>
-            </tr>`
+            </tr>`,
             )
             .join('')}
         </tbody>
@@ -66,10 +90,11 @@ async function renderCollection(col) {
       const form = e.target;
       const fields = {};
       col.fields.forEach((f) => {
-        let val = form.elements[f].value;
-        if (f === 'year') val = parseInt(val, 10);
-        else if (f === 'active') val = val.toLowerCase() === 'true';
-        fields[f] = val;
+        let val = form.elements[f.name].value;
+        if (f.type === 'integer') val = parseInt(val, 10);
+        else if (f.type === 'float') val = parseFloat(val);
+        else if (f.type === 'boolean') val = val.toLowerCase() === 'true';
+        fields[f.name] = val;
       });
       await addRecord(col.user, col.project, col.name, fields);
       renderCollection(col);

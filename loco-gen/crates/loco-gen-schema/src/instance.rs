@@ -13,7 +13,7 @@ pub struct ScanResult {
 }
 
 /// A namespace found during scanning.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScannedNamespace {
     pub user: String,
     pub project: String,
