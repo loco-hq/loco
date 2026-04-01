@@ -276,6 +276,49 @@ async fn handle_delete(
     }
 }
 
+async fn handle_update(
+    site: SiteId,
+    State(state): State<Arc<AppState>>,
+    Path((user, project, name, id)): Path<(String, String, String, String)>,
+    Json(body): Json<AddRecordRequest>,
+) -> Response {
+    let key = collection_key(&user, &project, &name);
+    if let Err(resp) = validate_collection(&state, &key) {
+        return *resp;
+    }
+
+    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+
+    // Get existing record to preserve metadata
+    let existing = match state.adapter.get(&dataset_id, &key, &id) {
+        Ok(Some(r)) => r,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "record not found"),
+        Err(e) => return lake_error_to_response(e),
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut fields = existing.fields;
+    for (k, v) in body.fields {
+        fields.insert(k, v);
+    }
+
+    let record = Record {
+        id: existing.id,
+        dataset_id: existing.dataset_id,
+        created_at: existing.created_at,
+        created_by: existing.created_by,
+        updated_at: now,
+        updated_by: body.owner.unwrap_or(existing.updated_by),
+        owner: existing.owner,
+        fields,
+    };
+
+    match state.adapter.update(&dataset_id, &key, &id, record) {
+        Ok(rec) => ApiResponse::success(rec).into_response(),
+        Err(e) => lake_error_to_response(e),
+    }
+}
+
 // --- Meta endpoint ---
 
 async fn handle_meta_list(
@@ -828,6 +871,10 @@ pub fn build_app() -> Router {
         .route(
             "/{user}/{project}/collection/{name}/get/{id}",
             get(handle_get),
+        )
+        .route(
+            "/{user}/{project}/collection/{name}/update/{id}",
+            put(handle_update),
         )
         .route(
             "/{user}/{project}/collection/{name}/delete/{id}",

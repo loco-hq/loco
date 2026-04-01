@@ -1,4 +1,4 @@
-const SITE = 'acme';
+const SITE = 'acme-cars';
 
 async function request(path, options = {}) {
   const url = `/api${path}${path.includes('?') ? '&' : '?'}site=${SITE}`;

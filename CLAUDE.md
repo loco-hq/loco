@@ -56,6 +56,22 @@ Instance files live under `schemas/instances/{user}/{project}/{type}/`. The type
 - **Tests**: All unit tests are co-located with their module (`#[cfg(test)] mod tests`). Filesystem tests use `tempfile`.
 - **Thread safety**: Both `TypedCache` and `InMemoryAdapter` use `RwLock<HashMap<...>>`.
 
+## Frontend Apps
+
+All frontend apps use the same stack:
+
+- **Vite** with `@vitejs/plugin-react`
+- **React** (functional components, hooks)
+- **React Router** (`react-router-dom`, `createHashRouter`)
+- API client in `loco.js` (plain JS, not a hook)
+- Components in `src/components/` as `.jsx` files
+- Proxy `/api` to `localhost:3000` in vite.config.js
+
+### Frontend locations
+
+- `loco-studio/` — Schema management UI (port 5174)
+- `loco-frontend-examples/cars/` — Example app using schema introspection (default port)
+
 ## Rust Edition
 
 2021 — all crates.

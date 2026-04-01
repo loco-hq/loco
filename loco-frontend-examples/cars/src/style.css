@@ -32,7 +32,7 @@ nav {
   margin-bottom: 20px;
 }
 
-nav button {
+nav a {
   padding: 8px 16px;
   border: 1px solid #333;
   border-radius: 4px;
@@ -40,9 +40,10 @@ nav button {
   color: #ccc;
   cursor: pointer;
   font-size: 14px;
+  text-decoration: none;
 }
 
-nav button.active {
+nav a.active {
   background: #4a4a8a;
   color: #fff;
   border-color: #6a6aaa;

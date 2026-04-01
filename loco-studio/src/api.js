@@ -101,6 +101,13 @@ export async function getSite(id) {
   return request(`/loco/studio/collection/site/get/${id}?${STUDIO_SITE}`);
 }
 
+export async function updateSite(id, fields) {
+  return request(`/loco/studio/collection/site/update/${id}?${STUDIO_SITE}`, {
+    method: 'PUT',
+    body: JSON.stringify({ fields }),
+  });
+}
+
 export async function deleteSite(id) {
   return request(`/loco/studio/collection/site/delete/${id}?${STUDIO_SITE}`, {
     method: 'DELETE',

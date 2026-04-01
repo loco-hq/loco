@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getSite, deleteSite, getProject, listDatasets, getSiteCollections } from '../api.js';
+import { getSite, deleteSite, updateSite, getProject, listDatasets, getSiteCollections } from '../api.js';
 
 export default function SiteDetail() {
   const { siteId } = useParams();
   const navigate = useNavigate();
   const [site, setSite] = useState(null);
   const [project, setProject] = useState(null);
-  const [dataset, setDataset] = useState(null);
+  const [allDatasets, setAllDatasets] = useState([]);
   const [schemaNamespaces, setSchemaNamespaces] = useState([]);
   const [error, setError] = useState(null);
 
@@ -18,15 +18,15 @@ export default function SiteDetail() {
       const sf = s.fields;
 
       if (sf.project) {
-        try { setProject(await getProject(sf.project)); } catch { /* ignore */ }
+        try {
+          const proj = await getProject(sf.project);
+          setProject(proj);
+          // Load all datasets for this project
+          const datasets = await listDatasets();
+          setAllDatasets(datasets.filter((d) => d.fields.project === sf.project));
+        } catch { /* ignore */ }
       }
 
-      if (sf.dataset) {
-        const allDatasets = await listDatasets();
-        setDataset(allDatasets.find((d) => d.fields.dataset_id === sf.dataset) || null);
-      }
-
-      // Fetch all collections available to this site (resolves dependencies)
       if (sf.site_id) {
         try {
           setSchemaNamespaces(await getSiteCollections(sf.site_id));
@@ -42,6 +42,12 @@ export default function SiteDetail() {
   const handleDelete = async () => {
     await deleteSite(siteId);
     navigate(project ? `/project/${project.id}` : '/');
+  };
+
+  const handleDatasetChange = async (e) => {
+    const newDataset = e.target.value;
+    await updateSite(siteId, { dataset: newDataset });
+    load();
   };
 
   if (error) return <p className="error">Error: {error}</p>;
@@ -62,13 +68,17 @@ export default function SiteDetail() {
         <h2>{sf.name || 'Unnamed Site'}</h2>
         <p className="project-ns">{sf.site_id || ''}</p>
         {sf.namespace && <p className="site-ns-detail">Namespace: <code>{sf.namespace}</code></p>}
-        {dataset && (
-          <p className="site-dataset-detail">
-            Dataset: <Link to={`/dataset/${dataset.id}`} className="row-link">
-              {dataset.fields.name || dataset.fields.dataset_id}
-            </Link>
-          </p>
-        )}
+        <div className="site-dataset-detail">
+          Dataset:{' '}
+          <select value={sf.dataset || ''} onChange={handleDatasetChange}>
+            <option value="">None</option>
+            {allDatasets.map((d) => (
+              <option key={d.id} value={d.fields.dataset_id || ''}>
+                {d.fields.name || d.fields.dataset_id}
+              </option>
+            ))}
+          </select>
+        </div>
         {project && (
           <p className="site-project-detail">
             Project: <Link to={`/project/${project.id}`} className="row-link">
