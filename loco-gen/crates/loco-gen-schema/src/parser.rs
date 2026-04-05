@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::Error;
-use crate::types::{FieldType, Property, Schema, TypeDef};
+use crate::types::{FieldType, Property, Schema, Scope, TypeDef};
 
 /// Parse a YAML schema file into a `Schema`.
 /// The `type_name` is derived from the filename by the caller.
@@ -27,6 +27,13 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<Schema, Error> {
         .get(serde_yaml::Value::String("properties".into()))
         .and_then(|v| v.as_mapping())
         .ok_or(Error::MissingField("properties"))?;
+
+    let scope = mapping
+        .get(serde_yaml::Value::String("scope".into()))
+        .and_then(|v| v.as_str())
+        .map(|s| Scope::parse(s).ok_or_else(|| Error::InvalidValue(format!("invalid scope: {s} (expected 'global' or 'namespaced')"))))
+        .transpose()?
+        .unwrap_or(Scope::Namespaced);
 
     let file_path_template = mapping
         .get(serde_yaml::Value::String("filePathTemplate".into()))
@@ -54,6 +61,7 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<Schema, Error> {
         type_def: TypeDef {
             name: to_pascal_case(type_name),
             description,
+            scope,
             file_path_template,
             properties,
         },

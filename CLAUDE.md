@@ -31,11 +31,12 @@ Runtime: `loco-apps` → `loco-gen-runtime` + `loco-lake`
 
 ## How Codegen Works
 
-1. `build.rs` calls `loco_gen_codegen_build::generate("schemas/types", "schemas/instances")`
+1. `build.rs` calls `loco_gen_codegen_build::generate("schemas/types", "schemas/instances", "schemas/config")`
 2. Type definitions (`schemas/types/*.yaml`) are parsed into `TypeDef` structs
-3. Instances (`schemas/instances/{user}/{project}/{type}/**/*.yaml`) are recursively scanned and validated against their type
-4. Rust code is generated to `$OUT_DIR/loco_generated.rs` — structs, constructors, accessors, cache methods, and baked-in instance loaders
-5. `main.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`
+3. Namespaced instances (`schemas/instances/{user}/{project}/{version}/{type}/**/*.yaml`) are scanned for `scope: namespaced` types
+4. Global config instances (`schemas/config/{type}/*.yaml`) are scanned for `scope: global` types
+5. Rust code is generated to `$OUT_DIR/loco_generated.rs` — structs, constructors, accessors, cache methods, and baked-in instance loaders
+6. `main.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`
 
 ### Namespace convention
 
@@ -45,9 +46,11 @@ Instance namespace = `{user}/{project}.{key}` where key is the relative path fro
 
 ## Schema Files
 
-Type definitions live in `schemas/types/` with these supported field types: `string`, `integer`, `float`, `boolean`. Optional `filePathTemplate` controls nested instance organization.
+Type definitions live in `schemas/types/` with these supported field types: `string`, `integer`, `float`, `boolean`. Optional `filePathTemplate` controls nested instance organization. The `scope` field controls instance addressing:
+- `scope: namespaced` (default) — instances live under `schemas/instances/{user}/{project}/{version}/{type}/`, addressed as `user/project.name`
+- `scope: global` — config instances live under `schemas/config/{type}/`, addressed by simple id (e.g., `studio`)
 
-Instance files live under `schemas/instances/{user}/{project}/{type}/`. The type folder name is matched case-insensitively to a TypeDef name.
+Namespaced instance files live under `schemas/instances/{user}/{project}/{version}/{type}/`. Global config files live under `schemas/config/{type}/`. Type folder names are matched case-insensitively to TypeDef names.
 
 ## Key Patterns
 

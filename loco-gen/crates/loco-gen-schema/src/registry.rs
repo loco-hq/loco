@@ -13,40 +13,61 @@ use crate::types::TypeDef;
 type InstanceMap = HashMap<String, HashMap<String, HashMap<String, String>>>;
 
 pub struct SchemaRegistry {
-    /// type_name → { namespace → field_values }
+    /// Namespaced instances: type_name → { namespace → field_values }
     instances: RwLock<InstanceMap>,
+    /// Global config instances: type_name → { id → field_values }
+    config: RwLock<InstanceMap>,
     /// Namespace configs from loco.yaml files, keyed by (user, project, version)
     namespaces: RwLock<Vec<ScannedNamespace>>,
     instances_dir: PathBuf,
+    config_dir: PathBuf,
+}
+
+fn instance_values_to_strings(inst: &crate::types::Instance) -> HashMap<String, String> {
+    let mut fields = HashMap::new();
+    for (key, val) in &inst.values {
+        let str_val = match val {
+            crate::types::FieldValue::String(s) => s.clone(),
+            crate::types::FieldValue::Integer(i) => i.to_string(),
+            crate::types::FieldValue::Float(f) => f.to_string(),
+            crate::types::FieldValue::Boolean(b) => b.to_string(),
+        };
+        fields.insert(key.clone(), str_val);
+    }
+    fields
 }
 
 impl SchemaRegistry {
     /// Load all instances from disk into the registry.
-    pub fn load(instances_dir: &Path, type_defs: &[TypeDef]) -> Result<Self, Error> {
-        let scan = instance::scan_instances(instances_dir, type_defs)?;
+    pub fn load(
+        instances_dir: &Path,
+        config_dir: &Path,
+        type_defs: &[TypeDef],
+    ) -> Result<Self, Error> {
+        // Scan namespaced instances (only non-global types)
+        let namespaced_defs: Vec<_> = type_defs.iter().filter(|td| !td.scope.is_global()).cloned().collect();
+        let scan = instance::scan_instances(instances_dir, &namespaced_defs)?;
 
-        let mut instances: HashMap<String, HashMap<String, HashMap<String, String>>> =
-            HashMap::new();
-
+        let mut instances: InstanceMap = HashMap::new();
         for inst in &scan.instances {
             let type_map = instances.entry(inst.type_name.to_lowercase()).or_default();
-            let mut fields = HashMap::new();
-            for (key, val) in &inst.values {
-                let str_val = match val {
-                    crate::types::FieldValue::String(s) => s.clone(),
-                    crate::types::FieldValue::Integer(i) => i.to_string(),
-                    crate::types::FieldValue::Float(f) => f.to_string(),
-                    crate::types::FieldValue::Boolean(b) => b.to_string(),
-                };
-                fields.insert(key.clone(), str_val);
-            }
-            type_map.insert(inst.namespace.clone(), fields);
+            type_map.insert(inst.namespace.clone(), instance_values_to_strings(inst));
+        }
+
+        // Scan global config instances
+        let config_instances = instance::scan_config(config_dir, type_defs)?;
+        let mut config: InstanceMap = HashMap::new();
+        for inst in &config_instances {
+            let type_map = config.entry(inst.type_name.to_lowercase()).or_default();
+            type_map.insert(inst.namespace.clone(), instance_values_to_strings(inst));
         }
 
         Ok(SchemaRegistry {
             instances: RwLock::new(instances),
+            config: RwLock::new(config),
             namespaces: RwLock::new(scan.namespaces),
             instances_dir: instances_dir.to_path_buf(),
+            config_dir: config_dir.to_path_buf(),
         })
     }
 
@@ -379,6 +400,159 @@ impl SchemaRegistry {
         Ok(result)
     }
 
+    // --- Global config methods ---
+
+    /// List all config instances of a type.
+    pub fn list_config(
+        &self,
+        type_name: &str,
+    ) -> Vec<(String, HashMap<String, String>)> {
+        let config = self.config.read().unwrap();
+        config
+            .get(type_name)
+            .map(|type_map| {
+                type_map
+                    .iter()
+                    .map(|(id, fields)| (id.clone(), fields.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get a single config instance by type name and id.
+    pub fn get_config(
+        &self,
+        type_name: &str,
+        id: &str,
+    ) -> Option<HashMap<String, String>> {
+        let config = self.config.read().unwrap();
+        config
+            .get(type_name)
+            .and_then(|type_map| type_map.get(id).cloned())
+    }
+
+    /// Find a config instance by matching a field value.
+    /// Returns the first match (id, fields).
+    pub fn find_config(
+        &self,
+        type_name: &str,
+        field_name: &str,
+        field_value: &str,
+    ) -> Option<(String, HashMap<String, String>)> {
+        let config = self.config.read().unwrap();
+        config.get(type_name).and_then(|type_map| {
+            type_map.iter().find(|(_, fields)| {
+                fields.get(field_name).map(|v| v == field_value).unwrap_or(false)
+            }).map(|(id, fields)| (id.clone(), fields.clone()))
+        })
+    }
+
+    /// Check if a config instance exists.
+    pub fn has_config(&self, type_name: &str, id: &str) -> bool {
+        let config = self.config.read().unwrap();
+        config
+            .get(type_name)
+            .map(|type_map| type_map.contains_key(id))
+            .unwrap_or(false)
+    }
+
+    /// Create a new config instance. Writes YAML to disk and updates in-memory state.
+    pub fn create_config(
+        &self,
+        type_name: &str,
+        id: &str,
+        fields: HashMap<String, String>,
+    ) -> Result<HashMap<String, String>, Error> {
+        // Check for duplicates
+        {
+            let config = self.config.read().unwrap();
+            if let Some(type_map) = config.get(type_name) {
+                if type_map.contains_key(id) {
+                    return Err(Error::AlreadyExists(format!("config:{type_name}/{id}")));
+                }
+            }
+        }
+
+        // Write to disk
+        let file_path = self.config_path(type_name, id);
+        write_instance_yaml(&file_path, &fields)?;
+
+        // Update in-memory state
+        let mut config = self.config.write().unwrap();
+        let type_map = config.entry(type_name.to_string()).or_default();
+        type_map.insert(id.to_string(), fields.clone());
+
+        Ok(fields)
+    }
+
+    /// Update an existing config instance.
+    pub fn update_config(
+        &self,
+        type_name: &str,
+        id: &str,
+        fields: HashMap<String, String>,
+    ) -> Result<HashMap<String, String>, Error> {
+        let current = {
+            let config = self.config.read().unwrap();
+            config
+                .get(type_name)
+                .and_then(|type_map| type_map.get(id).cloned())
+                .ok_or_else(|| Error::NotFound(format!("config:{type_name}/{id}")))?
+        };
+
+        let mut merged = current;
+        for (k, v) in &fields {
+            merged.insert(k.clone(), v.clone());
+        }
+
+        let file_path = self.config_path(type_name, id);
+        write_instance_yaml(&file_path, &merged)?;
+
+        let mut config = self.config.write().unwrap();
+        let type_map = config.entry(type_name.to_string()).or_default();
+        type_map.insert(id.to_string(), merged.clone());
+
+        Ok(merged)
+    }
+
+    /// Delete a config instance.
+    pub fn delete_config(
+        &self,
+        type_name: &str,
+        id: &str,
+    ) -> Result<(), Error> {
+        {
+            let config = self.config.read().unwrap();
+            let exists = config
+                .get(type_name)
+                .map(|type_map| type_map.contains_key(id))
+                .unwrap_or(false);
+            if !exists {
+                return Err(Error::NotFound(format!("config:{type_name}/{id}")));
+            }
+        }
+
+        let file_path = self.config_path(type_name, id);
+        delete_instance_yaml(&file_path)?;
+
+        let mut config = self.config.write().unwrap();
+        if let Some(type_map) = config.get_mut(type_name) {
+            type_map.remove(id);
+        }
+
+        Ok(())
+    }
+
+    /// Resolve config file path. For flat types: `config/{type_name}/{id}.yaml`.
+    /// For templated types (id contains '/'): `config/{id}.yaml` (id is the full relative path).
+    fn config_path(&self, type_name: &str, id: &str) -> PathBuf {
+        if id.contains('/') {
+            self.config_dir.join(format!("{id}.yaml"))
+        } else {
+            self.config_dir.join(type_name).join(format!("{id}.yaml"))
+        }
+    }
+
     fn instance_path(
         &self,
         user: &str,
@@ -416,14 +590,20 @@ fn delete_instance_yaml(path: &Path) -> Result<(), Error> {
 mod tests {
     use super::*;
 
+    fn test_registry(base: &Path) -> SchemaRegistry {
+        SchemaRegistry {
+            instances: RwLock::new(HashMap::new()),
+            config: RwLock::new(HashMap::new()),
+            namespaces: RwLock::new(Vec::new()),
+            instances_dir: base.to_path_buf(),
+            config_dir: base.join("_config"),
+        }
+    }
+
     #[test]
     fn test_create_and_get_instance() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
@@ -448,11 +628,7 @@ mod tests {
     #[test]
     fn test_create_duplicate_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
@@ -468,11 +644,7 @@ mod tests {
     #[test]
     fn test_has_instance() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
@@ -488,11 +660,7 @@ mod tests {
     #[test]
     fn test_list_instances() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let mut f1 = HashMap::new();
         f1.insert("name".to_string(), "account".to_string());
@@ -519,11 +687,7 @@ mod tests {
     #[test]
     fn test_update_instance() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
@@ -547,11 +711,7 @@ mod tests {
     #[test]
     fn test_update_missing_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let result = registry.update_instance(
             "collection",
@@ -567,11 +727,7 @@ mod tests {
     #[test]
     fn test_delete_instance() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
@@ -595,11 +751,7 @@ mod tests {
     #[test]
     fn test_delete_missing_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let result =
             registry.delete_instance("collection", "ben", "crm", "0.0.1-dev", "missing");
@@ -609,11 +761,7 @@ mod tests {
     #[test]
     fn test_create_nested_instance() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "company".to_string());
@@ -636,11 +784,7 @@ mod tests {
     #[test]
     fn test_delete_instances_by_prefix() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = SchemaRegistry {
-            instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
-            instances_dir: dir.path().to_path_buf(),
-        };
+        let registry = test_registry(dir.path());
 
         // Create fields for account
         let mut f1 = HashMap::new();
@@ -671,5 +815,56 @@ mod tests {
         // Contact field should still exist
         assert!(registry.has_instance("field", "ben/crm.contact/first_name"));
         assert!(!registry.has_instance("field", "ben/crm.account/company"));
+    }
+
+    #[test]
+    fn test_config_crud() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = test_registry(dir.path());
+
+        let mut fields = HashMap::new();
+        fields.insert("site_id".to_string(), "studio".to_string());
+        fields.insert("name".to_string(), "Loco Studio".to_string());
+
+        // Create
+        registry.create_config("site", "studio", fields).unwrap();
+        assert!(registry.has_config("site", "studio"));
+        assert!(!registry.has_config("site", "other"));
+
+        // Get
+        let result = registry.get_config("site", "studio").unwrap();
+        assert_eq!(result.get("name").unwrap(), "Loco Studio");
+
+        // List
+        let list = registry.list_config("site");
+        assert_eq!(list.len(), 1);
+
+        // Update
+        let mut updates = HashMap::new();
+        updates.insert("name".to_string(), "Studio Updated".to_string());
+        let updated = registry.update_config("site", "studio", updates).unwrap();
+        assert_eq!(updated.get("name").unwrap(), "Studio Updated");
+        assert_eq!(updated.get("site_id").unwrap(), "studio"); // preserved
+
+        // Verify on disk
+        let file_path = dir.path().join("_config/site/studio.yaml");
+        assert!(file_path.exists());
+
+        // Delete
+        registry.delete_config("site", "studio").unwrap();
+        assert!(!registry.has_config("site", "studio"));
+        assert!(!file_path.exists());
+    }
+
+    #[test]
+    fn test_config_duplicate_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = test_registry(dir.path());
+
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), "test".to_string());
+
+        registry.create_config("site", "test", fields.clone()).unwrap();
+        assert!(registry.create_config("site", "test", fields).is_err());
     }
 }

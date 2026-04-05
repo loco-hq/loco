@@ -215,6 +215,7 @@ mod tests {
         TypeDef {
             name: "Collection".to_string(),
             description: "A named collection".to_string(),
+            scope: crate::types::Scope::Namespaced,
             file_path_template: None,
             properties: vec![
                 Property {

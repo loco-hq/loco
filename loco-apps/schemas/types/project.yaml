@@ -1,0 +1,11 @@
+version: 1
+scope: global
+description: "A project defining a schema namespace"
+filePathTemplate: "projects/${namespace}/project"
+properties:
+  name:
+    type: string
+  namespace:
+    type: string
+  description:
+    type: string

@@ -1,0 +1,13 @@
+version: 1
+scope: global
+description: "A dataset that partitions data in the lake"
+filePathTemplate: "projects/${namespace}/datasets/${dataset_id}"
+properties:
+  dataset_id:
+    type: string
+  project:
+    type: string
+  name:
+    type: string
+  description:
+    type: string

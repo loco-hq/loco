@@ -34,9 +34,32 @@ pub struct Property {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Scope {
+    /// Namespaced and versioned instances (user/project/version path)
+    Namespaced,
+    /// Global config instances (flat, no namespace or version)
+    Global,
+}
+
+impl Scope {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "namespaced" => Some(Scope::Namespaced),
+            "global" => Some(Scope::Global),
+            _ => None,
+        }
+    }
+
+    pub fn is_global(&self) -> bool {
+        matches!(self, Scope::Global)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypeDef {
     pub name: String,
     pub description: String,
+    pub scope: Scope,
     pub file_path_template: Option<String>,
     pub properties: Vec<Property>,
 }

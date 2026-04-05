@@ -1,0 +1,6 @@
+site_id: "acme"
+project: "crm"
+name: "Acme CRM"
+namespace: "ben/crm"
+version: "0.0.1-dev"
+dataset: "acme"

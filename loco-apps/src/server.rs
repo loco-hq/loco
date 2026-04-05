@@ -27,30 +27,16 @@ pub struct AppState {
 
 pub struct SiteId(pub String);
 
-/// Look up a site from the lake. "studio" is always valid (bootstrapped).
-fn lookup_site(adapter: &dyn DataAdapter, site_id: &str) -> Option<HashMap<String, Value>> {
-    // Studio is always valid
-    if site_id == "studio" {
-        let mut fields = HashMap::new();
-        fields.insert("site_id".to_string(), Value::String("studio".to_string()));
-        fields.insert("name".to_string(), Value::String("Loco Studio".to_string()));
-        fields.insert("namespace".to_string(), Value::String("loco/studio@0.0.1-dev".to_string()));
-        fields.insert("dataset".to_string(), Value::String("studio".to_string()));
-        return Some(fields);
-    }
-
-    // Look up in the lake
-    let records = adapter.list("studio", "loco/studio.site").ok()?;
-    records.into_iter().find(|r| {
-        r.fields.get("site_id").map(|v| matches!(v, Value::String(s) if s == site_id)).unwrap_or(false)
-    }).map(|r| r.fields)
+/// Look up a site from the registry config by its site_id field.
+fn lookup_site(registry: &SchemaRegistry, site_id: &str) -> Option<HashMap<String, String>> {
+    registry.find_config("site", "site_id", site_id)
+        .map(|(_, fields)| fields)
 }
 
-fn resolve_dataset_id(adapter: &dyn DataAdapter, site_id: &str) -> String {
-    lookup_site(adapter, site_id)
-        .and_then(|fields| match fields.get("dataset") {
-            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-            _ => None,
+fn resolve_dataset_id(registry: &SchemaRegistry, site_id: &str) -> String {
+    lookup_site(registry, site_id)
+        .and_then(|fields| {
+            fields.get("dataset").cloned().filter(|s| !s.is_empty())
         })
         .unwrap_or_else(|| site_id.to_string())
 }
@@ -83,7 +69,7 @@ impl FromRequestParts<Arc<AppState>> for SiteId {
 
         match site_id {
             Some(id) => {
-                if lookup_site(state.adapter.as_ref(), &id).is_some() {
+                if lookup_site(&state.registry, &id).is_some() {
                     Ok(SiteId(id))
                 } else {
                     Err(error_response(
@@ -204,7 +190,7 @@ async fn handle_add(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
     let now = chrono::Utc::now().to_rfc3339();
     let owner = body.owner.unwrap_or_default();
     let record = Record {
@@ -234,7 +220,7 @@ async fn handle_list(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
     match state.adapter.list(&dataset_id, &key) {
         Ok(records) => ApiResponse::success(records).into_response(),
         Err(e) => lake_error_to_response(e),
@@ -251,7 +237,7 @@ async fn handle_get(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
     match state.adapter.get(&dataset_id, &key, &id) {
         Ok(Some(record)) => ApiResponse::success(record).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
@@ -269,7 +255,7 @@ async fn handle_delete(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
     match state.adapter.delete(&dataset_id, &key, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => lake_error_to_response(e),
@@ -287,7 +273,7 @@ async fn handle_update(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(state.adapter.as_ref(), &site.0);
+    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
 
     // Get existing record to preserve metadata
     let existing = match state.adapter.get(&dataset_id, &key, &id) {
@@ -577,15 +563,20 @@ async fn handle_schema_introspect(
     site: SiteId,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    let site_fields = match lookup_site(state.adapter.as_ref(), &site.0) {
+    let site_fields = match lookup_site(&state.registry, &site.0) {
         Some(f) => f,
         None => return error_response(StatusCode::NOT_FOUND, "site not found"),
     };
 
-    let namespace_str = match site_fields.get("namespace") {
-        Some(Value::String(ns)) => ns.clone(),
+    let namespace = match site_fields.get("namespace") {
+        Some(ns) if !ns.is_empty() => ns.clone(),
         _ => return error_response(StatusCode::BAD_REQUEST, "site has no namespace configured"),
     };
+    let version = match site_fields.get("version") {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => return error_response(StatusCode::BAD_REQUEST, "site has no version configured"),
+    };
+    let namespace_str = format!("{namespace}@{version}");
 
     // Resolve the full dependency tree
     let ns_pairs = match state.registry.resolve_namespace_tree(&namespace_str) {
@@ -625,6 +616,63 @@ async fn handle_schema_introspect(
     ApiResponse::success(result).into_response()
 }
 
+// --- Config endpoints ---
+
+#[derive(Deserialize)]
+struct CreateConfigRequest {
+    fields: HashMap<String, String>,
+}
+
+async fn handle_config_list(
+    State(state): State<Arc<AppState>>,
+    Path(type_name): Path<String>,
+) -> Response {
+    let entries = state.registry.list_config(&type_name);
+    ApiResponse::success(entries).into_response()
+}
+
+async fn handle_config_get(
+    State(state): State<Arc<AppState>>,
+    Path((type_name, id)): Path<(String, String)>,
+) -> Response {
+    match state.registry.get_config(&type_name, &id) {
+        Some(fields) => ApiResponse::success(fields).into_response(),
+        None => error_response(StatusCode::NOT_FOUND, &format!("{type_name} not found: {id}")),
+    }
+}
+
+async fn handle_config_create(
+    State(state): State<Arc<AppState>>,
+    Path((type_name, id)): Path<(String, String)>,
+    Json(body): Json<CreateConfigRequest>,
+) -> Response {
+    match state.registry.create_config(&type_name, &id, body.fields) {
+        Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+async fn handle_config_update(
+    State(state): State<Arc<AppState>>,
+    Path((type_name, id)): Path<(String, String)>,
+    Json(body): Json<CreateConfigRequest>,
+) -> Response {
+    match state.registry.update_config(&type_name, &id, body.fields) {
+        Ok(result) => ApiResponse::success(result).into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+async fn handle_config_delete(
+    State(state): State<Arc<AppState>>,
+    Path((type_name, id)): Path<(String, String)>,
+) -> Response {
+    match state.registry.delete_config(&type_name, &id) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
 // --- Auth endpoints ---
 
 #[derive(Deserialize)]
@@ -637,7 +685,7 @@ async fn handle_auth_login(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LoginRequest>,
 ) -> Response {
-    if lookup_site(state.adapter.as_ref(), &body.site_id).is_none() {
+    if lookup_site(&state.registry, &body.site_id).is_none() {
         return error_response(StatusCode::BAD_REQUEST, &format!("unknown site: {}", body.site_id));
     }
 
@@ -824,7 +872,8 @@ pub fn build_app() -> Router {
 
     // Load schema registry from disk
     let instances_dir = std::path::Path::new("schemas/instances");
-    let registry = SchemaRegistry::load(instances_dir, &type_defs)
+    let config_dir = std::path::Path::new("schemas/config");
+    let registry = SchemaRegistry::load(instances_dir, config_dir, &type_defs)
         .expect("failed to load schema registry");
 
     let all_collections = registry.list_instances("collection", "", "");
@@ -838,6 +887,12 @@ pub fn build_app() -> Router {
         println!("  - {ns}");
     }
 
+    let all_sites = registry.list_config("site");
+    println!("Loaded {} site(s):", all_sites.len());
+    for (id, _) in &all_sites {
+        println!("  - {id}");
+    }
+
     // Initialize data adapter
     let adapter = build_adapter();
 
@@ -845,7 +900,7 @@ pub fn build_app() -> Router {
     let auth_adapter: Box<dyn AuthAdapter> =
         Box::new(LocalAuthAdapter::new(std::path::Path::new("auth")));
     println!("Using local filesystem auth adapter (auth/)");
-    println!("Sites are managed in the lake (studio dataset, loco/studio.site collection)");
+    println!("Sites are managed in schemas/config/site/");
 
     let state = Arc::new(AppState {
         adapter,
@@ -914,6 +969,15 @@ pub fn build_app() -> Router {
         )
         // Schema introspection
         .route("/schema/collections", get(handle_schema_introspect))
+        // Config CRUD endpoints (global-scope types)
+        .route("/config/{type_name}/list", get(handle_config_list))
+        .route(
+            "/config/{type_name}/{id}",
+            get(handle_config_get)
+                .post(handle_config_create)
+                .put(handle_config_update)
+                .delete(handle_config_delete),
+        )
         // Auth endpoints
         .route("/auth/login", post(handle_auth_login))
         .route("/auth/logout", post(handle_auth_logout))

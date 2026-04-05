@@ -10,6 +10,7 @@ use crate::types::{FieldType, FieldValue, Instance, TypeDef};
 pub struct ScanResult {
     pub instances: Vec<Instance>,
     pub namespaces: Vec<ScannedNamespace>,
+    pub config_instances: Vec<Instance>,
 }
 
 /// A namespace found during scanning.
@@ -104,7 +105,7 @@ pub fn scan_instances(
     let mut namespaces = Vec::new();
 
     if !instances_dir.exists() {
-        return Ok(ScanResult { instances, namespaces });
+        return Ok(ScanResult { instances, namespaces, config_instances: Vec::new() });
     }
 
     // Walk: instances_dir / user / project / version / type_name / item.yaml
@@ -251,7 +252,112 @@ pub fn scan_instances(
         a_key.cmp(&b_key)
     });
 
-    Ok(ScanResult { instances, namespaces })
+    Ok(ScanResult { instances, namespaces, config_instances: Vec::new() })
+}
+
+/// Check if a relative path (minus .yaml) matches a filePathTemplate.
+/// Template segments are either literal (e.g., "sites") or variable (e.g., "${namespace}").
+/// Variables can match one or more path segments (e.g., `${namespace}` matches `ben/crm`).
+fn matches_template(rel_path: &str, template: &str) -> bool {
+    let path_parts: Vec<&str> = rel_path.split('/').collect();
+    let tmpl_parts: Vec<&str> = template.split('/').collect();
+    match_segments(&path_parts, &tmpl_parts)
+}
+
+fn match_segments(path: &[&str], tmpl: &[&str]) -> bool {
+    if tmpl.is_empty() {
+        return path.is_empty();
+    }
+    let t = tmpl[0];
+    if t.starts_with("${") && t.ends_with('}') {
+        // Variable: try consuming 1..n path segments
+        for consume in 1..=path.len() {
+            if match_segments(&path[consume..], &tmpl[1..]) {
+                return true;
+            }
+        }
+        false
+    } else {
+        // Literal: must match exactly
+        if path.is_empty() || path[0] != t {
+            return false;
+        }
+        match_segments(&path[1..], &tmpl[1..])
+    }
+}
+
+/// Scan `config_dir` for global-scope config instances.
+///
+/// Types **without** `filePathTemplate`: files at `config_dir/{type_name}/{id}.yaml` (flat).
+/// Types **with** `filePathTemplate`: files anywhere under `config_dir/`, matched by template
+/// pattern. The relative path (minus .yaml) becomes the config key.
+pub fn scan_config(
+    config_dir: &Path,
+    type_defs: &[TypeDef],
+) -> Result<Vec<Instance>, Error> {
+    let mut instances = Vec::new();
+
+    if !config_dir.exists() {
+        return Ok(instances);
+    }
+
+    let global_defs: Vec<&TypeDef> = type_defs.iter().filter(|td| td.scope.is_global()).collect();
+    let flat_defs: Vec<&&TypeDef> = global_defs.iter().filter(|td| td.file_path_template.is_none()).collect();
+    let templated_defs: Vec<&&TypeDef> = global_defs.iter().filter(|td| td.file_path_template.is_some()).collect();
+
+    // Scan flat types: config_dir/{type_name}/{id}.yaml
+    for type_def in &flat_defs {
+        let type_path = config_dir.join(type_def.name.to_lowercase());
+        if !type_path.is_dir() {
+            continue;
+        }
+        for item_entry in std::fs::read_dir(&type_path)? {
+            let item_entry = item_entry?;
+            let item_path = item_entry.path();
+            if item_path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let id = item_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let yaml = std::fs::read_to_string(&item_path)?;
+            let instance = parse_instance(&yaml, type_def, &id)?;
+            instances.push(instance);
+        }
+    }
+
+    // Scan templated types: find all YAML files under config_dir and match against templates
+    if !templated_defs.is_empty() {
+        let all_files = collect_yaml_files(config_dir)?;
+        for file_path in &all_files {
+            let rel = file_path
+                .strip_prefix(config_dir)
+                .unwrap_or(file_path);
+            let key = rel
+                .with_extension("")
+                .to_string_lossy()
+                .to_string();
+
+            // Try to match against each templated type
+            for type_def in &templated_defs {
+                let template = type_def.file_path_template.as_ref().unwrap();
+                if matches_template(&key, template) {
+                    let yaml = std::fs::read_to_string(file_path)?;
+                    let instance = parse_instance(&yaml, type_def, &key)?;
+                    instances.push(instance);
+                    break; // matched — don't try other templates
+                }
+            }
+        }
+    }
+
+    instances.sort_by(|a, b| {
+        a.type_name.cmp(&b.type_name).then(a.namespace.cmp(&b.namespace))
+    });
+
+    Ok(instances)
 }
 
 #[cfg(test)]
@@ -263,6 +369,7 @@ mod tests {
         TypeDef {
             name: "Collection".to_string(),
             description: "A named collection of items".to_string(),
+            scope: crate::types::Scope::Namespaced,
             file_path_template: None,
             properties: vec![
                 Property {
@@ -369,6 +476,7 @@ label_plural: "Opportunities"
             TypeDef {
                 name: "Field".to_string(),
                 description: "A field belonging to a collection".to_string(),
+                scope: crate::types::Scope::Namespaced,
                 file_path_template: Some("${collection}/${name}".to_string()),
                 properties: vec![
                     Property {
