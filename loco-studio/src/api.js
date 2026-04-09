@@ -62,75 +62,95 @@ export async function getSiteCollections(siteId) {
   return request(`/schema/collections?site=${encodeURIComponent(siteId)}`);
 }
 
-// Studio data lives in the "studio" dataset via the ?site=studio param
-const STUDIO_SITE = 'site=studio';
+// --- Config CRUD (projects, sites, datasets) ---
 
-export async function listProjects() {
-  return request(`/loco/studio/collection/project/list?${STUDIO_SITE}`);
+export async function listConfig(typeName) {
+  return request(`/config/${typeName}/list`);
 }
 
-export async function addProject(fields) {
-  return request(`/loco/studio/collection/project/add?${STUDIO_SITE}`, {
+export async function getConfig(typeName, id) {
+  return request(`/config/get/${typeName}/${id}`);
+}
+
+export async function createConfig(typeName, id, fields) {
+  return request(`/config/create/${typeName}/${id}`, {
     method: 'POST',
     body: JSON.stringify({ fields }),
   });
 }
 
-export async function deleteProject(id) {
-  return request(`/loco/studio/collection/project/delete/${id}?${STUDIO_SITE}`, {
-    method: 'DELETE',
-  });
-}
-
-export async function getProject(id) {
-  return request(`/loco/studio/collection/project/get/${id}?${STUDIO_SITE}`);
-}
-
-export async function listSites() {
-  return request(`/loco/studio/collection/site/list?${STUDIO_SITE}`);
-}
-
-export async function addSite(fields) {
-  return request(`/loco/studio/collection/site/add?${STUDIO_SITE}`, {
-    method: 'POST',
-    body: JSON.stringify({ fields }),
-  });
-}
-
-export async function getSite(id) {
-  return request(`/loco/studio/collection/site/get/${id}?${STUDIO_SITE}`);
-}
-
-export async function updateSite(id, fields) {
-  return request(`/loco/studio/collection/site/update/${id}?${STUDIO_SITE}`, {
+export async function updateConfig(typeName, id, fields) {
+  return request(`/config/update/${typeName}/${id}`, {
     method: 'PUT',
     body: JSON.stringify({ fields }),
   });
 }
 
-export async function deleteSite(id) {
-  return request(`/loco/studio/collection/site/delete/${id}?${STUDIO_SITE}`, {
+export async function deleteConfig(typeName, id) {
+  return request(`/config/delete/${typeName}/${id}`, {
     method: 'DELETE',
   });
 }
 
-export async function listDatasets() {
-  return request(`/loco/studio/collection/dataset/list?${STUDIO_SITE}`);
+// --- Project helpers ---
+
+export async function listProjects() {
+  return listConfig('project');
 }
 
-export async function addDataset(fields) {
-  return request(`/loco/studio/collection/dataset/add?${STUDIO_SITE}`, {
-    method: 'POST',
-    body: JSON.stringify({ fields }),
-  });
+export async function getProject(id) {
+  return getConfig('project', id);
+}
+
+export async function addProject(fields) {
+  const ns = fields.namespace;
+  const id = `projects/${ns}/project`;
+  return createConfig('project', id, fields);
+}
+
+export async function deleteProject(id) {
+  return deleteConfig('project', id);
+}
+
+// --- Site helpers ---
+
+export async function listSites() {
+  return listConfig('site');
+}
+
+export async function getSite(id) {
+  return getConfig('site', id);
+}
+
+export async function addSite(fields) {
+  const ns = fields.namespace.split('@')[0]; // strip version
+  const id = `projects/${ns}/sites/${fields.site_id}`;
+  return createConfig('site', id, fields);
+}
+
+export async function updateSite(id, fields) {
+  return updateConfig('site', id, fields);
+}
+
+export async function deleteSite(id) {
+  return deleteConfig('site', id);
+}
+
+// --- Dataset helpers ---
+
+export async function listDatasets() {
+  return listConfig('dataset');
 }
 
 export async function getDataset(id) {
-  return request(`/loco/studio/collection/dataset/get/${id}?${STUDIO_SITE}`);
+  return getConfig('dataset', id);
+}
+
+export async function addDataset(namespace, fields) {
+  const id = `projects/${namespace}/datasets/${fields.dataset_id}`;
+  return createConfig('dataset', id, fields);
 }
 
 export async function deleteDataset(id) {
-  return request(`/loco/studio/collection/dataset/delete/${id}?${STUDIO_SITE}`, {
-    method: 'DELETE',
-  });
+  return deleteConfig('dataset', id);
 }

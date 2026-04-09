@@ -1,60 +1,66 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getDataset, deleteDataset, getProject, listSites } from '../api.js';
+import { getDataset, deleteDataset, listProjects, listSites } from '../api.js';
 
 export default function DatasetDetail() {
-  const { datasetId } = useParams();
+  const { '*': datasetId } = useParams();
   const navigate = useNavigate();
   const [dataset, setDataset] = useState(null);
-  const [project, setProject] = useState(null);
+  const [projectEntry, setProjectEntry] = useState(null);
   const [linkedSites, setLinkedSites] = useState([]);
   const [error, setError] = useState(null);
+
+  // Derive project config ID from dataset config ID
+  // e.g. "projects/ben/crm/datasets/acme" → "projects/ben/crm/project"
+  const projectConfigId = datasetId.replace(/\/datasets\/.*$/, '/project');
+  const nsPrefix = datasetId.replace(/\/datasets\/.*$/, '/');
 
   const load = useCallback(async () => {
     try {
       const d = await getDataset(datasetId);
       setDataset(d);
-      const df = d.fields;
 
-      if (df.project) {
-        try { setProject(await getProject(df.project)); } catch { /* ignore */ }
-      }
+      const [allProjects, allSites] = await Promise.all([listProjects(), listSites()]);
 
-      const allSites = await listSites();
-      setLinkedSites(allSites.filter((s) => s.fields.dataset === df.dataset_id));
+      const proj = allProjects.find(([id]) => id === projectConfigId);
+      if (proj) setProjectEntry(proj);
+
+      setLinkedSites(allSites.filter(([id, fields]) =>
+        id.startsWith(nsPrefix + 'sites/') && fields.dataset === d.dataset_id
+      ));
     } catch (err) {
       setError(err.message);
     }
-  }, [datasetId]);
+  }, [datasetId, projectConfigId, nsPrefix]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleDelete = async () => {
     await deleteDataset(datasetId);
-    navigate(project ? `/project/${project.id}` : '/');
+    navigate(projectEntry ? `/project/${projectEntry[0]}` : '/');
   };
 
   if (error) return <p className="error">Error: {error}</p>;
   if (!dataset) return <p>Loading...</p>;
 
-  const df = dataset.fields;
-
   return (
     <>
       <div className="breadcrumb">
         <Link to="/">Projects</Link>
-        {project && <> / <Link to={`/project/${project.id}`}>{project.fields.name || 'Unnamed'}</Link></>}
-        {' / '}<strong>{df.name || df.dataset_id || 'Unnamed'}</strong>
+        {projectEntry && (
+          <> / <Link to={`/project/${projectEntry[0]}`}>{projectEntry[1].name || 'Unnamed'}</Link></>
+        )}
+        {' / '}<strong>{dataset.name || dataset.dataset_id || 'Unnamed'}</strong>
       </div>
 
       <section className="detail-header">
-        <h2>{df.name || 'Unnamed Dataset'}</h2>
-        <p className="project-ns">{df.dataset_id || ''}</p>
-        {df.description && <p className="project-desc">{df.description}</p>}
-        {project && (
+        <h2>{dataset.name || 'Unnamed Dataset'}</h2>
+        <p className="project-ns">{dataset.dataset_id || ''}</p>
+        {dataset.description && <p className="project-desc">{dataset.description}</p>}
+        {projectEntry && (
           <p className="site-project-detail">
-            Project: <Link to={`/project/${project.id}`} className="row-link">
-              {project.fields.name || 'Unnamed'}
+            Project: <Link to={`/project/${projectEntry[0]}`} className="row-link">
+              {projectEntry[1].name || 'Unnamed'}
             </Link>
           </p>
         )}
@@ -65,14 +71,14 @@ export default function DatasetDetail() {
         <h3>Linked Sites <span className="count">({linkedSites.length})</span></h3>
         <div className="sites-list">
           {linkedSites.length === 0 && <p className="empty-state">No sites use this dataset.</p>}
-          {linkedSites.map((s) => (
-            <div key={s.id} className="site-row">
+          {linkedSites.map(([id, fields]) => (
+            <div key={id} className="site-row">
               <div>
-                <Link to={`/site/${s.id}`} className="row-link">
-                  <strong>{s.fields.site_id || ''}</strong>
+                <Link to={`/site/${id}`} className="row-link">
+                  <strong>{fields.site_id || ''}</strong>
                 </Link>
-                <span className="site-name">{s.fields.name || ''}</span>
-                {s.fields.namespace && <span className="site-ns">ns: {s.fields.namespace}</span>}
+                <span className="site-name">{fields.name || ''}</span>
+                {fields.namespace && <span className="site-ns">ns: {fields.namespace}</span>}
               </div>
             </div>
           ))}

@@ -1,47 +1,48 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getSite, deleteSite, updateSite, getProject, listDatasets, getSiteCollections } from '../api.js';
+import { getSite, deleteSite, updateSite, listProjects, listDatasets, getSiteCollections } from '../api.js';
 
 export default function SiteDetail() {
-  const { siteId } = useParams();
+  const { '*': siteId } = useParams();
   const navigate = useNavigate();
   const [site, setSite] = useState(null);
-  const [project, setProject] = useState(null);
+  const [projectEntry, setProjectEntry] = useState(null);
   const [allDatasets, setAllDatasets] = useState([]);
   const [schemaNamespaces, setSchemaNamespaces] = useState([]);
   const [error, setError] = useState(null);
+
+  // Derive project config ID from site config ID
+  // e.g. "projects/ben/crm/sites/acme" → "projects/ben/crm/project"
+  const projectConfigId = siteId.replace(/\/sites\/.*$/, '/project');
+  const nsPrefix = siteId.replace(/\/sites\/.*$/, '/');
 
   const load = useCallback(async () => {
     try {
       const s = await getSite(siteId);
       setSite(s);
-      const sf = s.fields;
 
-      if (sf.project) {
-        try {
-          const proj = await getProject(sf.project);
-          setProject(proj);
-          // Load all datasets for this project
-          const datasets = await listDatasets();
-          setAllDatasets(datasets.filter((d) => d.fields.project === sf.project));
-        } catch { /* ignore */ }
-      }
+      const [allProjects, datasets] = await Promise.all([listProjects(), listDatasets()]);
 
-      if (sf.site_id) {
+      const proj = allProjects.find(([id]) => id === projectConfigId);
+      if (proj) setProjectEntry(proj);
+
+      setAllDatasets(datasets.filter(([id]) => id.startsWith(nsPrefix + 'datasets/')));
+
+      if (s.site_id) {
         try {
-          setSchemaNamespaces(await getSiteCollections(sf.site_id));
+          setSchemaNamespaces(await getSiteCollections(s.site_id));
         } catch { setSchemaNamespaces([]); }
       }
     } catch (err) {
       setError(err.message);
     }
-  }, [siteId]);
+  }, [siteId, projectConfigId, nsPrefix]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleDelete = async () => {
     await deleteSite(siteId);
-    navigate(project ? `/project/${project.id}` : '/');
+    navigate(projectEntry ? `/project/${projectEntry[0]}` : '/');
   };
 
   const handleDatasetChange = async (e) => {
@@ -53,36 +54,37 @@ export default function SiteDetail() {
   if (error) return <p className="error">Error: {error}</p>;
   if (!site) return <p>Loading...</p>;
 
-  const sf = site.fields;
   const totalCollections = schemaNamespaces.reduce((sum, ns) => sum + ns.collections.length, 0);
 
   return (
     <>
       <div className="breadcrumb">
         <Link to="/">Projects</Link>
-        {project && <> / <Link to={`/project/${project.id}`}>{project.fields.name || 'Unnamed'}</Link></>}
-        {' / '}<strong>{sf.name || sf.site_id || 'Unnamed'}</strong>
+        {projectEntry && (
+          <> / <Link to={`/project/${projectEntry[0]}`}>{projectEntry[1].name || 'Unnamed'}</Link></>
+        )}
+        {' / '}<strong>{site.name || site.site_id || 'Unnamed'}</strong>
       </div>
 
       <section className="detail-header">
-        <h2>{sf.name || 'Unnamed Site'}</h2>
-        <p className="project-ns">{sf.site_id || ''}</p>
-        {sf.namespace && <p className="site-ns-detail">Namespace: <code>{sf.namespace}</code></p>}
+        <h2>{site.name || 'Unnamed Site'}</h2>
+        <p className="project-ns">{site.site_id || ''}</p>
+        {site.namespace && <p className="site-ns-detail">Namespace: <code>{site.namespace}</code></p>}
         <div className="site-dataset-detail">
           Dataset:{' '}
-          <select value={sf.dataset || ''} onChange={handleDatasetChange}>
+          <select value={site.dataset || ''} onChange={handleDatasetChange}>
             <option value="">None</option>
-            {allDatasets.map((d) => (
-              <option key={d.id} value={d.fields.dataset_id || ''}>
-                {d.fields.name || d.fields.dataset_id}
+            {allDatasets.map(([id, fields]) => (
+              <option key={id} value={fields.dataset_id || ''}>
+                {fields.name || fields.dataset_id}
               </option>
             ))}
           </select>
         </div>
-        {project && (
+        {projectEntry && (
           <p className="site-project-detail">
-            Project: <Link to={`/project/${project.id}`} className="row-link">
-              {project.fields.name || 'Unnamed'}
+            Project: <Link to={`/project/${projectEntry[0]}`} className="row-link">
+              {projectEntry[1].name || 'Unnamed'}
             </Link>
           </p>
         )}

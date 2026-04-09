@@ -7,12 +7,16 @@ import {
 } from '../api.js';
 
 export default function ProjectDetail() {
-  const { projectId } = useParams();
+  const { '*': projectId } = useParams();
   const navigate = useNavigate();
   const [project, setProject] = useState(null);
   const [sites, setSites] = useState([]);
   const [datasets, setDatasets] = useState([]);
   const [error, setError] = useState(null);
+
+  // Derive the namespace prefix from the project config ID
+  // e.g. "projects/ben/crm/project" → "projects/ben/crm/"
+  const nsPrefix = projectId.replace(/\/project$/, '/');
 
   const load = useCallback(async () => {
     try {
@@ -20,12 +24,12 @@ export default function ProjectDetail() {
       setProject(proj);
 
       const [allSites, allDatasets] = await Promise.all([listSites(), listDatasets()]);
-      setSites(allSites.filter((s) => s.fields.project === projectId));
-      setDatasets(allDatasets.filter((d) => d.fields.project === projectId));
+      setSites(allSites.filter(([id]) => id.startsWith(nsPrefix + 'sites/')));
+      setDatasets(allDatasets.filter(([id]) => id.startsWith(nsPrefix + 'datasets/')));
     } catch (err) {
       setError(err.message);
     }
-  }, [projectId]);
+  }, [projectId, nsPrefix]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -40,8 +44,9 @@ export default function ProjectDetail() {
     const fields = {
       site_id: form.elements.site_id.value,
       name: form.elements.name.value,
-      project: projectId,
-      namespace: form.elements.namespace.value,
+      project: project.namespace.split('/').pop(),
+      namespace: project.namespace,
+      version: form.elements.version.value || '0.0.1-dev',
     };
     if (form.elements.dataset.value) {
       fields.dataset = form.elements.dataset.value;
@@ -59,11 +64,11 @@ export default function ProjectDetail() {
   const handleAddDataset = async (e) => {
     e.preventDefault();
     const form = e.target;
-    await addDataset({
+    await addDataset(project.namespace, {
       dataset_id: form.elements.dataset_id.value,
       name: form.elements.name.value,
       description: form.elements.description.value,
-      project: projectId,
+      project: project.namespace.split('/').pop(),
     });
     form.reset();
     load();
@@ -77,18 +82,18 @@ export default function ProjectDetail() {
   if (error) return <p className="error">Error: {error}</p>;
   if (!project) return <p>Loading...</p>;
 
-  const ns = project.fields.namespace || '';
+  const ns = project.namespace || '';
 
   return (
     <>
       <div className="breadcrumb">
-        <Link to="/">Projects</Link> / <strong>{project.fields.name || 'Unnamed'}</strong>
+        <Link to="/">Projects</Link> / <strong>{project.name || 'Unnamed'}</strong>
       </div>
 
       <section className="detail-header">
-        <h2>{project.fields.name || 'Unnamed'}</h2>
+        <h2>{project.name || 'Unnamed'}</h2>
         <p className="project-ns">{ns}</p>
-        <p className="project-desc">{project.fields.description || ''}</p>
+        <p className="project-desc">{project.description || ''}</p>
         <button className="delete-btn" onClick={handleDelete}>Delete Project</button>
       </section>
 
@@ -97,12 +102,12 @@ export default function ProjectDetail() {
         <form className="add-form" onSubmit={handleAddSite}>
           <input name="site_id" placeholder="Site ID (e.g. acme-prod)" required />
           <input name="name" placeholder="Site name" required />
-          <input name="namespace" placeholder="Namespace@version" defaultValue={ns ? `${ns}@0.0.1-dev` : ''} required />
+          <input name="version" placeholder="Version" defaultValue="0.0.1-dev" required />
           <select name="dataset">
             <option value="">No dataset</option>
-            {datasets.map((d) => (
-              <option key={d.id} value={d.fields.dataset_id || ''}>
-                {d.fields.name || d.fields.dataset_id}
+            {datasets.map(([id, fields]) => (
+              <option key={id} value={fields.dataset_id || ''}>
+                {fields.name || fields.dataset_id}
               </option>
             ))}
           </select>
@@ -110,17 +115,17 @@ export default function ProjectDetail() {
         </form>
         <div className="sites-list">
           {sites.length === 0 && <p className="empty-state">No sites yet.</p>}
-          {sites.map((s) => (
-            <div key={s.id} className="site-row">
+          {sites.map(([id, fields]) => (
+            <div key={id} className="site-row">
               <div>
-                <Link to={`/site/${s.id}`} className="row-link">
-                  <strong>{s.fields.site_id || ''}</strong>
+                <Link to={`/site/${id}`} className="row-link">
+                  <strong>{fields.site_id || ''}</strong>
                 </Link>
-                <span className="site-name">{s.fields.name || ''}</span>
-                {s.fields.dataset && <span className="site-dataset">dataset: {s.fields.dataset}</span>}
-                {s.fields.namespace && <span className="site-ns">ns: {s.fields.namespace}</span>}
+                <span className="site-name">{fields.name || ''}</span>
+                {fields.dataset && <span className="site-dataset">dataset: {fields.dataset}</span>}
+                {fields.namespace && <span className="site-ns">ns: {fields.namespace}</span>}
               </div>
-              <button className="delete-btn" onClick={() => handleDeleteSite(s.id)}>delete</button>
+              <button className="delete-btn" onClick={() => handleDeleteSite(id)}>delete</button>
             </div>
           ))}
         </div>
@@ -136,16 +141,16 @@ export default function ProjectDetail() {
         </form>
         <div className="datasets-list">
           {datasets.length === 0 && <p className="empty-state">No datasets yet.</p>}
-          {datasets.map((d) => (
-            <div key={d.id} className="site-row">
+          {datasets.map(([id, fields]) => (
+            <div key={id} className="site-row">
               <div>
-                <Link to={`/dataset/${d.id}`} className="row-link">
-                  <strong>{d.fields.dataset_id || ''}</strong>
+                <Link to={`/dataset/${id}`} className="row-link">
+                  <strong>{fields.dataset_id || ''}</strong>
                 </Link>
-                <span className="site-name">{d.fields.name || ''}</span>
-                {d.fields.description && <span className="site-dataset">{d.fields.description}</span>}
+                <span className="site-name">{fields.name || ''}</span>
+                {fields.description && <span className="site-dataset">{fields.description}</span>}
               </div>
-              <button className="delete-btn" onClick={() => handleDeleteDataset(d.id)}>delete</button>
+              <button className="delete-btn" onClick={() => handleDeleteDataset(id)}>delete</button>
             </div>
           ))}
         </div>

@@ -1,0 +1,6 @@
+site_id: "studio"
+project: "studio"
+name: "Loco Studio"
+namespace: "loco/studio"
+version: "0.0.1-dev"
+dataset: "studio"

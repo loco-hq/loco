@@ -523,7 +523,8 @@ async fn handle_schema_delete_field(
     }
 
     // Delete the file directly
-    let file_path = std::path::Path::new("schemas/instances")
+    let file_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("schemas/instances")
         .join(&user)
         .join(&project)
         .join(&version)
@@ -631,10 +632,23 @@ async fn handle_config_list(
     ApiResponse::success(entries).into_response()
 }
 
+/// Extract the config type and ID from a wildcard path like "project/projects/ben/crm/project".
+/// Returns (type_name, id) where type_name is the first segment and id is the rest.
+fn split_config_path(path: &str) -> Option<(String, String)> {
+    let (type_name, id) = path.split_once('/')?;
+    if type_name.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some((type_name.to_string(), id.to_string()))
+}
+
 async fn handle_config_get(
     State(state): State<Arc<AppState>>,
-    Path((type_name, id)): Path<(String, String)>,
+    Path(path): Path<String>,
 ) -> Response {
+    let Some((type_name, id)) = split_config_path(&path) else {
+        return error_response(StatusCode::BAD_REQUEST, "invalid config path");
+    };
     match state.registry.get_config(&type_name, &id) {
         Some(fields) => ApiResponse::success(fields).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("{type_name} not found: {id}")),
@@ -643,9 +657,12 @@ async fn handle_config_get(
 
 async fn handle_config_create(
     State(state): State<Arc<AppState>>,
-    Path((type_name, id)): Path<(String, String)>,
+    Path(path): Path<String>,
     Json(body): Json<CreateConfigRequest>,
 ) -> Response {
+    let Some((type_name, id)) = split_config_path(&path) else {
+        return error_response(StatusCode::BAD_REQUEST, "invalid config path");
+    };
     match state.registry.create_config(&type_name, &id, body.fields) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -654,9 +671,12 @@ async fn handle_config_create(
 
 async fn handle_config_update(
     State(state): State<Arc<AppState>>,
-    Path((type_name, id)): Path<(String, String)>,
+    Path(path): Path<String>,
     Json(body): Json<CreateConfigRequest>,
 ) -> Response {
+    let Some((type_name, id)) = split_config_path(&path) else {
+        return error_response(StatusCode::BAD_REQUEST, "invalid config path");
+    };
     match state.registry.update_config(&type_name, &id, body.fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -665,8 +685,11 @@ async fn handle_config_update(
 
 async fn handle_config_delete(
     State(state): State<Arc<AppState>>,
-    Path((type_name, id)): Path<(String, String)>,
+    Path(path): Path<String>,
 ) -> Response {
+    let Some((type_name, id)) = split_config_path(&path) else {
+        return error_response(StatusCode::BAD_REQUEST, "invalid config path");
+    };
     match state.registry.delete_config(&type_name, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
@@ -855,11 +878,15 @@ fn build_adapter() -> Box<dyn DataAdapter> {
 }
 
 pub fn build_app() -> Router {
+    // Resolve paths relative to the crate directory so the server works
+    // regardless of the working directory (e.g. `cargo run -p loco-apps` from repo root).
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
     // Load type definitions for runtime schema loading
-    let types_dir = std::path::Path::new("schemas/types");
+    let types_dir = crate_dir.join("schemas/types");
     let mut type_defs = Vec::new();
     if types_dir.exists() {
-        for entry in std::fs::read_dir(types_dir).expect("failed to read schemas/types") {
+        for entry in std::fs::read_dir(&types_dir).expect("failed to read schemas/types") {
             let entry = entry.expect("failed to read type entry");
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
@@ -871,9 +898,9 @@ pub fn build_app() -> Router {
     }
 
     // Load schema registry from disk
-    let instances_dir = std::path::Path::new("schemas/instances");
-    let config_dir = std::path::Path::new("schemas/config");
-    let registry = SchemaRegistry::load(instances_dir, config_dir, &type_defs)
+    let instances_dir = crate_dir.join("schemas/instances");
+    let config_dir = crate_dir.join("schemas/config");
+    let registry = SchemaRegistry::load(&instances_dir, &config_dir, &type_defs)
         .expect("failed to load schema registry");
 
     let all_collections = registry.list_instances("collection", "", "");
@@ -898,7 +925,7 @@ pub fn build_app() -> Router {
 
     // Initialize auth adapter
     let auth_adapter: Box<dyn AuthAdapter> =
-        Box::new(LocalAuthAdapter::new(std::path::Path::new("auth")));
+        Box::new(LocalAuthAdapter::new(&crate_dir.join("auth")));
     println!("Using local filesystem auth adapter (auth/)");
     println!("Sites are managed in schemas/config/site/");
 
@@ -971,13 +998,10 @@ pub fn build_app() -> Router {
         .route("/schema/collections", get(handle_schema_introspect))
         // Config CRUD endpoints (global-scope types)
         .route("/config/{type_name}/list", get(handle_config_list))
-        .route(
-            "/config/{type_name}/{id}",
-            get(handle_config_get)
-                .post(handle_config_create)
-                .put(handle_config_update)
-                .delete(handle_config_delete),
-        )
+        .route("/config/get/{*path}", get(handle_config_get))
+        .route("/config/create/{*path}", post(handle_config_create))
+        .route("/config/update/{*path}", put(handle_config_update))
+        .route("/config/delete/{*path}", delete(handle_config_delete))
         // Auth endpoints
         .route("/auth/login", post(handle_auth_login))
         .route("/auth/logout", post(handle_auth_logout))

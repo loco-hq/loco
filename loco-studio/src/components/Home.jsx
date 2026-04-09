@@ -44,11 +44,11 @@ export default function Home() {
       </form>
       <div className="projects-grid">
         {projects.length === 0 && <p className="empty-state">No projects yet.</p>}
-        {projects.map((p) => (
-          <Link key={p.id} to={`/project/${p.id}`} className="project-card">
-            <h3>{p.fields.name || 'Unnamed'}</h3>
-            <p className="project-ns">{p.fields.namespace || ''}</p>
-            <p className="project-desc">{p.fields.description || ''}</p>
+        {projects.map(([id, fields]) => (
+          <Link key={id} to={`/project/${id}`} className="project-card">
+            <h3>{fields.name || 'Unnamed'}</h3>
+            <p className="project-ns">{fields.namespace || ''}</p>
+            <p className="project-desc">{fields.description || ''}</p>
           </Link>
         ))}
       </div>

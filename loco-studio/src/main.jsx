@@ -20,9 +20,9 @@ const router = createHashRouter([
     element: <Layout />,
     children: [
       { index: true, element: <Home /> },
-      { path: 'project/:projectId', element: <ProjectDetail /> },
-      { path: 'site/:siteId', element: <SiteDetail /> },
-      { path: 'dataset/:datasetId', element: <DatasetDetail /> },
+      { path: 'project/*', element: <ProjectDetail /> },
+      { path: 'site/*', element: <SiteDetail /> },
+      { path: 'dataset/*', element: <DatasetDetail /> },
     ],
   },
 ]);
