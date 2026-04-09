@@ -1,0 +1,6 @@
+dataset: dev
+site_id: dev
+namespace: bob/cool
+version: 0.0.1-dev
+project: cool
+name: cool Dev
