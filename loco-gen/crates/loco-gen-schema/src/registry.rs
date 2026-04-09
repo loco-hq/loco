@@ -583,6 +583,18 @@ fn delete_instance_yaml(path: &Path) -> Result<(), Error> {
     if path.exists() {
         std::fs::remove_file(path)?;
     }
+    // Clean up empty parent directories up to (but not including) the config/instances root
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        // Stop at well-known root dirs to avoid deleting too far up
+        if d.ends_with("config") || d.ends_with("instances") {
+            break;
+        }
+        match std::fs::remove_dir(d) {
+            Ok(()) => dir = d.parent(),  // was empty, keep climbing
+            Err(_) => break,              // not empty or not removable, stop
+        }
+    }
     Ok(())
 }
 

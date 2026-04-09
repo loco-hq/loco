@@ -1,0 +1,3 @@
+name: "Cards"
+namespace: "loco/cards"
+description: "Simple card-based project browser"

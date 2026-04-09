@@ -1,0 +1,6 @@
+site_id: "dev"
+project: "pets"
+name: "pets Dev"
+namespace: "ben/pets"
+version: "0.0.1-dev"
+dataset: "dev"

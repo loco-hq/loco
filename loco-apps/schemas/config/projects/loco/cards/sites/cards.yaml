@@ -1,0 +1,6 @@
+site_id: "cards"
+project: "cards"
+name: "Loco Cards"
+namespace: "loco/cards"
+version: "0.0.1-dev"
+dataset: "cards"

@@ -27,18 +27,39 @@ pub struct AppState {
 
 pub struct SiteId(pub String);
 
-/// Look up a site from the registry config by its site_id field.
+/// Look up a site from the registry config by its site_id field (global lookup).
 fn lookup_site(registry: &SchemaRegistry, site_id: &str) -> Option<HashMap<String, String>> {
     registry.find_config("site", "site_id", site_id)
         .map(|(_, fields)| fields)
 }
 
-fn resolve_dataset_id(registry: &SchemaRegistry, site_id: &str) -> String {
-    lookup_site(registry, site_id)
-        .and_then(|fields| {
-            fields.get("dataset").cloned().filter(|s| !s.is_empty())
-        })
-        .unwrap_or_else(|| site_id.to_string())
+/// Look up a site scoped to a namespace + site_id.
+fn lookup_site_in_namespace(registry: &SchemaRegistry, namespace: &str, site_id: &str) -> Option<HashMap<String, String>> {
+    let sites = registry.list_config("site");
+    sites.into_iter().find(|(_, fields)| {
+        fields.get("namespace").map(|n| n == namespace).unwrap_or(false)
+            && fields.get("site_id").map(|s| s == site_id).unwrap_or(false)
+    }).map(|(_, fields)| fields)
+}
+
+/// Resolve a qualified dataset ID from namespace + site name.
+/// Returns `{namespace}/{dataset_name}` for use as the data lake tenant key.
+fn resolve_dataset_id(registry: &SchemaRegistry, namespace: &str, site_name: &str) -> Result<String, String> {
+    let site = lookup_site_in_namespace(registry, namespace, site_name)
+        .ok_or_else(|| format!("unknown site: {site_name} in namespace {namespace}"))?;
+    let dataset = site.get("dataset").filter(|s| !s.is_empty())
+        .map(|s| s.as_str())
+        .unwrap_or(site_name);
+    Ok(format!("{namespace}/{dataset}"))
+}
+
+/// Extract namespace from a config ID like "projects/ben/pets/datasets/dev" → "ben/pets"
+fn namespace_from_config_id(id: &str) -> Option<&str> {
+    let rest = id.strip_prefix("projects/")?;
+    let end = rest.find("/datasets/")
+        .or_else(|| rest.find("/sites/"))
+        .or_else(|| rest.find("/project"))?;
+    Some(&rest[..end])
 }
 
 impl FromRequestParts<Arc<AppState>> for SiteId {
@@ -46,7 +67,7 @@ impl FromRequestParts<Arc<AppState>> for SiteId {
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &Arc<AppState>,
+        _state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         // 1. X-Site-Id header
         let site_id = parts
@@ -69,14 +90,7 @@ impl FromRequestParts<Arc<AppState>> for SiteId {
 
         match site_id {
             Some(id) => {
-                if lookup_site(&state.registry, &id).is_some() {
-                    Ok(SiteId(id))
-                } else {
-                    Err(error_response(
-                        StatusCode::BAD_REQUEST,
-                        &format!("unknown site: {id}"),
-                    ))
-                }
+                Ok(SiteId(id))
             }
             None => Err(error_response(
                 StatusCode::BAD_REQUEST,
@@ -190,7 +204,11 @@ async fn handle_add(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
+    let namespace = format!("{user}/{project}");
+    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+        Ok(id) => id,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
+    };
     let now = chrono::Utc::now().to_rfc3339();
     let owner = body.owner.unwrap_or_default();
     let record = Record {
@@ -220,7 +238,11 @@ async fn handle_list(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
+    let namespace = format!("{user}/{project}");
+    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+        Ok(id) => id,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
+    };
     match state.adapter.list(&dataset_id, &key) {
         Ok(records) => ApiResponse::success(records).into_response(),
         Err(e) => lake_error_to_response(e),
@@ -237,7 +259,11 @@ async fn handle_get(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
+    let namespace = format!("{user}/{project}");
+    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+        Ok(id) => id,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
+    };
     match state.adapter.get(&dataset_id, &key, &id) {
         Ok(Some(record)) => ApiResponse::success(record).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
@@ -255,7 +281,11 @@ async fn handle_delete(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
+    let namespace = format!("{user}/{project}");
+    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+        Ok(id) => id,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
+    };
     match state.adapter.delete(&dataset_id, &key, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => lake_error_to_response(e),
@@ -273,7 +303,11 @@ async fn handle_update(
         return *resp;
     }
 
-    let dataset_id = resolve_dataset_id(&state.registry, &site.0);
+    let namespace = format!("{user}/{project}");
+    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+        Ok(id) => id,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
+    };
 
     // Get existing record to preserve metadata
     let existing = match state.adapter.get(&dataset_id, &key, &id) {
@@ -663,10 +697,37 @@ async fn handle_config_create(
     let Some((type_name, id)) = split_config_path(&path) else {
         return error_response(StatusCode::BAD_REQUEST, "invalid config path");
     };
-    match state.registry.create_config(&type_name, &id, body.fields) {
-        Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
-        Err(e) => schema_error_to_response(e),
+    let result = match state.registry.create_config(&type_name, &id, body.fields) {
+        Ok(r) => r,
+        Err(e) => return schema_error_to_response(e),
+    };
+
+    // When a project is created, bootstrap a default "dev" site and dataset
+    if type_name == "project" {
+        if let (Some(namespace), Some(name)) = (result.get("namespace"), result.get("name")) {
+            let project_slug = namespace.split('/').last().unwrap_or("project");
+
+            let mut dataset_fields = HashMap::new();
+            dataset_fields.insert("dataset_id".to_string(), "dev".to_string());
+            dataset_fields.insert("project".to_string(), project_slug.to_string());
+            dataset_fields.insert("name".to_string(), format!("{name} Dev"));
+            dataset_fields.insert("description".to_string(), "Default development dataset".to_string());
+            let dataset_config_id = format!("projects/{namespace}/datasets/dev");
+            let _ = state.registry.create_config("dataset", &dataset_config_id, dataset_fields);
+
+            let mut site_fields = HashMap::new();
+            site_fields.insert("site_id".to_string(), "dev".to_string());
+            site_fields.insert("project".to_string(), project_slug.to_string());
+            site_fields.insert("name".to_string(), format!("{name} Dev"));
+            site_fields.insert("namespace".to_string(), namespace.clone());
+            site_fields.insert("version".to_string(), "0.0.1-dev".to_string());
+            site_fields.insert("dataset".to_string(), "dev".to_string());
+            let site_config_id = format!("projects/{namespace}/sites/dev");
+            let _ = state.registry.create_config("site", &site_config_id, site_fields);
+        }
     }
+
+    (StatusCode::CREATED, ApiResponse::success(result)).into_response()
 }
 
 async fn handle_config_update(
@@ -691,11 +752,40 @@ async fn handle_config_delete(
         return error_response(StatusCode::BAD_REQUEST, "invalid config path");
     };
 
+    // Cascade: when deleting a project, delete all its child sites and datasets
+    if type_name == "project" {
+        // Project ID is like "projects/ben/crm/project" → prefix is "projects/ben/crm/"
+        let prefix = id.trim_end_matches("project");
+        let namespace = prefix.strip_prefix("projects/").unwrap_or("").trim_end_matches('/');
+
+        // Delete child datasets (which cascades to lake data)
+        let datasets = state.registry.list_config("dataset");
+        for (ds_id, ds_fields) in &datasets {
+            if ds_id.starts_with(prefix) {
+                if let Some(dataset_name) = ds_fields.get("dataset_id") {
+                    let qualified = format!("{namespace}/{dataset_name}");
+                    let _ = state.adapter.delete_dataset(&qualified);
+                }
+                let _ = state.registry.delete_config("dataset", ds_id);
+            }
+        }
+
+        // Delete child sites
+        let sites = state.registry.list_config("site");
+        for (site_id, _) in &sites {
+            if site_id.starts_with(prefix) {
+                let _ = state.registry.delete_config("site", site_id);
+            }
+        }
+    }
+
     // Cascade: when deleting a dataset, purge all its records from the lake
     if type_name == "dataset" {
         if let Some(fields) = state.registry.get_config(&type_name, &id) {
-            if let Some(dataset_id) = fields.get("dataset_id") {
-                if let Err(e) = state.adapter.delete_dataset(dataset_id) {
+            if let Some(dataset_name) = fields.get("dataset_id") {
+                let namespace = namespace_from_config_id(&id).unwrap_or("");
+                let qualified = format!("{namespace}/{dataset_name}");
+                if let Err(e) = state.adapter.delete_dataset(&qualified) {
                     return error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         &format!("failed to purge dataset records: {e}"),

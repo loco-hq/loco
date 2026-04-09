@@ -1,0 +1,6 @@
+version: 0.0.1-dev
+project: ships
+name: ships Dev
+namespace: bob/ships
+site_id: dev
+dataset: dev
