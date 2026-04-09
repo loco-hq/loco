@@ -110,6 +110,13 @@ impl DataAdapter for InMemoryAdapter {
             }).collect()
         }).unwrap_or_default())
     }
+
+    fn delete_dataset(&self, dataset_id: &str) -> Result<(), Error> {
+        let prefix = format!("{dataset_id}::");
+        let mut store = self.store.write().map_err(|e| Error::Internal(e.to_string()))?;
+        store.retain(|key, _| !key.starts_with(&prefix));
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -221,6 +228,26 @@ mod tests {
 
         let list = adapter.list("dataset-b", "users").unwrap();
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_delete_dataset() {
+        let adapter = InMemoryAdapter::new();
+        adapter.insert("ds", "users", make_record("1", "Alice")).unwrap();
+        adapter.insert("ds", "orders", make_record("2", "Order1")).unwrap();
+        adapter.insert("other", "users", make_record("3", "Bob")).unwrap();
+
+        adapter.delete_dataset("ds").unwrap();
+
+        assert!(adapter.list("ds", "users").unwrap().is_empty());
+        assert!(adapter.list("ds", "orders").unwrap().is_empty());
+        assert_eq!(adapter.list("other", "users").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_delete_dataset_empty() {
+        let adapter = InMemoryAdapter::new();
+        adapter.delete_dataset("nonexistent").unwrap();
     }
 
     #[test]

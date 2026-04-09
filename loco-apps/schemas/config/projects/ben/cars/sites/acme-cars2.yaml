@@ -1,6 +1,0 @@
-site_id: "acme-cars2"
-project: "cars"
-name: "Acme Cars 2"
-namespace: "ben/cars"
-version: "0.0.1-dev"
-dataset: "acme-cars2"

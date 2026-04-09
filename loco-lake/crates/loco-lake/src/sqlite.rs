@@ -183,6 +183,16 @@ impl DataAdapter for SqliteAdapter {
 
         Ok(records)
     }
+
+    fn delete_dataset(&self, dataset_id: &str) -> Result<(), Error> {
+        let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM records WHERE dataset_id = ?1",
+            rusqlite::params![dataset_id],
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -295,6 +305,26 @@ mod tests {
 
         let list = adapter.list("dataset-b", "users").unwrap();
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_delete_dataset() {
+        let adapter = make_adapter();
+        adapter.insert("ds", "users", make_record("1", "Alice")).unwrap();
+        adapter.insert("ds", "orders", make_record("2", "Order1")).unwrap();
+        adapter.insert("other", "users", make_record("3", "Bob")).unwrap();
+
+        adapter.delete_dataset("ds").unwrap();
+
+        assert!(adapter.list("ds", "users").unwrap().is_empty());
+        assert!(adapter.list("ds", "orders").unwrap().is_empty());
+        assert_eq!(adapter.list("other", "users").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_delete_dataset_empty() {
+        let adapter = make_adapter();
+        adapter.delete_dataset("nonexistent").unwrap();
     }
 
     #[test]

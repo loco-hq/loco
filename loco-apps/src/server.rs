@@ -690,6 +690,21 @@ async fn handle_config_delete(
     let Some((type_name, id)) = split_config_path(&path) else {
         return error_response(StatusCode::BAD_REQUEST, "invalid config path");
     };
+
+    // Cascade: when deleting a dataset, purge all its records from the lake
+    if type_name == "dataset" {
+        if let Some(fields) = state.registry.get_config(&type_name, &id) {
+            if let Some(dataset_id) = fields.get("dataset_id") {
+                if let Err(e) = state.adapter.delete_dataset(dataset_id) {
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("failed to purge dataset records: {e}"),
+                    );
+                }
+            }
+        }
+    }
+
     match state.registry.delete_config(&type_name, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),

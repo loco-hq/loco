@@ -1,0 +1,6 @@
+version: 0.0.1-dev
+dataset: yolo-cars
+project: cars
+site_id: yolo-cars
+namespace: ben/cars
+name: Yolo Cars
