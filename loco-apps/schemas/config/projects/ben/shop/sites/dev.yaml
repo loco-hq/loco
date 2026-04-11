@@ -1,0 +1,6 @@
+namespace: ben/shop
+version: 0.0.1-dev
+name: shop Dev
+site_id: dev
+project: shop
+dataset: dev

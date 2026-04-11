@@ -1,0 +1,3 @@
+collection: inventory
+type: integer
+name: quantity
