@@ -1,0 +1,3 @@
+name: sales
+dependencies:
+  - acme/crm@0-draft

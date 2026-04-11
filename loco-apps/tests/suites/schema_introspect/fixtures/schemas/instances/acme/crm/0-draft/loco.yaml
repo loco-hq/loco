@@ -1,0 +1,3 @@
+name: crm
+dependencies:
+  - base/core@0-draft

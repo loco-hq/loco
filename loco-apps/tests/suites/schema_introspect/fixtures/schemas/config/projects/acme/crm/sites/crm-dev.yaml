@@ -1,0 +1,6 @@
+site_id: "crm-dev"
+project: "crm"
+name: "CRM Dev"
+namespace: "acme/crm"
+version: "0-draft"
+dataset: "crm-dev"

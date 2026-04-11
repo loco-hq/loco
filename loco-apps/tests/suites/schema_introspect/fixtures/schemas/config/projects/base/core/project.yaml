@@ -1,0 +1,3 @@
+name: "Core"
+namespace: "base/core"
+description: "Base types shared by all projects"

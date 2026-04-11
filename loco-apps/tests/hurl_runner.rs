@@ -119,3 +119,8 @@ fn suite_schema_crud() {
 fn suite_data_crud() {
     run_suite(&suites_dir().join("data_crud"));
 }
+
+#[test]
+fn suite_schema_introspect() {
+    run_suite(&suites_dir().join("schema_introspect"));
+}
