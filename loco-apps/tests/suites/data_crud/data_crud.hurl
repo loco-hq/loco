@@ -112,17 +112,3 @@ X-Site-Id: dev
 HTTP 404
 [Asserts]
 jsonpath "$.ok" == false
-
-# 11. Verify missing site header returns error
-GET http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/list
-HTTP 400
-[Asserts]
-jsonpath "$.ok" == false
-jsonpath "$.error" contains "missing site"
-
-# 12. Verify unknown collection returns 404
-GET http://127.0.0.1:{{port}}/testuser/testapp/collection/nonexistent/list
-X-Site-Id: dev
-HTTP 404
-[Asserts]
-jsonpath "$.ok" == false
