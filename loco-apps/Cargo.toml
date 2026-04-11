@@ -3,6 +3,10 @@ name = "loco-apps"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "loco_apps"
+path = "src/lib.rs"
+
 [dependencies]
 loco-gen-runtime = { path = "../loco-gen/crates/loco-gen-runtime" }
 loco-gen-schema = { path = "../loco-gen/crates/loco-gen-schema" }
@@ -15,6 +19,9 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 serde_yaml = "0.9"
 tower-http = { version = "0.6", features = ["cors"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [build-dependencies]
 loco-gen-codegen-build = { path = "../loco-gen/crates/loco-gen-codegen-build" }

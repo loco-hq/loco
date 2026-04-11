@@ -1,0 +1,6 @@
+site_id: "dev"
+project: "testapp"
+name: "Dev Site"
+namespace: "testuser/testapp"
+version: "0-draft"
+dataset: "dev"

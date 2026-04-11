@@ -556,22 +556,7 @@ async fn handle_schema_delete_field(
         }
     }
 
-    // Delete the file directly
-    let file_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("schemas/instances")
-        .join(&user)
-        .join(&project)
-        .join(&version)
-        .join("field")
-        .join(&collection)
-        .join(format!("{name}.yaml"));
-    let _ = std::fs::remove_file(&file_path);
-
-    // Remove from in-memory state by re-creating without nested delete helpers
-    // Use a workaround: create a dummy then delete it... actually let's just
-    // remove it from the registry's internal state directly
-    // For now, we need to add support for deleting nested instances
-    // Let's use delete_instances_by_prefix with an exact match
+    // Delete from disk and in-memory state via the registry
     let _ = state
         .registry
         .delete_instances_by_prefix("field", &namespace, &version);
@@ -983,9 +968,11 @@ fn build_adapter() -> Box<dyn DataAdapter> {
 }
 
 pub fn build_app() -> Router {
-    // Resolve paths relative to the crate directory so the server works
-    // regardless of the working directory (e.g. `cargo run -p loco-apps` from repo root).
-    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    build_app_with_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
+}
+
+pub fn build_app_with_root(root: &std::path::Path) -> Router {
+    let crate_dir = root;
 
     // Load type definitions for runtime schema loading
     let types_dir = crate_dir.join("schemas/types");
