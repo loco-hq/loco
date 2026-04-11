@@ -1,0 +1,3 @@
+name: "Test App"
+namespace: "alice/testapp"
+description: "Test project for schema CRUD integration tests"

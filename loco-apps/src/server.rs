@@ -168,6 +168,18 @@ fn validate_collection(state: &AppState, key: &str) -> Result<(), Box<Response>>
     }
 }
 
+fn validate_project(state: &AppState, user: &str, project: &str) -> Result<(), Box<Response>> {
+    let config_id = format!("projects/{user}/{project}/project");
+    if state.registry.has_config("project", &config_id) {
+        Ok(())
+    } else {
+        Err(Box::new(error_response(
+            StatusCode::NOT_FOUND,
+            &format!("unknown project: {user}/{project}"),
+        )))
+    }
+}
+
 fn is_draft_version(version: &str) -> bool {
     version.contains('-')
 }
@@ -383,6 +395,9 @@ async fn handle_schema_create_collection(
     Path((user, project, version)): Path<(String, String, String)>,
     Json(body): Json<CreateCollectionRequest>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     if let Err(resp) = require_draft(&version) {
         return resp;
     }
@@ -405,6 +420,9 @@ async fn handle_schema_list_collections(
     State(state): State<Arc<AppState>>,
     Path((user, project, _version)): Path<(String, String, String)>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     let entries = state.registry.list_instances("collection", &user, &project);
     ApiResponse::success(entries).into_response()
 }
@@ -413,6 +431,9 @@ async fn handle_schema_get_collection(
     State(state): State<Arc<AppState>>,
     Path((user, project, _version, name)): Path<(String, String, String, String)>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     let namespace = format!("{user}/{project}.{name}");
     match state.registry.get_instance("collection", &namespace) {
         Some(fields) => ApiResponse::success(fields).into_response(),
@@ -425,6 +446,9 @@ async fn handle_schema_update_collection(
     Path((user, project, version, name)): Path<(String, String, String, String)>,
     Json(body): Json<UpdateCollectionRequest>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     if let Err(resp) = require_draft(&version) {
         return resp;
     }
@@ -450,6 +474,9 @@ async fn handle_schema_delete_collection(
     State(state): State<Arc<AppState>>,
     Path((user, project, version, name)): Path<(String, String, String, String)>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     if let Err(resp) = require_draft(&version) {
         return resp;
     }
@@ -474,6 +501,9 @@ async fn handle_schema_create_field(
     Path((user, project, version, collection)): Path<(String, String, String, String)>,
     Json(body): Json<CreateFieldRequest>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     if let Err(resp) = require_draft(&version) {
         return resp;
     }
@@ -501,6 +531,9 @@ async fn handle_schema_list_fields(
     State(state): State<Arc<AppState>>,
     Path((user, project, _version, collection)): Path<(String, String, String, String)>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     let all_fields = state.registry.list_instances("field", &user, &project);
     let prefix = format!("{user}/{project}.{collection}/");
     let filtered: Vec<_> = all_fields
@@ -515,6 +548,9 @@ async fn handle_schema_update_field(
     Path((user, project, version, collection, name)): Path<(String, String, String, String, String)>,
     Json(body): Json<UpdateFieldRequest>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     if let Err(resp) = require_draft(&version) {
         return resp;
     }
@@ -542,6 +578,9 @@ async fn handle_schema_delete_field(
     State(state): State<Arc<AppState>>,
     Path((user, project, version, collection, name)): Path<(String, String, String, String, String)>,
 ) -> Response {
+    if let Err(resp) = validate_project(&state, &user, &project) {
+        return *resp;
+    }
     if let Err(resp) = require_draft(&version) {
         return resp;
     }
