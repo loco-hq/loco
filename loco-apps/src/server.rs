@@ -14,8 +14,8 @@ use loco_gen_schema::registry::SchemaRegistry;
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter, Record, Value};
 
 use crate::auth::{
-    AuthAdapter, AuthenticatedUser, CreateUserRequest, LoginCredentials, UpdateUserRequest,
-    auth_error_to_response,
+    AuthAdapter, AuthUser, AuthenticatedUser, CreateUserRequest, LoginCredentials,
+    UpdateUserRequest, auth_error_to_response,
 };
 use crate::auth::local::LocalAuthAdapter;
 
@@ -178,6 +178,36 @@ fn validate_project(state: &AppState, user: &str, project: &str) -> Result<(), B
             &format!("unknown project: {user}/{project}"),
         )))
     }
+}
+
+/// Sites that are allowed to edit config/schema (like admin tools).
+const CONFIG_SITES: &[&str] = &["studio", "cards"];
+
+fn require_config_site(auth_user: &AuthUser) -> Result<(), Response> {
+    if CONFIG_SITES.contains(&auth_user.site_id.as_str()) {
+        Ok(())
+    } else {
+        Err(error_response(
+            StatusCode::FORBIDDEN,
+            "this site does not have config editing permissions",
+        ))
+    }
+}
+
+fn authorize_user(auth_user: &AuthUser, path_user: &str) -> Result<(), Response> {
+    if auth_user.username == path_user {
+        Ok(())
+    } else {
+        Err(error_response(
+            StatusCode::FORBIDDEN,
+            "you do not have access to this resource",
+        ))
+    }
+}
+
+fn user_from_config_id(id: &str) -> Option<&str> {
+    let rest = id.strip_prefix("projects/")?;
+    rest.split('/').next()
 }
 
 fn is_draft_version(version: &str) -> bool {
@@ -354,9 +384,12 @@ async fn handle_update(
 // --- Meta endpoint ---
 
 async fn handle_meta_list(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, type_name)): Path<(String, String, String)>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     let entries = state.registry.list_instances(&type_name, &user, &project);
     ApiResponse::success(entries).into_response()
 }
@@ -391,10 +424,13 @@ struct UpdateFieldRequest {
 }
 
 async fn handle_schema_create_collection(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, version)): Path<(String, String, String)>,
     Json(body): Json<CreateCollectionRequest>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -417,9 +453,12 @@ async fn handle_schema_create_collection(
 }
 
 async fn handle_schema_list_collections(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, _version)): Path<(String, String, String)>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -428,9 +467,12 @@ async fn handle_schema_list_collections(
 }
 
 async fn handle_schema_get_collection(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, _version, name)): Path<(String, String, String, String)>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -442,10 +484,13 @@ async fn handle_schema_get_collection(
 }
 
 async fn handle_schema_update_collection(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, version, name)): Path<(String, String, String, String)>,
     Json(body): Json<UpdateCollectionRequest>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -471,9 +516,12 @@ async fn handle_schema_update_collection(
 }
 
 async fn handle_schema_delete_collection(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, version, name)): Path<(String, String, String, String)>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -497,10 +545,13 @@ async fn handle_schema_delete_collection(
 }
 
 async fn handle_schema_create_field(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, version, collection)): Path<(String, String, String, String)>,
     Json(body): Json<CreateFieldRequest>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -528,9 +579,12 @@ async fn handle_schema_create_field(
 }
 
 async fn handle_schema_list_fields(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, _version, collection)): Path<(String, String, String, String)>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -544,10 +598,13 @@ async fn handle_schema_list_fields(
 }
 
 async fn handle_schema_update_field(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, version, collection, name)): Path<(String, String, String, String, String)>,
     Json(body): Json<UpdateFieldRequest>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -575,9 +632,12 @@ async fn handle_schema_update_field(
 }
 
 async fn handle_schema_delete_field(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path((user, project, version, collection, name)): Path<(String, String, String, String, String)>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
@@ -619,9 +679,12 @@ struct NamespaceCollections {
 }
 
 async fn handle_schema_introspect(
+    auth_user: AuthenticatedUser,
     site: SiteId,
     State(state): State<Arc<AppState>>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+
     let site_fields = match lookup_site(&state.registry, &site.0) {
         Some(f) => f,
         None => return error_response(StatusCode::NOT_FOUND, "site not found"),
@@ -631,6 +694,9 @@ async fn handle_schema_introspect(
         Some(ns) if !ns.is_empty() => ns.clone(),
         _ => return error_response(StatusCode::BAD_REQUEST, "site has no namespace configured"),
     };
+
+    let ns_user = namespace.split('/').next().unwrap_or("");
+    if let Err(resp) = authorize_user(&auth_user.0.user, ns_user) { return resp; }
     let version = match site_fields.get("version") {
         Some(v) if !v.is_empty() => v.clone(),
         _ => return error_response(StatusCode::BAD_REQUEST, "site has no version configured"),
@@ -683,11 +749,18 @@ struct CreateConfigRequest {
 }
 
 async fn handle_config_list(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(type_name): Path<String>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
+    let username = &auth_user.0.user.username;
     let entries = state.registry.list_config(&type_name);
-    ApiResponse::success(entries).into_response()
+    let filtered: Vec<_> = entries
+        .into_iter()
+        .filter(|(id, _)| id.starts_with(&format!("projects/{username}/")))
+        .collect();
+    ApiResponse::success(filtered).into_response()
 }
 
 /// Extract the config type and ID from a wildcard path like "project/projects/ben/crm/project".
@@ -701,12 +774,17 @@ fn split_config_path(path: &str) -> Option<(String, String)> {
 }
 
 async fn handle_config_get(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     let Some((type_name, id)) = split_config_path(&path) else {
         return error_response(StatusCode::BAD_REQUEST, "invalid config path");
     };
+    if let Some(path_user) = user_from_config_id(&id) {
+        if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
+    }
     match state.registry.get_config(&type_name, &id) {
         Some(fields) => ApiResponse::success(fields).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("{type_name} not found: {id}")),
@@ -714,13 +792,18 @@ async fn handle_config_get(
 }
 
 async fn handle_config_create(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
     Json(body): Json<CreateConfigRequest>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     let Some((type_name, id)) = split_config_path(&path) else {
         return error_response(StatusCode::BAD_REQUEST, "invalid config path");
     };
+    if let Some(path_user) = user_from_config_id(&id) {
+        if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
+    }
     let result = match state.registry.create_config(&type_name, &id, body.fields) {
         Ok(r) => r,
         Err(e) => return schema_error_to_response(e),
@@ -755,13 +838,18 @@ async fn handle_config_create(
 }
 
 async fn handle_config_update(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
     Json(body): Json<CreateConfigRequest>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     let Some((type_name, id)) = split_config_path(&path) else {
         return error_response(StatusCode::BAD_REQUEST, "invalid config path");
     };
+    if let Some(path_user) = user_from_config_id(&id) {
+        if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
+    }
     match state.registry.update_config(&type_name, &id, body.fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -769,12 +857,17 @@ async fn handle_config_update(
 }
 
 async fn handle_config_delete(
+    auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> Response {
+    if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     let Some((type_name, id)) = split_config_path(&path) else {
         return error_response(StatusCode::BAD_REQUEST, "invalid config path");
     };
+    if let Some(path_user) = user_from_config_id(&id) {
+        if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
+    }
 
     // Cascade: when deleting a project, delete all its child sites and datasets
     if type_name == "project" {

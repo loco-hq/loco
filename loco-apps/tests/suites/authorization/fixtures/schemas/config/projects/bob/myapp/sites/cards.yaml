@@ -1,0 +1,6 @@
+site_id: "cards"
+project: "myapp"
+name: "Bob Cards"
+namespace: "bob/myapp"
+version: "0-draft"
+dataset: "dev"

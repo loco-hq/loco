@@ -124,3 +124,8 @@ fn suite_data_crud() {
 fn suite_schema_introspect() {
     run_suite(&suites_dir().join("schema_introspect"));
 }
+
+#[test]
+fn suite_authorization() {
+    run_suite(&suites_dir().join("authorization"));
+}

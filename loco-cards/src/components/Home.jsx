@@ -43,16 +43,11 @@ export default function Home() {
   if (error) return <p className="error-banner">Something went wrong: {error}</p>;
   if (!projects) return <div className="loading">Shuffling the deck...</div>;
 
-  const username = user?.username || '';
-  const myProjects = projects.filter(([, fields]) =>
-    fields.namespace?.startsWith(`${username}/`)
-  );
-
   return (
     <section className="home">
       <h2 className="home-title">Your Projects</h2>
       <div className="cards-grid">
-        {myProjects.map(([id, fields]) => (
+        {projects.map(([id, fields]) => (
           <Link key={id} to={`/project/${id}`} className="card card-link">
             <div className="card-suit">&#9830;</div>
             <h3 className="card-name">{fields.name}</h3>
