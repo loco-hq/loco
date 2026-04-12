@@ -9,7 +9,6 @@ cargo test                    # Run all workspace tests
 cargo test -p loco-gen-schema # Test schema/codegen crate only
 cargo clippy --workspace      # Lint everything
 cargo run -p loco-apps        # Run the web server on :3000
-cargo run -p basic-example    # Run the codegen demo
 ```
 
 ## Project Structure
@@ -31,26 +30,33 @@ Runtime: `loco-apps` → `loco-gen-runtime` + `loco-lake`
 
 ## How Codegen Works
 
-1. `build.rs` calls `loco_gen_codegen_build::generate("schemas/types", "schemas/instances", "schemas/config")`
+1. `build.rs` calls `loco_gen_codegen_build::generate("schemas/types", "schemas/instances")`
 2. Type definitions (`schemas/types/*.yaml`) are parsed into `TypeDef` structs
-3. Namespaced instances (`schemas/instances/{user}/{project}/{version}/{type}/**/*.yaml`) are scanned for `scope: namespaced` types
-4. Global config instances (`schemas/config/{type}/*.yaml`) are scanned for `scope: global` types
-5. Rust code is generated to `$OUT_DIR/loco_generated.rs` — structs, constructors, accessors, cache methods, and baked-in instance loaders
-6. `main.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`
+3. All instance YAML files under `schemas/instances/` are matched against each type's `filePathTemplate` to determine their type and extract template variables
+4. Rust code is generated to `$OUT_DIR/loco_generated.rs` — structs, constructors, accessors, cache methods, and baked-in instance loaders
+5. `main.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`
 
 ### Namespace convention
 
-Instance namespace = `{user}/{project}.{key}` where key is the relative path from the type folder minus `.yaml`.
-- Flat types (collection): `ben/crm.account`
-- Nested types (field with `filePathTemplate`): `ben/crm.account/company`
+Instance namespace depends on whether the type's template includes `${version}`:
+- Versioned types (collection, field): `{user}/{project}.{item_key}` — e.g., `ben/crm.account`
+- Unversioned types (project, dataset, site): relative path minus `.yaml` — e.g., `ben/crm/project`, `ben/crm/datasets/acme`
 
 ## Schema Files
 
-Type definitions live in `schemas/types/` with these supported field types: `string`, `integer`, `float`, `boolean`. Optional `filePathTemplate` controls nested instance organization. The `scope` field controls instance addressing:
-- `scope: namespaced` (default) — instances live under `schemas/instances/{user}/{project}/{version}/{type}/`, addressed as `user/project.name`
-- `scope: global` — config instances live under `schemas/config/{type}/`, addressed by simple id (e.g., `studio`)
+Type definitions live in `schemas/types/` with these supported field types: `string`, `integer`, `float`, `boolean`. Every type has a required `filePathTemplate` that controls where instance files live under `schemas/instances/` and how template variables are extracted from file paths.
 
-Namespaced instance files live under `schemas/instances/{user}/{project}/{version}/{type}/`. Global config files live under `schemas/config/{type}/`. Type folder names are matched case-insensitively to TypeDef names.
+### filePathTemplate examples
+
+| Type | Template |
+|------|----------|
+| project | `${namespace}/project.yaml` |
+| dataset | `${namespace}/datasets/${dataset_id}.yaml` |
+| site | `${namespace}/sites/${site_id}.yaml` |
+| collection | `${namespace}/versions/${version}/collection/${name}.yaml` |
+| field | `${namespace}/versions/${version}/field/${collection}/${name}.yaml` |
+
+`${namespace}` is a multi-segment variable (e.g., `ben/crm`). Instance files all live under `schemas/instances/`.
 
 ## Key Patterns
 

@@ -1,7 +1,6 @@
 version: 1
-scope: global
 description: "A dataset that partitions data in the lake"
-filePathTemplate: "projects/${namespace}/datasets/${dataset_id}"
+filePathTemplate: "${namespace}/datasets/${dataset_id}.yaml"
 properties:
   dataset_id:
     type: string

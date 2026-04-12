@@ -12,7 +12,7 @@ export default function SiteDetail() {
   const [error, setError] = useState(null);
 
   // Derive project config ID from site config ID
-  // e.g. "projects/ben/crm/sites/acme" → "projects/ben/crm/project"
+  // e.g. "ben/crm/sites/acme" → "ben/crm/project"
   const projectConfigId = siteId.replace(/\/sites\/.*$/, '/project');
   const nsPrefix = siteId.replace(/\/sites\/.*$/, '/');
 

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::Error;
-use crate::types::{FieldType, Property, Schema, Scope, TypeDef};
+use crate::types::{FieldType, Property, Schema, TypeDef};
 
 /// Parse a YAML schema file into a `Schema`.
 /// The `type_name` is derived from the filename by the caller.
@@ -28,17 +28,11 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<Schema, Error> {
         .and_then(|v| v.as_mapping())
         .ok_or(Error::MissingField("properties"))?;
 
-    let scope = mapping
-        .get(serde_yaml::Value::String("scope".into()))
-        .and_then(|v| v.as_str())
-        .map(|s| Scope::parse(s).ok_or_else(|| Error::InvalidValue(format!("invalid scope: {s} (expected 'global' or 'namespaced')"))))
-        .transpose()?
-        .unwrap_or(Scope::Namespaced);
-
     let file_path_template = mapping
         .get(serde_yaml::Value::String("filePathTemplate".into()))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .ok_or(Error::MissingField("filePathTemplate"))?
+        .to_string();
 
     let mut properties = Vec::new();
     for (key, val) in props_mapping {
@@ -61,7 +55,6 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<Schema, Error> {
         type_def: TypeDef {
             name: to_pascal_case(type_name),
             description,
-            scope,
             file_path_template,
             properties,
         },
@@ -98,6 +91,7 @@ mod tests {
     const SAMPLE_YAML: &str = r#"
 version: 1
 description: "A named collection of items"
+filePathTemplate: "${namespace}/versions/${version}/collection/${name}.yaml"
 properties:
   name:
     type: string
@@ -141,6 +135,7 @@ properties:
     fn test_invalid_field_type() {
         let yaml = r#"
 version: 1
+filePathTemplate: "${namespace}/${name}.yaml"
 properties:
   bad:
     type: datetime

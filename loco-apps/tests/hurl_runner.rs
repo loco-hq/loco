@@ -31,8 +31,8 @@ fn crate_dir() -> &'static Path {
 ///
 /// The server root is assembled in a tempdir:
 /// - `schemas/types/` always comes from the real crate (core type definitions)
-/// - `schemas/instances/`, `schemas/config/`, `auth/` come from the suite's
-///   `fixtures/` folder if present, otherwise empty dirs are created
+/// - `schemas/instances/`, `auth/` come from the suite's `fixtures/` folder
+///   if present, otherwise empty dirs are created
 fn run_suite(suite_dir: &Path) {
     // 1. Build server root in a tempdir
     let tmp = tempfile::TempDir::new().unwrap();
@@ -43,7 +43,7 @@ fn run_suite(suite_dir: &Path) {
 
     // Copy suite-specific fixtures (instances, config, auth) if provided
     let fixtures_src = suite_dir.join("fixtures");
-    for subdir in ["schemas/instances", "schemas/config", "auth"] {
+    for subdir in ["schemas/instances", "auth"] {
         let src = fixtures_src.join(subdir);
         let dst = tmp.path().join(subdir);
         if src.exists() {

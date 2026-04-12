@@ -27,15 +27,15 @@ pub struct AppState {
 
 pub struct SiteId(pub String);
 
-/// Look up a site from the registry config by its site_id field (global lookup).
+/// Look up a site from the registry by its site_id field (global lookup).
 fn lookup_site(registry: &SchemaRegistry, site_id: &str) -> Option<HashMap<String, String>> {
-    registry.find_config("site", "site_id", site_id)
+    registry.find_instance("site", "site_id", site_id)
         .map(|(_, fields)| fields)
 }
 
 /// Look up a site scoped to a namespace + site_id.
 fn lookup_site_in_namespace(registry: &SchemaRegistry, namespace: &str, site_id: &str) -> Option<HashMap<String, String>> {
-    let sites = registry.list_config("site");
+    let sites = registry.list_all_instances("site");
     sites.into_iter().find(|(_, fields)| {
         fields.get("namespace").map(|n| n == namespace).unwrap_or(false)
             && fields.get("site_id").map(|s| s == site_id).unwrap_or(false)
@@ -53,13 +53,38 @@ fn resolve_dataset_id(registry: &SchemaRegistry, namespace: &str, site_name: &st
     Ok(format!("{namespace}/{dataset}"))
 }
 
-/// Extract namespace from a config ID like "projects/ben/pets/datasets/dev" → "ben/pets"
+/// Extract namespace from a config ID like "ben/crm/datasets/dev" -> "ben/crm"
 fn namespace_from_config_id(id: &str) -> Option<&str> {
-    let rest = id.strip_prefix("projects/")?;
-    let end = rest.find("/datasets/")
-        .or_else(|| rest.find("/sites/"))
-        .or_else(|| rest.find("/project"))?;
-    Some(&rest[..end])
+    let end = id.find("/datasets/")
+        .or_else(|| id.find("/sites/"))
+        .or_else(|| id.find("/project"))?;
+    Some(&id[..end])
+}
+
+/// Build template_vars from a config ID for disk path resolution.
+/// - "ben/crm/project" -> {namespace: "ben/crm"}
+/// - "ben/crm/datasets/acme" -> {namespace: "ben/crm", dataset_id: "acme"}
+/// - "ben/crm/sites/dev" -> {namespace: "ben/crm", site_id: "dev"}
+fn template_vars_from_config_id(id: &str) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    if let Some(pos) = id.find("/datasets/") {
+        vars.insert("namespace".to_string(), id[..pos].to_string());
+        vars.insert("dataset_id".to_string(), id[pos + "/datasets/".len()..].to_string());
+    } else if let Some(pos) = id.find("/sites/") {
+        vars.insert("namespace".to_string(), id[..pos].to_string());
+        vars.insert("site_id".to_string(), id[pos + "/sites/".len()..].to_string());
+    } else if let Some(pos) = id.find("/project") {
+        vars.insert("namespace".to_string(), id[..pos].to_string());
+    }
+    vars
+}
+
+/// Build template_vars for a schema type (collection or field).
+fn schema_template_vars(user: &str, project: &str, version: &str) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    vars.insert("namespace".to_string(), format!("{user}/{project}"));
+    vars.insert("version".to_string(), version.to_string());
+    vars
 }
 
 impl FromRequestParts<Arc<AppState>> for SiteId {
@@ -169,8 +194,8 @@ fn validate_collection(state: &AppState, key: &str) -> Result<(), Box<Response>>
 }
 
 fn validate_project(state: &AppState, user: &str, project: &str) -> Result<(), Box<Response>> {
-    let config_id = format!("projects/{user}/{project}/project");
-    if state.registry.has_config("project", &config_id) {
+    let config_id = format!("{user}/{project}/project");
+    if state.registry.has_instance("project", &config_id) {
         Ok(())
     } else {
         Err(Box::new(error_response(
@@ -206,8 +231,7 @@ fn authorize_user(auth_user: &AuthUser, path_user: &str) -> Result<(), Response>
 }
 
 fn user_from_config_id(id: &str) -> Option<&str> {
-    let rest = id.strip_prefix("projects/")?;
-    rest.split('/').next()
+    id.split('/').next()
 }
 
 fn is_draft_version(version: &str) -> bool {
@@ -390,7 +414,7 @@ async fn handle_meta_list(
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    let entries = state.registry.list_instances(&type_name, &user, &project);
+    let entries = state.registry.list_instances(&type_name, &format!("{user}/{project}."));
     ApiResponse::success(entries).into_response()
 }
 
@@ -443,9 +467,13 @@ async fn handle_schema_create_collection(
     fields.insert("label".to_string(), body.label);
     fields.insert("label_plural".to_string(), body.label_plural);
 
+    let namespace_key = format!("{user}/{project}.{}", body.name);
+    let mut template_vars = schema_template_vars(&user, &project, &version);
+    template_vars.insert("name".to_string(), body.name);
+
     match state
         .registry
-        .create_instance("collection", &user, &project, &version, &body.name, fields)
+        .create_instance("collection", &namespace_key, &template_vars, fields)
     {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -462,7 +490,7 @@ async fn handle_schema_list_collections(
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
-    let entries = state.registry.list_instances("collection", &user, &project);
+    let entries = state.registry.list_instances("collection", &format!("{user}/{project}."));
     ApiResponse::success(entries).into_response()
 }
 
@@ -506,9 +534,13 @@ async fn handle_schema_update_collection(
         fields.insert("label_plural".to_string(), label_plural);
     }
 
+    let namespace_key = format!("{user}/{project}.{name}");
+    let mut template_vars = schema_template_vars(&user, &project, &version);
+    template_vars.insert("name".to_string(), name);
+
     match state
         .registry
-        .update_instance("collection", &user, &project, &version, &name, fields)
+        .update_instance("collection", &namespace_key, &template_vars, fields)
     {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -535,9 +567,13 @@ async fn handle_schema_delete_collection(
         .registry
         .delete_instances_by_prefix("field", &prefix, &version);
 
+    let namespace_key = format!("{user}/{project}.{name}");
+    let mut template_vars = schema_template_vars(&user, &project, &version);
+    template_vars.insert("name".to_string(), name);
+
     match state
         .registry
-        .delete_instance("collection", &user, &project, &version, &name)
+        .delete_instance("collection", &namespace_key, &template_vars)
     {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
@@ -564,13 +600,15 @@ async fn handle_schema_create_field(
     fields.insert("collection".to_string(), collection.clone());
     fields.insert("type".to_string(), body.r#type);
 
-    match state.registry.create_nested_instance(
+    let namespace_key = format!("{user}/{project}.{collection}/{}", body.name);
+    let mut template_vars = schema_template_vars(&user, &project, &version);
+    template_vars.insert("collection".to_string(), collection);
+    template_vars.insert("name".to_string(), body.name);
+
+    match state.registry.create_instance(
         "field",
-        &user,
-        &project,
-        &version,
-        &collection,
-        &body.name,
+        &namespace_key,
+        &template_vars,
         fields,
     ) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
@@ -588,7 +626,7 @@ async fn handle_schema_list_fields(
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
-    let all_fields = state.registry.list_instances("field", &user, &project);
+    let all_fields = state.registry.list_instances("field", &format!("{user}/{project}."));
     let prefix = format!("{user}/{project}.{collection}/");
     let filtered: Vec<_> = all_fields
         .into_iter()
@@ -617,13 +655,15 @@ async fn handle_schema_update_field(
         fields.insert("type".to_string(), r#type);
     }
 
-    match state.registry.update_nested_instance(
+    let namespace_key = format!("{user}/{project}.{collection}/{name}");
+    let mut template_vars = schema_template_vars(&user, &project, &version);
+    template_vars.insert("collection".to_string(), collection);
+    template_vars.insert("name".to_string(), name);
+
+    match state.registry.update_instance(
         "field",
-        &user,
-        &project,
-        &version,
-        &collection,
-        &name,
+        &namespace_key,
+        &template_vars,
         fields,
     ) {
         Ok(result) => ApiResponse::success(result).into_response(),
@@ -645,22 +685,24 @@ async fn handle_schema_delete_field(
         return resp;
     }
 
-    let namespace = format!("{user}/{project}.{collection}/{name}");
+    let namespace_key = format!("{user}/{project}.{collection}/{name}");
 
-    // Delete from registry (handles both disk and memory)
-    {
-        let instances = state.registry.get_instance("field", &namespace);
-        if instances.is_none() {
-            return error_response(StatusCode::NOT_FOUND, &format!("field not found: {collection}/{name}"));
-        }
+    // Verify it exists
+    if state.registry.get_instance("field", &namespace_key).is_none() {
+        return error_response(StatusCode::NOT_FOUND, &format!("field not found: {collection}/{name}"));
     }
 
-    // Delete from disk and in-memory state via the registry
-    let _ = state
-        .registry
-        .delete_instances_by_prefix("field", &namespace, &version);
+    let mut template_vars = schema_template_vars(&user, &project, &version);
+    template_vars.insert("collection".to_string(), collection);
+    template_vars.insert("name".to_string(), name);
 
-    ApiResponse::success("deleted").into_response()
+    match state
+        .registry
+        .delete_instance("field", &namespace_key, &template_vars)
+    {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
 }
 
 // --- Schema introspection ---
@@ -712,8 +754,8 @@ async fn handle_schema_introspect(
     // For each namespace, gather collections and their fields
     let mut result: Vec<NamespaceCollections> = Vec::new();
     for (user, project) in &ns_pairs {
-        let collections = state.registry.list_instances("collection", user, project);
-        let all_fields = state.registry.list_instances("field", user, project);
+        let collections = state.registry.list_instances("collection", &format!("{user}/{project}."));
+        let all_fields = state.registry.list_instances("field", &format!("{user}/{project}."));
 
         let mut coll_with_fields: Vec<CollectionWithFields> = Vec::new();
         for (col_ns, col_fields) in &collections {
@@ -755,15 +797,15 @@ async fn handle_config_list(
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     let username = &auth_user.0.user.username;
-    let entries = state.registry.list_config(&type_name);
+    let entries = state.registry.list_all_instances(&type_name);
     let filtered: Vec<_> = entries
         .into_iter()
-        .filter(|(id, _)| id.starts_with(&format!("projects/{username}/")))
+        .filter(|(id, _)| id.starts_with(&format!("{username}/")))
         .collect();
     ApiResponse::success(filtered).into_response()
 }
 
-/// Extract the config type and ID from a wildcard path like "project/projects/ben/crm/project".
+/// Extract the config type and ID from a wildcard path like "project/ben/crm/project".
 /// Returns (type_name, id) where type_name is the first segment and id is the rest.
 fn split_config_path(path: &str) -> Option<(String, String)> {
     let (type_name, id) = path.split_once('/')?;
@@ -785,7 +827,7 @@ async fn handle_config_get(
     if let Some(path_user) = user_from_config_id(&id) {
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
-    match state.registry.get_config(&type_name, &id) {
+    match state.registry.get_instance(&type_name, &id) {
         Some(fields) => ApiResponse::success(fields).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("{type_name} not found: {id}")),
     }
@@ -804,7 +846,8 @@ async fn handle_config_create(
     if let Some(path_user) = user_from_config_id(&id) {
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
-    let result = match state.registry.create_config(&type_name, &id, body.fields) {
+    let template_vars = template_vars_from_config_id(&id);
+    let result = match state.registry.create_instance(&type_name, &id, &template_vars, body.fields) {
         Ok(r) => r,
         Err(e) => return schema_error_to_response(e),
     };
@@ -819,8 +862,9 @@ async fn handle_config_create(
             dataset_fields.insert("project".to_string(), project_slug.to_string());
             dataset_fields.insert("name".to_string(), format!("{name} Dev"));
             dataset_fields.insert("description".to_string(), "Default development dataset".to_string());
-            let dataset_config_id = format!("projects/{namespace}/datasets/dev");
-            let _ = state.registry.create_config("dataset", &dataset_config_id, dataset_fields);
+            let dataset_config_id = format!("{namespace}/datasets/dev");
+            let dataset_vars = template_vars_from_config_id(&dataset_config_id);
+            let _ = state.registry.create_instance("dataset", &dataset_config_id, &dataset_vars, dataset_fields);
 
             let mut site_fields = HashMap::new();
             site_fields.insert("site_id".to_string(), "dev".to_string());
@@ -829,8 +873,9 @@ async fn handle_config_create(
             site_fields.insert("namespace".to_string(), namespace.clone());
             site_fields.insert("version".to_string(), "0.0.1-dev".to_string());
             site_fields.insert("dataset".to_string(), "dev".to_string());
-            let site_config_id = format!("projects/{namespace}/sites/dev");
-            let _ = state.registry.create_config("site", &site_config_id, site_fields);
+            let site_config_id = format!("{namespace}/sites/dev");
+            let site_vars = template_vars_from_config_id(&site_config_id);
+            let _ = state.registry.create_instance("site", &site_config_id, &site_vars, site_fields);
         }
     }
 
@@ -850,7 +895,8 @@ async fn handle_config_update(
     if let Some(path_user) = user_from_config_id(&id) {
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
-    match state.registry.update_config(&type_name, &id, body.fields) {
+    let template_vars = template_vars_from_config_id(&id);
+    match state.registry.update_instance(&type_name, &id, &template_vars, body.fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -871,34 +917,36 @@ async fn handle_config_delete(
 
     // Cascade: when deleting a project, delete all its child sites and datasets
     if type_name == "project" {
-        // Project ID is like "projects/ben/crm/project" → prefix is "projects/ben/crm/"
+        // Project ID is like "ben/crm/project" -> prefix is "ben/crm/"
         let prefix = id.trim_end_matches("project");
-        let namespace = prefix.strip_prefix("projects/").unwrap_or("").trim_end_matches('/');
+        let namespace = prefix.trim_end_matches('/');
 
         // Delete child datasets (which cascades to lake data)
-        let datasets = state.registry.list_config("dataset");
+        let datasets = state.registry.list_all_instances("dataset");
         for (ds_id, ds_fields) in &datasets {
             if ds_id.starts_with(prefix) {
                 if let Some(dataset_name) = ds_fields.get("dataset_id") {
                     let qualified = format!("{namespace}/{dataset_name}");
                     let _ = state.adapter.delete_dataset(&qualified);
                 }
-                let _ = state.registry.delete_config("dataset", ds_id);
+                let ds_vars = template_vars_from_config_id(ds_id);
+                let _ = state.registry.delete_instance("dataset", ds_id, &ds_vars);
             }
         }
 
         // Delete child sites
-        let sites = state.registry.list_config("site");
+        let sites = state.registry.list_all_instances("site");
         for (site_id, _) in &sites {
             if site_id.starts_with(prefix) {
-                let _ = state.registry.delete_config("site", site_id);
+                let site_vars = template_vars_from_config_id(site_id);
+                let _ = state.registry.delete_instance("site", site_id, &site_vars);
             }
         }
     }
 
     // Cascade: when deleting a dataset, purge all its records from the lake
     if type_name == "dataset" {
-        if let Some(fields) = state.registry.get_config(&type_name, &id) {
+        if let Some(fields) = state.registry.get_instance(&type_name, &id) {
             if let Some(dataset_name) = fields.get("dataset_id") {
                 let namespace = namespace_from_config_id(&id).unwrap_or("");
                 let qualified = format!("{namespace}/{dataset_name}");
@@ -912,7 +960,8 @@ async fn handle_config_delete(
         }
     }
 
-    match state.registry.delete_config(&type_name, &id) {
+    let template_vars = template_vars_from_config_id(&id);
+    match state.registry.delete_instance(&type_name, &id, &template_vars) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -1123,22 +1172,22 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
 
     // Load schema registry from disk
     let instances_dir = crate_dir.join("schemas/instances");
-    let config_dir = crate_dir.join("schemas/config");
-    let registry = SchemaRegistry::load(&instances_dir, &config_dir, &type_defs)
+    let registry = SchemaRegistry::load(&instances_dir, &type_defs)
         .expect("failed to load schema registry");
 
-    let all_collections = registry.list_instances("collection", "", "");
+    let all_collections = registry.list_all_instances("collection");
+    println!("Loaded {} collection(s):", all_collections.len());
     for (ns, _) in &all_collections {
         println!("  - {ns}");
     }
 
-    let all_fields = registry.list_instances("field", "", "");
+    let all_fields = registry.list_all_instances("field");
     println!("Loaded {} field(s):", all_fields.len());
     for (ns, _) in &all_fields {
         println!("  - {ns}");
     }
 
-    let all_sites = registry.list_config("site");
+    let all_sites = registry.list_all_instances("site");
     println!("Loaded {} site(s):", all_sites.len());
     for (id, _) in &all_sites {
         println!("  - {id}");
@@ -1151,7 +1200,7 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
     let auth_adapter: Box<dyn AuthAdapter> =
         Box::new(LocalAuthAdapter::new(&crate_dir.join("auth")));
     println!("Using local filesystem auth adapter (auth/)");
-    println!("Sites are managed in schemas/config/site/");
+    println!("Sites are managed in schemas/instances/");
 
     let state = Arc::new(AppState {
         adapter,

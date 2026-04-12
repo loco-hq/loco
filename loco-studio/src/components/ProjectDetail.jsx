@@ -15,7 +15,7 @@ export default function ProjectDetail() {
   const [error, setError] = useState(null);
 
   // Derive the namespace prefix from the project config ID
-  // e.g. "projects/ben/crm/project" → "projects/ben/crm/"
+  // e.g. "ben/crm/project" → "ben/crm/"
   const nsPrefix = projectId.replace(/\/project$/, '/');
 
   const load = useCallback(async () => {

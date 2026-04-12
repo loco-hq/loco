@@ -4,7 +4,6 @@ members = [
     "loco-gen/crates/loco-gen-schema",
     "loco-gen/crates/loco-gen-runtime",
     "loco-gen/crates/loco-gen-codegen-build",
-    "loco-gen/examples/basic",
     "loco-lake/crates/loco-lake",
     "loco-apps",
 ]

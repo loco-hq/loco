@@ -1,21 +1,18 @@
 use std::path::Path;
 
-/// Scan `types_dir` for `.yaml` type definitions, `instances_dir` for namespaced instance files,
-/// and `config_dir` for global config instances, then generate Rust code and write the output
-/// to `$OUT_DIR/loco_generated.rs`.
+/// Scan `types_dir` for `.yaml` type definitions and `instances_dir` for all instance files,
+/// then generate Rust code and write the output to `$OUT_DIR/loco_generated.rs`.
 ///
 /// Call this from your crate's `build.rs`.
-pub fn generate(types_dir: &str, instances_dir: &str, config_dir: &str) {
+pub fn generate(types_dir: &str, instances_dir: &str) {
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
     let out_path = Path::new(&out_dir).join("loco_generated.rs");
     let types_path = Path::new(types_dir);
     let instances_path = Path::new(instances_dir);
-    let config_path = Path::new(config_dir);
 
     // Emit rerun-if-changed for all directories
     println!("cargo:rerun-if-changed={types_dir}");
     println!("cargo:rerun-if-changed={instances_dir}");
-    println!("cargo:rerun-if-changed={config_dir}");
 
     let mut type_defs = Vec::new();
 
@@ -39,14 +36,9 @@ pub fn generate(types_dir: &str, instances_dir: &str, config_dir: &str) {
     // Sort for deterministic output
     type_defs.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Scan namespaced instances (non-global types only)
-    let namespaced_defs: Vec<_> = type_defs.iter().filter(|td| !td.scope.is_global()).cloned().collect();
-    let scan_result = loco_gen_schema::instance::scan_instances(instances_path, &namespaced_defs)
+    // Scan all instances (unified — no separate config scan)
+    let scan_result = loco_gen_schema::instance::scan_all(instances_path, &type_defs)
         .unwrap_or_else(|e| panic!("failed to scan instances in '{}': {}", instances_dir, e));
-
-    // Scan global config instances
-    let config_instances = loco_gen_schema::instance::scan_config(config_path, &type_defs)
-        .unwrap_or_else(|e| panic!("failed to scan config in '{}': {}", config_dir, e));
 
     for ns in &scan_result.namespaces {
         let deps = if ns.config.dependencies.is_empty() {
@@ -60,10 +52,7 @@ pub fn generate(types_dir: &str, instances_dir: &str, config_dir: &str) {
         );
     }
 
-    let mut all_instances = scan_result.instances;
-    all_instances.extend(config_instances);
-
-    let code = loco_gen_schema::codegen::generate_all(&type_defs, &all_instances);
+    let code = loco_gen_schema::codegen::generate_all(&type_defs, &scan_result.instances);
     std::fs::write(&out_path, code)
         .unwrap_or_else(|e| panic!("failed to write {}: {}", out_path.display(), e));
 }

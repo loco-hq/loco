@@ -1,6 +1,6 @@
 version: 1
 description: "A field belonging to a collection"
-filePathTemplate: "${collection}/${name}"
+filePathTemplate: "${namespace}/versions/${version}/field/${collection}/${name}.yaml"
 properties:
   name:
     type: string

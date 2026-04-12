@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::error::Error;
-use crate::instance::{self, ScannedNamespace};
+use crate::instance::{self, fill_template, ScannedNamespace};
 use crate::namespace;
 use crate::types::TypeDef;
 
@@ -13,14 +13,13 @@ use crate::types::TypeDef;
 type InstanceMap = HashMap<String, HashMap<String, HashMap<String, String>>>;
 
 pub struct SchemaRegistry {
-    /// Namespaced instances: type_name → { namespace → field_values }
+    /// All instances: type_name → { namespace → field_values }
     instances: RwLock<InstanceMap>,
-    /// Global config instances: type_name → { id → field_values }
-    config: RwLock<InstanceMap>,
     /// Namespace configs from loco.yaml files, keyed by (user, project, version)
     namespaces: RwLock<Vec<ScannedNamespace>>,
+    /// Type definitions, for template-based path resolution
+    type_defs: Vec<TypeDef>,
     instances_dir: PathBuf,
-    config_dir: PathBuf,
 }
 
 fn instance_values_to_strings(inst: &crate::types::Instance) -> HashMap<String, String> {
@@ -41,12 +40,9 @@ impl SchemaRegistry {
     /// Load all instances from disk into the registry.
     pub fn load(
         instances_dir: &Path,
-        config_dir: &Path,
         type_defs: &[TypeDef],
     ) -> Result<Self, Error> {
-        // Scan namespaced instances (only non-global types)
-        let namespaced_defs: Vec<_> = type_defs.iter().filter(|td| !td.scope.is_global()).cloned().collect();
-        let scan = instance::scan_instances(instances_dir, &namespaced_defs)?;
+        let scan = instance::scan_all(instances_dir, type_defs)?;
 
         let mut instances: InstanceMap = HashMap::new();
         for inst in &scan.instances {
@@ -54,38 +50,44 @@ impl SchemaRegistry {
             type_map.insert(inst.namespace.clone(), instance_values_to_strings(inst));
         }
 
-        // Scan global config instances
-        let config_instances = instance::scan_config(config_dir, type_defs)?;
-        let mut config: InstanceMap = HashMap::new();
-        for inst in &config_instances {
-            let type_map = config.entry(inst.type_name.to_lowercase()).or_default();
-            type_map.insert(inst.namespace.clone(), instance_values_to_strings(inst));
-        }
-
         Ok(SchemaRegistry {
             instances: RwLock::new(instances),
-            config: RwLock::new(config),
             namespaces: RwLock::new(scan.namespaces),
+            type_defs: type_defs.to_vec(),
             instances_dir: instances_dir.to_path_buf(),
-            config_dir: config_dir.to_path_buf(),
         })
     }
 
-    /// List all instances of a type, filtered by user/project namespace prefix.
+    /// List all instances of a type, filtered by a namespace prefix.
     pub fn list_instances(
         &self,
         type_name: &str,
-        user: &str,
-        project: &str,
+        prefix: &str,
     ) -> Vec<(String, HashMap<String, String>)> {
         let instances = self.instances.read().unwrap();
-        let prefix = format!("{user}/{project}.");
         instances
             .get(type_name)
             .map(|type_map| {
                 type_map
                     .iter()
-                    .filter(|(ns, _)| ns.starts_with(&prefix))
+                    .filter(|(ns, _)| ns.starts_with(prefix))
+                    .map(|(ns, fields)| (ns.clone(), fields.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// List all instances of a type (no filtering).
+    pub fn list_all_instances(
+        &self,
+        type_name: &str,
+    ) -> Vec<(String, HashMap<String, String>)> {
+        let instances = self.instances.read().unwrap();
+        instances
+            .get(type_name)
+            .map(|type_map| {
+                type_map
+                    .iter()
                     .map(|(ns, fields)| (ns.clone(), fields.clone()))
                     .collect()
             })
@@ -113,80 +115,49 @@ impl SchemaRegistry {
             .unwrap_or(false)
     }
 
+    /// Find an instance by matching a field value.
+    /// Returns the first match (namespace, fields).
+    pub fn find_instance(
+        &self,
+        type_name: &str,
+        field_name: &str,
+        field_value: &str,
+    ) -> Option<(String, HashMap<String, String>)> {
+        let instances = self.instances.read().unwrap();
+        instances.get(type_name).and_then(|type_map| {
+            type_map.iter().find(|(_, fields)| {
+                fields.get(field_name).map(|v| v == field_value).unwrap_or(false)
+            }).map(|(ns, fields)| (ns.clone(), fields.clone()))
+        })
+    }
+
     /// Create a new instance. Writes YAML to disk and updates in-memory state.
+    /// `template_vars` are used to resolve the file path from the type's filePathTemplate.
     pub fn create_instance(
         &self,
         type_name: &str,
-        user: &str,
-        project: &str,
-        version: &str,
-        name: &str,
+        namespace: &str,
+        template_vars: &HashMap<String, String>,
         fields: HashMap<String, String>,
     ) -> Result<HashMap<String, String>, Error> {
-        let namespace = format!("{user}/{project}.{name}");
-
         // Check for duplicates
         {
             let instances = self.instances.read().unwrap();
             if let Some(type_map) = instances.get(type_name) {
-                if type_map.contains_key(&namespace) {
-                    return Err(Error::AlreadyExists(namespace));
+                if type_map.contains_key(namespace) {
+                    return Err(Error::AlreadyExists(namespace.to_string()));
                 }
             }
         }
 
         // Write to disk
-        let file_path = self.instance_path(user, project, version, type_name, name);
+        let file_path = self.resolve_file_path(type_name, template_vars);
         write_instance_yaml(&file_path, &fields)?;
 
         // Update in-memory state
         let mut instances = self.instances.write().unwrap();
         let type_map = instances.entry(type_name.to_string()).or_default();
-        type_map.insert(namespace, fields.clone());
-
-        Ok(fields)
-    }
-
-    /// Create a nested instance (e.g., fields organized under a parent).
-    /// The name is the full relative path (e.g., "account/company").
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_nested_instance(
-        &self,
-        type_name: &str,
-        user: &str,
-        project: &str,
-        version: &str,
-        parent: &str,
-        name: &str,
-        fields: HashMap<String, String>,
-    ) -> Result<HashMap<String, String>, Error> {
-        let namespace = format!("{user}/{project}.{parent}/{name}");
-
-        // Check for duplicates
-        {
-            let instances = self.instances.read().unwrap();
-            if let Some(type_map) = instances.get(type_name) {
-                if type_map.contains_key(&namespace) {
-                    return Err(Error::AlreadyExists(namespace));
-                }
-            }
-        }
-
-        // Write to disk — nested under parent directory
-        let file_path = self
-            .instances_dir
-            .join(user)
-            .join(project)
-            .join(version)
-            .join(type_name)
-            .join(parent)
-            .join(format!("{name}.yaml"));
-        write_instance_yaml(&file_path, &fields)?;
-
-        // Update in-memory state
-        let mut instances = self.instances.write().unwrap();
-        let type_map = instances.entry(type_name.to_string()).or_default();
-        type_map.insert(namespace, fields.clone());
+        type_map.insert(namespace.to_string(), fields.clone());
 
         Ok(fields)
     }
@@ -195,21 +166,17 @@ impl SchemaRegistry {
     pub fn update_instance(
         &self,
         type_name: &str,
-        user: &str,
-        project: &str,
-        version: &str,
-        name: &str,
+        namespace: &str,
+        template_vars: &HashMap<String, String>,
         fields: HashMap<String, String>,
     ) -> Result<HashMap<String, String>, Error> {
-        let namespace = format!("{user}/{project}.{name}");
-
         // Verify it exists and get current fields
         let current = {
             let instances = self.instances.read().unwrap();
             instances
                 .get(type_name)
-                .and_then(|type_map| type_map.get(&namespace).cloned())
-                .ok_or_else(|| Error::NotFound(namespace.clone()))?
+                .and_then(|type_map| type_map.get(namespace).cloned())
+                .ok_or_else(|| Error::NotFound(namespace.to_string()))?
         };
 
         // Merge: new fields override, keep existing for unset fields
@@ -219,57 +186,13 @@ impl SchemaRegistry {
         }
 
         // Write to disk
-        let file_path = self.instance_path(user, project, version, type_name, name);
+        let file_path = self.resolve_file_path(type_name, template_vars);
         write_instance_yaml(&file_path, &merged)?;
 
         // Update in-memory state
         let mut instances = self.instances.write().unwrap();
         let type_map = instances.entry(type_name.to_string()).or_default();
-        type_map.insert(namespace, merged.clone());
-
-        Ok(merged)
-    }
-
-    /// Update a nested instance.
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_nested_instance(
-        &self,
-        type_name: &str,
-        user: &str,
-        project: &str,
-        version: &str,
-        parent: &str,
-        name: &str,
-        fields: HashMap<String, String>,
-    ) -> Result<HashMap<String, String>, Error> {
-        let namespace = format!("{user}/{project}.{parent}/{name}");
-
-        let current = {
-            let instances = self.instances.read().unwrap();
-            instances
-                .get(type_name)
-                .and_then(|type_map| type_map.get(&namespace).cloned())
-                .ok_or_else(|| Error::NotFound(namespace.clone()))?
-        };
-
-        let mut merged = current;
-        for (k, v) in &fields {
-            merged.insert(k.clone(), v.clone());
-        }
-
-        let file_path = self
-            .instances_dir
-            .join(user)
-            .join(project)
-            .join(version)
-            .join(type_name)
-            .join(parent)
-            .join(format!("{name}.yaml"));
-        write_instance_yaml(&file_path, &merged)?;
-
-        let mut instances = self.instances.write().unwrap();
-        let type_map = instances.entry(type_name.to_string()).or_default();
-        type_map.insert(namespace, merged.clone());
+        type_map.insert(namespace.to_string(), merged.clone());
 
         Ok(merged)
     }
@@ -278,33 +201,29 @@ impl SchemaRegistry {
     pub fn delete_instance(
         &self,
         type_name: &str,
-        user: &str,
-        project: &str,
-        version: &str,
-        name: &str,
+        namespace: &str,
+        template_vars: &HashMap<String, String>,
     ) -> Result<(), Error> {
-        let namespace = format!("{user}/{project}.{name}");
-
         // Verify it exists
         {
             let instances = self.instances.read().unwrap();
             let exists = instances
                 .get(type_name)
-                .map(|type_map| type_map.contains_key(&namespace))
+                .map(|type_map| type_map.contains_key(namespace))
                 .unwrap_or(false);
             if !exists {
-                return Err(Error::NotFound(namespace));
+                return Err(Error::NotFound(namespace.to_string()));
             }
         }
 
         // Delete from disk
-        let file_path = self.instance_path(user, project, version, type_name, name);
+        let file_path = self.resolve_file_path(type_name, template_vars);
         delete_instance_yaml(&file_path)?;
 
         // Remove from in-memory state
         let mut instances = self.instances.write().unwrap();
         if let Some(type_map) = instances.get_mut(type_name) {
-            type_map.remove(&namespace);
+            type_map.remove(namespace);
         }
 
         Ok(())
@@ -347,6 +266,7 @@ impl SchemaRegistry {
                 .instances_dir
                 .join(user)
                 .join(project)
+                .join("versions")
                 .join(version)
                 .join(type_name)
                 .join(format!("{rel_path}.yaml"));
@@ -400,173 +320,26 @@ impl SchemaRegistry {
         Ok(result)
     }
 
-    // --- Global config methods ---
-
-    /// List all config instances of a type.
-    pub fn list_config(
-        &self,
-        type_name: &str,
-    ) -> Vec<(String, HashMap<String, String>)> {
-        let config = self.config.read().unwrap();
-        config
-            .get(type_name)
-            .map(|type_map| {
-                type_map
-                    .iter()
-                    .map(|(id, fields)| (id.clone(), fields.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Get a single config instance by type name and id.
-    pub fn get_config(
-        &self,
-        type_name: &str,
-        id: &str,
-    ) -> Option<HashMap<String, String>> {
-        let config = self.config.read().unwrap();
-        config
-            .get(type_name)
-            .and_then(|type_map| type_map.get(id).cloned())
-    }
-
-    /// Find a config instance by matching a field value.
-    /// Returns the first match (id, fields).
-    pub fn find_config(
-        &self,
-        type_name: &str,
-        field_name: &str,
-        field_value: &str,
-    ) -> Option<(String, HashMap<String, String>)> {
-        let config = self.config.read().unwrap();
-        config.get(type_name).and_then(|type_map| {
-            type_map.iter().find(|(_, fields)| {
-                fields.get(field_name).map(|v| v == field_value).unwrap_or(false)
-            }).map(|(id, fields)| (id.clone(), fields.clone()))
-        })
-    }
-
-    /// Check if a config instance exists.
-    pub fn has_config(&self, type_name: &str, id: &str) -> bool {
-        let config = self.config.read().unwrap();
-        config
-            .get(type_name)
-            .map(|type_map| type_map.contains_key(id))
-            .unwrap_or(false)
-    }
-
-    /// Create a new config instance. Writes YAML to disk and updates in-memory state.
-    pub fn create_config(
-        &self,
-        type_name: &str,
-        id: &str,
-        fields: HashMap<String, String>,
-    ) -> Result<HashMap<String, String>, Error> {
-        // Check for duplicates
-        {
-            let config = self.config.read().unwrap();
-            if let Some(type_map) = config.get(type_name) {
-                if type_map.contains_key(id) {
-                    return Err(Error::AlreadyExists(format!("config:{type_name}/{id}")));
-                }
-            }
-        }
-
-        // Write to disk
-        let file_path = self.config_path(type_name, id);
-        write_instance_yaml(&file_path, &fields)?;
-
-        // Update in-memory state
-        let mut config = self.config.write().unwrap();
-        let type_map = config.entry(type_name.to_string()).or_default();
-        type_map.insert(id.to_string(), fields.clone());
-
-        Ok(fields)
-    }
-
-    /// Update an existing config instance.
-    pub fn update_config(
-        &self,
-        type_name: &str,
-        id: &str,
-        fields: HashMap<String, String>,
-    ) -> Result<HashMap<String, String>, Error> {
-        let current = {
-            let config = self.config.read().unwrap();
-            config
-                .get(type_name)
-                .and_then(|type_map| type_map.get(id).cloned())
-                .ok_or_else(|| Error::NotFound(format!("config:{type_name}/{id}")))?
-        };
-
-        let mut merged = current;
-        for (k, v) in &fields {
-            merged.insert(k.clone(), v.clone());
-        }
-
-        let file_path = self.config_path(type_name, id);
-        write_instance_yaml(&file_path, &merged)?;
-
-        let mut config = self.config.write().unwrap();
-        let type_map = config.entry(type_name.to_string()).or_default();
-        type_map.insert(id.to_string(), merged.clone());
-
-        Ok(merged)
-    }
-
-    /// Delete a config instance.
-    pub fn delete_config(
-        &self,
-        type_name: &str,
-        id: &str,
-    ) -> Result<(), Error> {
-        {
-            let config = self.config.read().unwrap();
-            let exists = config
-                .get(type_name)
-                .map(|type_map| type_map.contains_key(id))
-                .unwrap_or(false);
-            if !exists {
-                return Err(Error::NotFound(format!("config:{type_name}/{id}")));
-            }
-        }
-
-        let file_path = self.config_path(type_name, id);
-        delete_instance_yaml(&file_path)?;
-
-        let mut config = self.config.write().unwrap();
-        if let Some(type_map) = config.get_mut(type_name) {
-            type_map.remove(id);
-        }
-
-        Ok(())
-    }
-
-    /// Resolve config file path. For flat types: `config/{type_name}/{id}.yaml`.
-    /// For templated types (id contains '/'): `config/{id}.yaml` (id is the full relative path).
-    fn config_path(&self, type_name: &str, id: &str) -> PathBuf {
-        if id.contains('/') {
-            self.config_dir.join(format!("{id}.yaml"))
+    /// Resolve file path for a type instance using its filePathTemplate and template variables.
+    fn resolve_file_path(&self, type_name: &str, template_vars: &HashMap<String, String>) -> PathBuf {
+        let type_def = self.type_defs.iter().find(|td| td.name.to_lowercase() == type_name);
+        if let Some(td) = type_def {
+            let rel = fill_template(&td.file_path_template, template_vars);
+            self.instances_dir.join(rel)
         } else {
-            self.config_dir.join(type_name).join(format!("{id}.yaml"))
+            // Fallback for unknown types — shouldn't happen in practice
+            self.instances_dir.join(format!("{type_name}.yaml"))
         }
     }
 
-    fn instance_path(
-        &self,
-        user: &str,
-        project: &str,
-        version: &str,
-        type_name: &str,
-        name: &str,
-    ) -> PathBuf {
-        self.instances_dir
-            .join(user)
-            .join(project)
-            .join(version)
-            .join(type_name)
-            .join(format!("{name}.yaml"))
+    /// Access to namespace data
+    pub fn namespaces(&self) -> Vec<ScannedNamespace> {
+        self.namespaces.read().unwrap().clone()
+    }
+
+    /// Add a namespace config entry
+    pub fn add_namespace(&self, ns: ScannedNamespace) {
+        self.namespaces.write().unwrap().push(ns);
     }
 }
 
@@ -583,11 +356,10 @@ fn delete_instance_yaml(path: &Path) -> Result<(), Error> {
     if path.exists() {
         std::fs::remove_file(path)?;
     }
-    // Clean up empty parent directories up to (but not including) the config/instances root
+    // Clean up empty parent directories up to (but not including) the instances root
     let mut dir = path.parent();
     while let Some(d) = dir {
-        // Stop at well-known root dirs to avoid deleting too far up
-        if d.ends_with("config") || d.ends_with("instances") {
+        if d.ends_with("instances") {
             break;
         }
         match std::fs::remove_dir(d) {
@@ -605,11 +377,58 @@ mod tests {
     fn test_registry(base: &Path) -> SchemaRegistry {
         SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
-            config: RwLock::new(HashMap::new()),
             namespaces: RwLock::new(Vec::new()),
+            type_defs: vec![
+                TypeDef {
+                    name: "collection".to_string(),
+                    description: "".to_string(),
+                    file_path_template: "${namespace}/versions/${version}/collection/${name}.yaml".to_string(),
+                    properties: vec![],
+                },
+                TypeDef {
+                    name: "field".to_string(),
+                    description: "".to_string(),
+                    file_path_template: "${namespace}/versions/${version}/field/${collection}/${name}.yaml".to_string(),
+                    properties: vec![],
+                },
+                TypeDef {
+                    name: "project".to_string(),
+                    description: "".to_string(),
+                    file_path_template: "${namespace}/project.yaml".to_string(),
+                    properties: vec![],
+                },
+                TypeDef {
+                    name: "site".to_string(),
+                    description: "".to_string(),
+                    file_path_template: "${namespace}/sites/${site_id}.yaml".to_string(),
+                    properties: vec![],
+                },
+            ],
             instances_dir: base.to_path_buf(),
-            config_dir: base.join("_config"),
         }
+    }
+
+    fn collection_vars(user: &str, project: &str, version: &str, name: &str) -> HashMap<String, String> {
+        let mut vars = HashMap::new();
+        vars.insert("namespace".to_string(), format!("{user}/{project}"));
+        vars.insert("version".to_string(), version.to_string());
+        vars.insert("name".to_string(), name.to_string());
+        vars
+    }
+
+    fn field_vars(user: &str, project: &str, version: &str, collection: &str, name: &str) -> HashMap<String, String> {
+        let mut vars = HashMap::new();
+        vars.insert("namespace".to_string(), format!("{user}/{project}"));
+        vars.insert("version".to_string(), version.to_string());
+        vars.insert("collection".to_string(), collection.to_string());
+        vars.insert("name".to_string(), name.to_string());
+        vars
+    }
+
+    fn config_vars(user: &str, project: &str) -> HashMap<String, String> {
+        let mut vars = HashMap::new();
+        vars.insert("namespace".to_string(), format!("{user}/{project}"));
+        vars
     }
 
     #[test]
@@ -621,8 +440,9 @@ mod tests {
         fields.insert("name".to_string(), "account".to_string());
         fields.insert("label".to_string(), "Account".to_string());
 
+        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
         registry
-            .create_instance("collection", "ben", "crm", "0.0.1-dev", "account", fields)
+            .create_instance("collection", "ben/crm.account", &vars, fields)
             .unwrap();
 
         // Verify in-memory
@@ -633,7 +453,7 @@ mod tests {
         // Verify on disk
         let file_path = dir
             .path()
-            .join("ben/crm/0.0.1-dev/collection/account.yaml");
+            .join("ben/crm/versions/0.0.1-dev/collection/account.yaml");
         assert!(file_path.exists());
     }
 
@@ -645,11 +465,12 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
 
+        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
         registry
-            .create_instance("collection", "ben", "crm", "0.0.1-dev", "account", fields.clone())
+            .create_instance("collection", "ben/crm.account", &vars, fields.clone())
             .unwrap();
         let result =
-            registry.create_instance("collection", "ben", "crm", "0.0.1-dev", "account", fields);
+            registry.create_instance("collection", "ben/crm.account", &vars, fields);
         assert!(result.is_err());
     }
 
@@ -661,8 +482,9 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
 
+        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
         registry
-            .create_instance("collection", "ben", "crm", "0.0.1-dev", "account", fields)
+            .create_instance("collection", "ben/crm.account", &vars, fields)
             .unwrap();
 
         assert!(registry.has_instance("collection", "ben/crm.account"));
@@ -679,20 +501,18 @@ mod tests {
         let mut f2 = HashMap::new();
         f2.insert("name".to_string(), "contact".to_string());
 
-        registry
-            .create_instance("collection", "ben", "crm", "0.0.1-dev", "account", f1)
-            .unwrap();
-        registry
-            .create_instance("collection", "ben", "crm", "0.0.1-dev", "contact", f2)
-            .unwrap();
-        registry
-            .create_instance("collection", "ben", "cars", "0.0.1-dev", "vehicle", HashMap::new())
-            .unwrap();
+        let v1 = collection_vars("ben", "crm", "0.0.1-dev", "account");
+        let v2 = collection_vars("ben", "crm", "0.0.1-dev", "contact");
+        let v3 = collection_vars("ben", "cars", "0.0.1-dev", "vehicle");
 
-        let crm_list = registry.list_instances("collection", "ben", "crm");
+        registry.create_instance("collection", "ben/crm.account", &v1, f1).unwrap();
+        registry.create_instance("collection", "ben/crm.contact", &v2, f2).unwrap();
+        registry.create_instance("collection", "ben/cars.vehicle", &v3, HashMap::new()).unwrap();
+
+        let crm_list = registry.list_instances("collection", "ben/crm.");
         assert_eq!(crm_list.len(), 2);
 
-        let cars_list = registry.list_instances("collection", "ben", "cars");
+        let cars_list = registry.list_instances("collection", "ben/cars.");
         assert_eq!(cars_list.len(), 1);
     }
 
@@ -705,15 +525,16 @@ mod tests {
         fields.insert("name".to_string(), "account".to_string());
         fields.insert("label".to_string(), "Account".to_string());
 
+        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
         registry
-            .create_instance("collection", "ben", "crm", "0.0.1-dev", "account", fields)
+            .create_instance("collection", "ben/crm.account", &vars, fields)
             .unwrap();
 
         let mut updates = HashMap::new();
         updates.insert("label".to_string(), "Customer Account".to_string());
 
         let result = registry
-            .update_instance("collection", "ben", "crm", "0.0.1-dev", "account", updates)
+            .update_instance("collection", "ben/crm.account", &vars, updates)
             .unwrap();
 
         assert_eq!(result.get("label").unwrap(), "Customer Account");
@@ -725,12 +546,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = test_registry(dir.path());
 
+        let vars = collection_vars("ben", "crm", "0.0.1-dev", "missing");
         let result = registry.update_instance(
             "collection",
-            "ben",
-            "crm",
-            "0.0.1-dev",
-            "missing",
+            "ben/crm.missing",
+            &vars,
             HashMap::new(),
         );
         assert!(result.is_err());
@@ -744,19 +564,20 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
 
+        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
         registry
-            .create_instance("collection", "ben", "crm", "0.0.1-dev", "account", fields)
+            .create_instance("collection", "ben/crm.account", &vars, fields)
             .unwrap();
 
         registry
-            .delete_instance("collection", "ben", "crm", "0.0.1-dev", "account")
+            .delete_instance("collection", "ben/crm.account", &vars)
             .unwrap();
 
         assert!(!registry.has_instance("collection", "ben/crm.account"));
 
         let file_path = dir
             .path()
-            .join("ben/crm/0.0.1-dev/collection/account.yaml");
+            .join("ben/crm/versions/0.0.1-dev/collection/account.yaml");
         assert!(!file_path.exists());
     }
 
@@ -765,8 +586,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = test_registry(dir.path());
 
-        let result =
-            registry.delete_instance("collection", "ben", "crm", "0.0.1-dev", "missing");
+        let vars = collection_vars("ben", "crm", "0.0.1-dev", "missing");
+        let result = registry.delete_instance("collection", "ben/crm.missing", &vars);
         assert!(result.is_err());
     }
 
@@ -780,8 +601,9 @@ mod tests {
         fields.insert("collection".to_string(), "account".to_string());
         fields.insert("type".to_string(), "string".to_string());
 
+        let vars = field_vars("ben", "crm", "0.0.1-dev", "account", "company");
         registry
-            .create_nested_instance("field", "ben", "crm", "0.0.1-dev", "account", "company", fields)
+            .create_instance("field", "ben/crm.account/company", &vars, fields)
             .unwrap();
 
         let result = registry.get_instance("field", "ben/crm.account/company");
@@ -789,7 +611,7 @@ mod tests {
 
         let file_path = dir
             .path()
-            .join("ben/crm/0.0.1-dev/field/account/company.yaml");
+            .join("ben/crm/versions/0.0.1-dev/field/account/company.yaml");
         assert!(file_path.exists());
     }
 
@@ -801,21 +623,24 @@ mod tests {
         // Create fields for account
         let mut f1 = HashMap::new();
         f1.insert("name".to_string(), "company".to_string());
+        let v1 = field_vars("ben", "crm", "0.0.1-dev", "account", "company");
         registry
-            .create_nested_instance("field", "ben", "crm", "0.0.1-dev", "account", "company", f1)
+            .create_instance("field", "ben/crm.account/company", &v1, f1)
             .unwrap();
 
         let mut f2 = HashMap::new();
         f2.insert("name".to_string(), "active".to_string());
+        let v2 = field_vars("ben", "crm", "0.0.1-dev", "account", "active");
         registry
-            .create_nested_instance("field", "ben", "crm", "0.0.1-dev", "account", "active", f2)
+            .create_instance("field", "ben/crm.account/active", &v2, f2)
             .unwrap();
 
         // Create a field for a different collection
         let mut f3 = HashMap::new();
         f3.insert("name".to_string(), "first_name".to_string());
+        let v3 = field_vars("ben", "crm", "0.0.1-dev", "contact", "first_name");
         registry
-            .create_nested_instance("field", "ben", "crm", "0.0.1-dev", "contact", "first_name", f3)
+            .create_instance("field", "ben/crm.contact/first_name", &v3, f3)
             .unwrap();
 
         // Delete all account fields
@@ -838,33 +663,45 @@ mod tests {
         fields.insert("site_id".to_string(), "studio".to_string());
         fields.insert("name".to_string(), "Loco Studio".to_string());
 
+        let vars = config_vars("loco", "studio");
+        let ns = "loco/studio/sites/studio";
+
         // Create
-        registry.create_config("site", "studio", fields).unwrap();
-        assert!(registry.has_config("site", "studio"));
-        assert!(!registry.has_config("site", "other"));
+        registry.create_instance("site", ns, &vars.iter().chain(std::iter::once((&"site_id".to_string(), &"studio".to_string()))).map(|(k,v)| (k.clone(), v.clone())).collect(), fields).unwrap();
+        assert!(registry.has_instance("site", ns));
+        assert!(!registry.has_instance("site", "loco/studio/sites/other"));
 
         // Get
-        let result = registry.get_config("site", "studio").unwrap();
+        let result = registry.get_instance("site", ns).unwrap();
         assert_eq!(result.get("name").unwrap(), "Loco Studio");
 
         // List
-        let list = registry.list_config("site");
+        let list = registry.list_all_instances("site");
         assert_eq!(list.len(), 1);
+
+        // Find
+        let found = registry.find_instance("site", "site_id", "studio");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().0, ns);
 
         // Update
         let mut updates = HashMap::new();
         updates.insert("name".to_string(), "Studio Updated".to_string());
-        let updated = registry.update_config("site", "studio", updates).unwrap();
+        let site_vars: HashMap<String, String> = [
+            ("namespace".to_string(), "loco/studio".to_string()),
+            ("site_id".to_string(), "studio".to_string()),
+        ].into();
+        let updated = registry.update_instance("site", ns, &site_vars, updates).unwrap();
         assert_eq!(updated.get("name").unwrap(), "Studio Updated");
         assert_eq!(updated.get("site_id").unwrap(), "studio"); // preserved
 
         // Verify on disk
-        let file_path = dir.path().join("_config/site/studio.yaml");
+        let file_path = dir.path().join("loco/studio/sites/studio.yaml");
         assert!(file_path.exists());
 
         // Delete
-        registry.delete_config("site", "studio").unwrap();
-        assert!(!registry.has_config("site", "studio"));
+        registry.delete_instance("site", ns, &site_vars).unwrap();
+        assert!(!registry.has_instance("site", ns));
         assert!(!file_path.exists());
     }
 
@@ -876,7 +713,12 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "test".to_string());
 
-        registry.create_config("site", "test", fields.clone()).unwrap();
-        assert!(registry.create_config("site", "test", fields).is_err());
+        let vars: HashMap<String, String> = [
+            ("namespace".to_string(), "loco/studio".to_string()),
+            ("site_id".to_string(), "test".to_string()),
+        ].into();
+
+        registry.create_instance("site", "loco/studio/sites/test", &vars, fields.clone()).unwrap();
+        assert!(registry.create_instance("site", "loco/studio/sites/test", &vars, fields).is_err());
     }
 }

@@ -11,7 +11,7 @@ export default function DatasetDetail() {
   const [error, setError] = useState(null);
 
   // Derive project config ID from dataset config ID
-  // e.g. "projects/ben/crm/datasets/acme" → "projects/ben/crm/project"
+  // e.g. "ben/crm/datasets/acme" → "ben/crm/project"
   const projectConfigId = datasetId.replace(/\/datasets\/.*$/, '/project');
   const nsPrefix = datasetId.replace(/\/datasets\/.*$/, '/');
 

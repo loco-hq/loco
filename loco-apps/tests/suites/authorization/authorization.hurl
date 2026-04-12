@@ -97,7 +97,7 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 1
 
 # 8. Bob CANNOT get Alice's config (403)
-GET http://127.0.0.1:{{port}}/config/get/project/projects/alice/testapp/project
+GET http://127.0.0.1:{{port}}/config/get/project/alice/testapp/project
 Authorization: Bearer {{bob_token}}
 HTTP 403
 [Asserts]

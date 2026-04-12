@@ -1,7 +1,6 @@
 version: 1
-scope: global
 description: "A site configuration that maps to a namespace and dataset"
-filePathTemplate: "projects/${namespace}/sites/${site_id}"
+filePathTemplate: "${namespace}/sites/${site_id}.yaml"
 properties:
   site_id:
     type: string

@@ -1,9 +1,0 @@
-version: 1
-description: "A named collection of items"
-properties:
-  name:
-    type: string
-  label:
-    type: string
-  label_plural:
-    type: string

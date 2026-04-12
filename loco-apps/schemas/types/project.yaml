@@ -1,7 +1,6 @@
 version: 1
-scope: global
 description: "A project defining a schema namespace"
-filePathTemplate: "projects/${namespace}/project"
+filePathTemplate: "${namespace}/project.yaml"
 properties:
   name:
     type: string

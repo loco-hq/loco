@@ -1,5 +1,6 @@
 version: 1
 description: "A named collection of items"
+filePathTemplate: "${namespace}/versions/${version}/collection/${name}.yaml"
 properties:
   name:
     type: string

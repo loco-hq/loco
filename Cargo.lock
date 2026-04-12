@@ -88,14 +88,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "basic-example"
-version = "0.1.0"
-dependencies = [
- "loco-gen-codegen-build",
- "loco-gen-runtime",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
