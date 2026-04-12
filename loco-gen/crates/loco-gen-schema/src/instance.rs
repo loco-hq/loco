@@ -2,24 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::error::Error;
-use crate::namespace::{self, NamespaceConfig};
 use crate::types::{FieldType, FieldValue, Instance, TypeDef};
-
-/// Result of scanning instances, including namespace configs.
-#[derive(Debug)]
-pub struct ScanResult {
-    pub instances: Vec<Instance>,
-    pub namespaces: Vec<ScannedNamespace>,
-}
-
-/// A namespace found during scanning.
-#[derive(Debug, Clone)]
-pub struct ScannedNamespace {
-    pub user: String,
-    pub project: String,
-    pub version: String,
-    pub config: NamespaceConfig,
-}
 
 /// Parse an instance YAML file, validating values against the type definition.
 /// `vars` supplies values for template variables extracted from the file path;
@@ -52,20 +35,8 @@ pub fn parse_instance(
         let key = serde_yaml::Value::String(prop.name.clone());
         // Loose on load: missing or mistyped fields fall back to type defaults.
         let field_value = match mapping.get(&key) {
-            Some(val) => match prop.field_type {
-                FieldType::String => FieldValue::String(
-                    val.as_str().map(|s| s.to_string()).unwrap_or_default(),
-                ),
-                FieldType::Integer => FieldValue::Integer(val.as_i64().unwrap_or(0)),
-                FieldType::Float => FieldValue::Float(val.as_f64().unwrap_or(0.0)),
-                FieldType::Boolean => FieldValue::Boolean(val.as_bool().unwrap_or(false)),
-            },
-            None => match prop.field_type {
-                FieldType::String => FieldValue::String(String::new()),
-                FieldType::Integer => FieldValue::Integer(0),
-                FieldType::Float => FieldValue::Float(0.0),
-                FieldType::Boolean => FieldValue::Boolean(false),
-            },
+            Some(val) => coerce_value(val, &prop.field_type),
+            None => default_value(&prop.field_type),
         };
         values.push((prop.name.clone(), field_value));
     }
@@ -75,6 +46,34 @@ pub fn parse_instance(
         namespace: namespace.to_string(),
         values,
     })
+}
+
+/// Loose-on-load coercion of a YAML value into a `FieldValue` of the expected type.
+fn coerce_value(val: &serde_yaml::Value, field_type: &FieldType) -> FieldValue {
+    match field_type {
+        FieldType::String => FieldValue::String(val.as_str().map(|s| s.to_string()).unwrap_or_default()),
+        FieldType::Integer => FieldValue::Integer(val.as_i64().unwrap_or(0)),
+        FieldType::Float => FieldValue::Float(val.as_f64().unwrap_or(0.0)),
+        FieldType::Boolean => FieldValue::Boolean(val.as_bool().unwrap_or(false)),
+        FieldType::List(inner) => {
+            let items = val
+                .as_sequence()
+                .map(|seq| seq.iter().map(|v| coerce_value(v, inner)).collect())
+                .unwrap_or_default();
+            FieldValue::List(items)
+        }
+    }
+}
+
+/// Default value for a `FieldType` when the field is missing from the YAML.
+fn default_value(field_type: &FieldType) -> FieldValue {
+    match field_type {
+        FieldType::String => FieldValue::String(String::new()),
+        FieldType::Integer => FieldValue::Integer(0),
+        FieldType::Float => FieldValue::Float(0.0),
+        FieldType::Boolean => FieldValue::Boolean(false),
+        FieldType::List(_) => FieldValue::List(Vec::new()),
+    }
 }
 
 /// Recursively collect all `.yaml` files under a directory.
@@ -92,114 +91,41 @@ fn collect_yaml_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, Error> {
     Ok(files)
 }
 
-/// Walk `instances_dir` recursively to find all YAML files and match them against
-/// type definitions using their `filePathTemplate`. Also discovers `loco.yaml`
-/// namespace config files.
+/// Walk `instances_dir` recursively, matching every YAML file against the
+/// provided type definitions using their `filePathTemplate`. Returns the
+/// resulting instances, sorted by namespace for deterministic output.
 ///
-/// Derives instance namespace from extracted template variables.
-/// Auto-includes `loco/core` if not explicitly listed as a dependency.
-/// Validates that all declared dependencies exist on disk.
+/// Files that don't match any type template are silently ignored.
 pub fn scan_all(
     instances_dir: &Path,
     type_defs: &[TypeDef],
-) -> Result<ScanResult, Error> {
+) -> Result<Vec<Instance>, Error> {
     let mut instances = Vec::new();
-    let mut namespaces = Vec::new();
 
     if !instances_dir.exists() {
-        return Ok(ScanResult { instances, namespaces });
+        return Ok(instances);
     }
 
-    let all_files = collect_yaml_files(instances_dir)?;
-
-    for file_path in &all_files {
+    for file_path in &collect_yaml_files(instances_dir)? {
         let rel = file_path
             .strip_prefix(instances_dir)
             .unwrap_or(file_path)
             .to_string_lossy()
             .to_string();
 
-        // Detect loco.yaml namespace configs: {project}/versions/{version}/loco.yaml
-        if rel.ends_with("/loco.yaml") || rel == "loco.yaml" {
-            if let Some(vars) = extract_template_vars(
-                &rel,
-                "${project}/versions/${version}/loco.yaml",
-            ) {
-                let project_path = vars.get("project").cloned().unwrap_or_default();
-                let version = vars.get("version").cloned().unwrap_or_default();
-                let (user, project) = project_path.split_once('/').unwrap_or(("", &project_path));
-
-                let yaml = std::fs::read_to_string(file_path)?;
-                let config = namespace::parse_namespace_config(&yaml)?;
-
-                namespaces.push(ScannedNamespace {
-                    user: user.to_string(),
-                    project: project.to_string(),
-                    version,
-                    config,
-                });
-            }
-            continue;
-        }
-
-        // Try matching against each type's filePathTemplate
         for type_def in type_defs {
             if let Some(vars) = extract_template_vars(&rel, &type_def.file_path_template) {
                 let namespace_str = derive_namespace(&type_def.file_path_template, &vars, &rel);
                 let yaml = std::fs::read_to_string(file_path)?;
                 let instance = parse_instance(&yaml, type_def, &namespace_str, &vars)?;
                 instances.push(instance);
-                break; // matched — don't try other templates
+                break;
             }
         }
     }
 
-    // Auto-include loco/core for namespaces that don't explicitly list it
-    let has_loco_core = namespaces.iter().any(|ns| ns.user == "loco" && ns.project == "core");
-    if has_loco_core {
-        let loco_core_version = namespaces
-            .iter()
-            .find(|ns| ns.user == "loco" && ns.project == "core")
-            .map(|ns| ns.version.clone())
-            .unwrap();
-
-        for ns in &mut namespaces {
-            if ns.user == "loco" && ns.project == "core" {
-                continue;
-            }
-            let has_core_dep = ns.config.dependencies.iter().any(|d| d.starts_with("loco/core@"));
-            if !has_core_dep {
-                ns.config.dependencies.push(format!("loco/core@{loco_core_version}"));
-            }
-        }
-    }
-
-    // Validate that all declared dependencies exist
-    let available: HashSet<String> = namespaces
-        .iter()
-        .map(|ns| format!("{}/{}@{}", ns.user, ns.project, ns.version))
-        .collect();
-
-    for ns in &namespaces {
-        for dep in &ns.config.dependencies {
-            if !available.contains(dep) {
-                return Err(Error::MissingDependency(format!(
-                    "{}/{}@{} requires {dep}, but it was not found",
-                    ns.user, ns.project, ns.version
-                )));
-            }
-        }
-    }
-
-    // Sort for deterministic output
     instances.sort_by(|a, b| a.namespace.cmp(&b.namespace));
-    namespaces.sort_by(|a, b| {
-        let a_key = format!("{}/{}", a.user, a.project);
-        let b_key = format!("{}/{}", b.user, b.project);
-        a_key.cmp(&b_key)
-    });
-
-    Ok(ScanResult { instances, namespaces })
+    Ok(instances)
 }
 
 /// Derive instance namespace/key from extracted template variables.
@@ -416,12 +342,65 @@ label_plural: "Opportunities"
     }
 
     #[test]
+    fn test_parse_instance_list_of_strings() {
+        let td = TypeDef {
+            name: "Manifest".to_string(),
+            description: "".to_string(),
+            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            properties: vec![Property {
+                name: "dependencies".to_string(),
+                field_type: FieldType::List(Box::new(FieldType::String)),
+            }],
+        };
+        let yaml = "dependencies:\n  - loco/core@0.0.1\n  - alice/billing@0.1.0\n";
+        let inst = parse_instance(yaml, &td, "ben/crm/versions/0.0.1-dev/manifest", &HashMap::new()).unwrap();
+        let deps = inst.values.iter().find(|(k, _)| k == "dependencies").unwrap();
+        match &deps.1 {
+            FieldValue::List(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], FieldValue::String("loco/core@0.0.1".to_string()));
+            }
+            _ => panic!("expected list"),
+        }
+    }
+
+    #[test]
+    fn test_parse_instance_missing_list_defaults_empty() {
+        let td = TypeDef {
+            name: "Manifest".to_string(),
+            description: "".to_string(),
+            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            properties: vec![Property {
+                name: "dependencies".to_string(),
+                field_type: FieldType::List(Box::new(FieldType::String)),
+            }],
+        };
+        let inst = parse_instance("{}", &td, "ns", &HashMap::new()).unwrap();
+        let deps = inst.values.iter().find(|(k, _)| k == "dependencies").unwrap();
+        assert_eq!(deps.1, FieldValue::List(vec![]));
+    }
+
+    #[test]
+    fn test_parse_instance_non_sequence_list_defaults_empty() {
+        let td = TypeDef {
+            name: "Manifest".to_string(),
+            description: "".to_string(),
+            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            properties: vec![Property {
+                name: "dependencies".to_string(),
+                field_type: FieldType::List(Box::new(FieldType::String)),
+            }],
+        };
+        let inst = parse_instance("dependencies: not-a-list\n", &td, "ns", &HashMap::new()).unwrap();
+        let deps = inst.values.iter().find(|(k, _)| k == "dependencies").unwrap();
+        assert_eq!(deps.1, FieldValue::List(vec![]));
+    }
+
+    #[test]
     fn test_scan_all_nonexistent_dir() {
         let result = scan_all(Path::new("/nonexistent"), &[]);
         assert!(result.is_ok());
-        let scan = result.unwrap();
-        assert!(scan.instances.is_empty());
-        assert!(scan.namespaces.is_empty());
+        assert!(result.unwrap().is_empty());
     }
 
     #[test]
@@ -429,11 +408,9 @@ label_plural: "Opportunities"
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
 
-        // Create: base/ben/crm/versions/0.0.1-dev/collection/opportunity.yaml
         let version_dir = base.join("ben/crm/versions/0.0.1-dev");
         let collection_dir = version_dir.join("collection");
         std::fs::create_dir_all(&collection_dir).unwrap();
-        std::fs::write(version_dir.join("loco.yaml"), "name: crm\n").unwrap();
         std::fs::write(
             collection_dir.join("opportunity.yaml"),
             "name: \"opportunity\"\nlabel: \"Opportunity\"\nlabel_plural: \"Opportunities\"\n",
@@ -446,13 +423,10 @@ label_plural: "Opportunities"
         .unwrap();
 
         let td = collection_type_def();
-        let scan = scan_all(base, &[td]).unwrap();
-        assert_eq!(scan.instances.len(), 2);
-        // Sorted alphabetically
-        assert_eq!(scan.instances[0].namespace, "ben/crm.contact");
-        assert_eq!(scan.instances[1].namespace, "ben/crm.opportunity");
-        assert_eq!(scan.namespaces.len(), 1);
-        assert_eq!(scan.namespaces[0].config.name, "crm");
+        let instances = scan_all(base, &[td]).unwrap();
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].namespace, "ben/crm.contact");
+        assert_eq!(instances[1].namespace, "ben/crm.opportunity");
     }
 
     #[test]
@@ -460,11 +434,9 @@ label_plural: "Opportunities"
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
 
-        // Create nested: base/ben/crm/versions/0.0.1-dev/field/account/company.yaml
         let version_dir = base.join("ben/crm/versions/0.0.1-dev");
         let account_dir = version_dir.join("field/account");
         std::fs::create_dir_all(&account_dir).unwrap();
-        std::fs::write(version_dir.join("loco.yaml"), "name: crm\n").unwrap();
         std::fs::write(
             account_dir.join("company.yaml"),
             "name: \"company\"\ncollection: \"account\"\n",
@@ -480,10 +452,10 @@ label_plural: "Opportunities"
         .unwrap();
 
         let td = field_type_def();
-        let scan = scan_all(base, &[td]).unwrap();
-        assert_eq!(scan.instances.len(), 2);
-        assert_eq!(scan.instances[0].namespace, "ben/crm.account/company");
-        assert_eq!(scan.instances[1].namespace, "ben/crm.contact/first_name");
+        let instances = scan_all(base, &[td]).unwrap();
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].namespace, "ben/crm.account/company");
+        assert_eq!(instances[1].namespace, "ben/crm.contact/first_name");
     }
 
     #[test]
@@ -510,10 +482,10 @@ label_plural: "Opportunities"
             "name: \"CRM\"\nnamespace: \"ben/crm\"\ndescription: \"Customer relationship management\"\n",
         ).unwrap();
 
-        let scan = scan_all(base, &[project_def]).unwrap();
-        assert_eq!(scan.instances.len(), 1);
-        assert_eq!(scan.instances[0].namespace, "ben/crm/project");
-        assert_eq!(scan.instances[0].type_name, "Project");
+        let instances = scan_all(base, &[project_def]).unwrap();
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].namespace, "ben/crm/project");
+        assert_eq!(instances[0].type_name, "Project");
     }
 
     #[test]
@@ -546,62 +518,30 @@ label_plural: "Opportunities"
         let version_dir = base.join("ben/crm/versions/0.0.1-dev");
         let collection_dir = version_dir.join("collection");
         std::fs::create_dir_all(&collection_dir).unwrap();
-        std::fs::write(version_dir.join("loco.yaml"), "name: crm\n").unwrap();
         std::fs::write(
             collection_dir.join("account.yaml"),
             "name: \"account\"\nlabel: \"Account\"\nlabel_plural: \"Accounts\"\n",
         ).unwrap();
 
-        let scan = scan_all(base, &[project_def, collection_def]).unwrap();
-        assert_eq!(scan.instances.len(), 2);
-        // Check both types are present
-        let project_inst = scan.instances.iter().find(|i| i.type_name == "Project").unwrap();
+        let instances = scan_all(base, &[project_def, collection_def]).unwrap();
+        assert_eq!(instances.len(), 2);
+        let project_inst = instances.iter().find(|i| i.type_name == "Project").unwrap();
         assert_eq!(project_inst.namespace, "ben/crm/project");
-        let collection_inst = scan.instances.iter().find(|i| i.type_name == "Collection").unwrap();
+        let collection_inst = instances.iter().find(|i| i.type_name == "Collection").unwrap();
         assert_eq!(collection_inst.namespace, "ben/crm.account");
     }
 
     #[test]
-    fn test_auto_include_loco_core() {
+    fn test_scan_all_ignores_unmatched_files() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
 
-        // Create loco/core
-        let core_dir = base.join("loco/core/versions/0.0.1-dev");
-        std::fs::create_dir_all(&core_dir).unwrap();
-        std::fs::write(core_dir.join("loco.yaml"), "name: core\n").unwrap();
+        let extra = base.join("random/place");
+        std::fs::create_dir_all(&extra).unwrap();
+        std::fs::write(extra.join("unrelated.yaml"), "hello: world\n").unwrap();
 
-        // Create ben/crm with no explicit loco/core dependency
-        let crm_dir = base.join("ben/crm/versions/0.0.1-dev");
-        std::fs::create_dir_all(&crm_dir).unwrap();
-        std::fs::write(crm_dir.join("loco.yaml"), "name: crm\n").unwrap();
-
-        let scan = scan_all(base, &[]).unwrap();
-        let crm_ns = scan.namespaces.iter().find(|ns| ns.project == "crm").unwrap();
-        assert!(crm_ns.config.dependencies.contains(&"loco/core@0.0.1-dev".to_string()));
-
-        // loco/core itself should not have itself as a dependency
-        let core_ns = scan.namespaces.iter().find(|ns| ns.project == "core").unwrap();
-        assert!(core_ns.config.dependencies.is_empty());
-    }
-
-    #[test]
-    fn test_missing_dependency_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path();
-
-        let crm_dir = base.join("ben/crm/versions/0.0.1-dev");
-        std::fs::create_dir_all(&crm_dir).unwrap();
-        std::fs::write(
-            crm_dir.join("loco.yaml"),
-            "name: crm\ndependencies:\n  - alice/billing@0.1.0\n",
-        )
-        .unwrap();
-
-        let result = scan_all(base, &[]);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("alice/billing@0.1.0"));
+        let instances = scan_all(base, &[collection_type_def()]).unwrap();
+        assert!(instances.is_empty());
     }
 
     #[test]

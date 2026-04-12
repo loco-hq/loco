@@ -4,6 +4,7 @@ pub enum Value {
     Integer(i64),
     Float(f64),
     Boolean(bool),
+    List(Vec<Value>),
 }
 
 impl Value {
@@ -31,6 +32,13 @@ impl Value {
     pub fn as_boolean(&self) -> Option<bool> {
         match self {
             Value::Boolean(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn as_list(&self) -> Option<&[Value]> {
+        match self {
+            Value::List(items) => Some(items),
             _ => None,
         }
     }

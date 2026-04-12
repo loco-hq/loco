@@ -80,15 +80,15 @@ fn generate_new(out: &mut String, type_def: &TypeDef, fields: &[(String, FieldTy
 
 fn generate_accessor(out: &mut String, field_name: &str, field_type: &FieldType) {
     let ident = rust_ident(field_name);
-    let return_type = match field_type {
-        FieldType::String => "&str",
-        FieldType::Integer => "i64",
-        FieldType::Float => "f64",
-        FieldType::Boolean => "bool",
-    };
-    let body = match field_type {
-        FieldType::String => format!("&self.{ident}"),
-        _ => format!("self.{ident}"),
+    let (return_type, body) = match field_type {
+        FieldType::String => ("&str".to_string(), format!("&self.{ident}")),
+        FieldType::Integer => ("i64".to_string(), format!("self.{ident}")),
+        FieldType::Float => ("f64".to_string(), format!("self.{ident}")),
+        FieldType::Boolean => ("bool".to_string(), format!("self.{ident}")),
+        FieldType::List(inner) => (
+            format!("&[{}]", inner.rust_type()),
+            format!("&self.{ident}"),
+        ),
     };
     out.push_str(&format!(
         "    pub fn {ident}(&self) -> {} {{\n        {}\n    }}\n\n",
@@ -105,16 +105,42 @@ fn generate_from_cache(out: &mut String, type_def: &TypeDef, fields: &[(String, 
 
     // Extract each field from the map
     for (field_name, field_type) in fields {
-        let getter = match field_type {
-            FieldType::String => "as_string",
-            FieldType::Integer => "as_integer",
-            FieldType::Float => "as_float",
-            FieldType::Boolean => "as_boolean",
-        };
-        out.push_str(&format!(
-            "        let {} = map.get(\"{}\").and_then(|v| v.{getter}())?;\n",
-            rust_ident(field_name), field_name
-        ));
+        let ident = rust_ident(field_name);
+        match field_type {
+            FieldType::String => {
+                out.push_str(&format!(
+                    "        let {ident} = map.get(\"{field_name}\").and_then(|v| v.as_string())?;\n"
+                ));
+            }
+            FieldType::Integer => {
+                out.push_str(&format!(
+                    "        let {ident} = map.get(\"{field_name}\").and_then(|v| v.as_integer())?;\n"
+                ));
+            }
+            FieldType::Float => {
+                out.push_str(&format!(
+                    "        let {ident} = map.get(\"{field_name}\").and_then(|v| v.as_float())?;\n"
+                ));
+            }
+            FieldType::Boolean => {
+                out.push_str(&format!(
+                    "        let {ident} = map.get(\"{field_name}\").and_then(|v| v.as_boolean())?;\n"
+                ));
+            }
+            FieldType::List(inner) => {
+                let extractor = match inner.as_ref() {
+                    FieldType::String => "as_string()",
+                    FieldType::Integer => "as_integer()",
+                    FieldType::Float => "as_float()",
+                    FieldType::Boolean => "as_boolean()",
+                    FieldType::List(_) => unreachable!("nested lists rejected at parse time"),
+                };
+                out.push_str(&format!(
+                    "        let {ident}: {rust_ty} = map.get(\"{field_name}\")\n            .and_then(|v| v.as_list())?\n            .iter()\n            .filter_map(|v| v.{extractor})\n            .collect();\n",
+                    rust_ty = field_type.rust_type()
+                ));
+            }
+        }
     }
 
     out.push_str(&format!("        Some({name} {{\n"));
@@ -136,6 +162,18 @@ fn generate_to_cache(out: &mut String, _type_def: &TypeDef, fields: &[(String, F
             FieldType::Integer => format!("loco_gen_runtime::Value::Integer(self.{ident})"),
             FieldType::Float => format!("loco_gen_runtime::Value::Float(self.{ident})"),
             FieldType::Boolean => format!("loco_gen_runtime::Value::Boolean(self.{ident})"),
+            FieldType::List(inner) => {
+                let wrap = match inner.as_ref() {
+                    FieldType::String => "loco_gen_runtime::Value::String(v.clone())",
+                    FieldType::Integer => "loco_gen_runtime::Value::Integer(*v)",
+                    FieldType::Float => "loco_gen_runtime::Value::Float(*v)",
+                    FieldType::Boolean => "loco_gen_runtime::Value::Boolean(*v)",
+                    FieldType::List(_) => unreachable!("nested lists rejected at parse time"),
+                };
+                format!(
+                    "loco_gen_runtime::Value::List(self.{ident}.iter().map(|v| {wrap}).collect())"
+                )
+            }
         };
         out.push_str(&format!(
             "        map.insert(\"{field_name}\".to_string(), {conversion});\n"
@@ -152,6 +190,10 @@ fn generate_field_value_literal(value: &FieldValue) -> String {
         FieldValue::Integer(i) => format!("{i}_i64"),
         FieldValue::Float(f) => format!("{f}_f64"),
         FieldValue::Boolean(b) => format!("{b}"),
+        FieldValue::List(items) => {
+            let parts: Vec<String> = items.iter().map(generate_field_value_literal).collect();
+            format!("vec![{}]", parts.join(", "))
+        }
     }
 }
 
@@ -282,6 +324,36 @@ mod tests {
         assert!(
             code.contains("pub fn to_cache(&self, cache: &loco_gen_runtime::TypedCache, key: &str)")
         );
+    }
+
+    #[test]
+    fn test_list_field_generation() {
+        use crate::types::{FieldValue, Instance};
+        let td = TypeDef {
+            name: "Manifest".to_string(),
+            description: "".to_string(),
+            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            properties: vec![Property {
+                name: "dependencies".to_string(),
+                field_type: FieldType::List(Box::new(FieldType::String)),
+            }],
+        };
+        let instances = vec![Instance {
+            type_name: "Manifest".to_string(),
+            namespace: "ben/crm/versions/0.0.1-dev/manifest".to_string(),
+            values: vec![
+                ("project".to_string(), FieldValue::String("ben/crm".to_string())),
+                ("version".to_string(), FieldValue::String("0.0.1-dev".to_string())),
+                (
+                    "dependencies".to_string(),
+                    FieldValue::List(vec![FieldValue::String("loco/core@0.0.1-dev".to_string())]),
+                ),
+            ],
+        }];
+        let code = generate(&td, &instances);
+        assert!(code.contains("dependencies: Vec<String>,"));
+        assert!(code.contains("pub fn dependencies(&self) -> &[String]"));
+        assert!(code.contains("vec![\"loco/core@0.0.1-dev\".to_string()]"));
     }
 
     #[test]

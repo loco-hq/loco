@@ -36,23 +36,10 @@ pub fn generate(types_dir: &str, instances_dir: &str) {
     // Sort for deterministic output
     type_defs.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Scan all instances (unified — no separate config scan)
-    let scan_result = loco_gen_schema::instance::scan_all(instances_path, &type_defs)
+    let instances = loco_gen_schema::instance::scan_all(instances_path, &type_defs)
         .unwrap_or_else(|e| panic!("failed to scan instances in '{}': {}", instances_dir, e));
 
-    for ns in &scan_result.namespaces {
-        let deps = if ns.config.dependencies.is_empty() {
-            "none".to_string()
-        } else {
-            ns.config.dependencies.join(", ")
-        };
-        println!(
-            "cargo:warning=namespace {}/{}@{} (deps: {})",
-            ns.user, ns.project, ns.version, deps
-        );
-    }
-
-    let code = loco_gen_schema::codegen::generate_all(&type_defs, &scan_result.instances);
+    let code = loco_gen_schema::codegen::generate_all(&type_defs, &instances);
     std::fs::write(&out_path, code)
         .unwrap_or_else(|e| panic!("failed to write {}: {}", out_path.display(), e));
 }

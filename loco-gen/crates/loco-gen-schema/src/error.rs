@@ -7,7 +7,6 @@ pub enum Error {
     InvalidFieldType(String),
     MissingField(&'static str),
     InvalidValue(String),
-    MissingDependency(String),
     AlreadyExists(String),
     NotFound(String),
     PropertyTemplateCollision { type_name: String, property: String },
@@ -21,7 +20,6 @@ impl fmt::Display for Error {
             Error::InvalidFieldType(t) => write!(f, "invalid field type: {t}"),
             Error::MissingField(name) => write!(f, "missing required field: {name}"),
             Error::InvalidValue(msg) => write!(f, "invalid value: {msg}"),
-            Error::MissingDependency(dep) => write!(f, "missing dependency: {dep}"),
             Error::AlreadyExists(name) => write!(f, "already exists: {name}"),
             Error::NotFound(name) => write!(f, "not found: {name}"),
             Error::PropertyTemplateCollision { type_name, property } => write!(

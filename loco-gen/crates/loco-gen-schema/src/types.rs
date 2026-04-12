@@ -4,10 +4,13 @@ pub enum FieldType {
     Integer,
     Float,
     Boolean,
+    List(Box<FieldType>),
 }
 
 impl FieldType {
-    pub fn parse(s: &str) -> Option<Self> {
+    /// Parse a scalar type name. Lists require an `items` sub-key and are built
+    /// by the parser, not this function.
+    pub fn parse_scalar(s: &str) -> Option<Self> {
         match s {
             "string" => Some(FieldType::String),
             "integer" => Some(FieldType::Integer),
@@ -17,12 +20,13 @@ impl FieldType {
         }
     }
 
-    pub fn rust_type(&self) -> &'static str {
+    pub fn rust_type(&self) -> String {
         match self {
-            FieldType::String => "String",
-            FieldType::Integer => "i64",
-            FieldType::Float => "f64",
-            FieldType::Boolean => "bool",
+            FieldType::String => "String".to_string(),
+            FieldType::Integer => "i64".to_string(),
+            FieldType::Float => "f64".to_string(),
+            FieldType::Boolean => "bool".to_string(),
+            FieldType::List(inner) => format!("Vec<{}>", inner.rust_type()),
         }
     }
 }
@@ -93,6 +97,7 @@ pub enum FieldValue {
     Integer(i64),
     Float(f64),
     Boolean(bool),
+    List(Vec<FieldValue>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

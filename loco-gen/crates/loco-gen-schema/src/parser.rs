@@ -40,13 +40,25 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<Schema, Error> {
             .as_str()
             .ok_or(Error::MissingField("property name"))?
             .to_string();
-        let type_str = val
+        let prop_map = val
             .as_mapping()
-            .and_then(|m| m.get(serde_yaml::Value::String("type".into())))
+            .ok_or(Error::MissingField("property definition"))?;
+        let type_str = prop_map
+            .get(serde_yaml::Value::String("type".into()))
             .and_then(|v| v.as_str())
             .ok_or(Error::MissingField("type"))?;
-        let field_type = FieldType::parse(type_str)
-            .ok_or_else(|| Error::InvalidFieldType(type_str.to_string()))?;
+        let field_type = if type_str == "list" {
+            let items_str = prop_map
+                .get(serde_yaml::Value::String("items".into()))
+                .and_then(|v| v.as_str())
+                .ok_or(Error::MissingField("items"))?;
+            let item_type = FieldType::parse_scalar(items_str)
+                .ok_or_else(|| Error::InvalidFieldType(items_str.to_string()))?;
+            FieldType::List(Box::new(item_type))
+        } else {
+            FieldType::parse_scalar(type_str)
+                .ok_or_else(|| Error::InvalidFieldType(type_str.to_string()))?
+        };
         properties.push(Property { name, field_type });
     }
 
@@ -154,6 +166,50 @@ properties:
         let err = parse_schema(yaml, "thing").unwrap_err();
         assert!(matches!(err, Error::PropertyTemplateCollision { .. }));
         assert!(err.to_string().contains("name"));
+    }
+
+    #[test]
+    fn test_parse_list_field() {
+        let yaml = r#"
+version: 1
+filePathTemplate: "${project}/versions/${version}/manifest.yaml"
+properties:
+  dependencies:
+    type: list
+    items: string
+"#;
+        let schema = parse_schema(yaml, "manifest").unwrap();
+        let prop = &schema.type_def.properties[0];
+        assert_eq!(prop.name, "dependencies");
+        assert_eq!(
+            prop.field_type,
+            FieldType::List(Box::new(FieldType::String))
+        );
+    }
+
+    #[test]
+    fn test_list_requires_items() {
+        let yaml = r#"
+version: 1
+filePathTemplate: "${project}/${name}.yaml"
+properties:
+  tags:
+    type: list
+"#;
+        assert!(parse_schema(yaml, "thing").is_err());
+    }
+
+    #[test]
+    fn test_list_of_list_rejected() {
+        let yaml = r#"
+version: 1
+filePathTemplate: "${project}/${name}.yaml"
+properties:
+  nested:
+    type: list
+    items: list
+"#;
+        assert!(parse_schema(yaml, "thing").is_err());
     }
 
     #[test]

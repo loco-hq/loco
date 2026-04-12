@@ -1,10 +1,9 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::error::Error;
-use crate::instance::{self, fill_template, ScannedNamespace};
-use crate::namespace;
+use crate::instance::{self, fill_template};
 use crate::types::TypeDef;
 
 /// Thread-safe in-memory registry for instances of any TypeDef.
@@ -15,8 +14,6 @@ type InstanceMap = HashMap<String, HashMap<String, HashMap<String, String>>>;
 pub struct SchemaRegistry {
     /// All instances: type_name → { namespace → field_values }
     instances: RwLock<InstanceMap>,
-    /// Namespace configs from loco.yaml files, keyed by (user, project, version)
-    namespaces: RwLock<Vec<ScannedNamespace>>,
     /// Type definitions, for template-based path resolution
     type_defs: Vec<TypeDef>,
     instances_dir: PathBuf,
@@ -25,15 +22,39 @@ pub struct SchemaRegistry {
 fn instance_values_to_strings(inst: &crate::types::Instance) -> HashMap<String, String> {
     let mut fields = HashMap::new();
     for (key, val) in &inst.values {
-        let str_val = match val {
-            crate::types::FieldValue::String(s) => s.clone(),
-            crate::types::FieldValue::Integer(i) => i.to_string(),
-            crate::types::FieldValue::Float(f) => f.to_string(),
-            crate::types::FieldValue::Boolean(b) => b.to_string(),
-        };
-        fields.insert(key.clone(), str_val);
+        fields.insert(key.clone(), field_value_to_string(val));
     }
     fields
+}
+
+fn field_value_to_string(val: &crate::types::FieldValue) -> String {
+    use crate::types::FieldValue;
+    match val {
+        FieldValue::String(s) => s.clone(),
+        FieldValue::Integer(i) => i.to_string(),
+        FieldValue::Float(f) => f.to_string(),
+        FieldValue::Boolean(b) => b.to_string(),
+        FieldValue::List(items) => {
+            let json_items: Vec<serde_json::Value> =
+                items.iter().map(field_value_to_json).collect();
+            serde_json::to_string(&json_items).unwrap_or_else(|_| "[]".to_string())
+        }
+    }
+}
+
+fn field_value_to_json(val: &crate::types::FieldValue) -> serde_json::Value {
+    use crate::types::FieldValue;
+    match val {
+        FieldValue::String(s) => serde_json::Value::String(s.clone()),
+        FieldValue::Integer(i) => serde_json::Value::Number((*i).into()),
+        FieldValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        FieldValue::Boolean(b) => serde_json::Value::Bool(*b),
+        FieldValue::List(items) => {
+            serde_json::Value::Array(items.iter().map(field_value_to_json).collect())
+        }
+    }
 }
 
 impl SchemaRegistry {
@@ -42,17 +63,16 @@ impl SchemaRegistry {
         instances_dir: &Path,
         type_defs: &[TypeDef],
     ) -> Result<Self, Error> {
-        let scan = instance::scan_all(instances_dir, type_defs)?;
+        let scanned = instance::scan_all(instances_dir, type_defs)?;
 
         let mut instances: InstanceMap = HashMap::new();
-        for inst in &scan.instances {
+        for inst in &scanned {
             let type_map = instances.entry(inst.type_name.to_lowercase()).or_default();
             type_map.insert(inst.namespace.clone(), instance_values_to_strings(inst));
         }
 
         Ok(SchemaRegistry {
             instances: RwLock::new(instances),
-            namespaces: RwLock::new(scan.namespaces),
             type_defs: type_defs.to_vec(),
             instances_dir: instances_dir.to_path_buf(),
         })
@@ -299,42 +319,6 @@ impl SchemaRegistry {
         Ok(to_delete)
     }
 
-    /// Given a namespace string like "ben/cars@0.0.1-dev", resolve the full
-    /// transitive dependency tree. Returns all (user, project) pairs including
-    /// the root namespace.
-    pub fn resolve_namespace_tree(
-        &self,
-        namespace_str: &str,
-    ) -> Result<Vec<(String, String)>, Error> {
-        let (root_user, root_project, _root_version) =
-            namespace::parse_dependency(namespace_str)?;
-
-        let namespaces = self.namespaces.read().unwrap();
-        let mut visited: HashSet<(String, String)> = HashSet::new();
-        let mut result = Vec::new();
-        let mut queue: VecDeque<(String, String)> = VecDeque::new();
-
-        queue.push_back((root_user.to_string(), root_project.to_string()));
-
-        while let Some((user, project)) = queue.pop_front() {
-            if !visited.insert((user.clone(), project.clone())) {
-                continue;
-            }
-            result.push((user.clone(), project.clone()));
-
-            // Find the ScannedNamespace for this (user, project) and walk its deps
-            if let Some(ns) = namespaces.iter().find(|n| n.user == user && n.project == project) {
-                for dep in &ns.config.dependencies {
-                    if let Ok((dep_user, dep_project, _)) = namespace::parse_dependency(dep) {
-                        queue.push_back((dep_user.to_string(), dep_project.to_string()));
-                    }
-                }
-            }
-        }
-
-        Ok(result)
-    }
-
     /// Resolve file path for a type instance using its filePathTemplate and template variables.
     fn resolve_file_path(&self, type_name: &str, template_vars: &HashMap<String, String>) -> PathBuf {
         let type_def = self.type_defs.iter().find(|td| td.name.to_lowercase() == type_name);
@@ -347,15 +331,6 @@ impl SchemaRegistry {
         }
     }
 
-    /// Access to namespace data
-    pub fn namespaces(&self) -> Vec<ScannedNamespace> {
-        self.namespaces.read().unwrap().clone()
-    }
-
-    /// Add a namespace config entry
-    pub fn add_namespace(&self, ns: ScannedNamespace) {
-        self.namespaces.write().unwrap().push(ns);
-    }
 }
 
 fn write_instance_yaml(path: &Path, fields: &HashMap<String, String>) -> Result<(), Error> {
@@ -392,7 +367,6 @@ mod tests {
     fn test_registry(base: &Path) -> SchemaRegistry {
         SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
-            namespaces: RwLock::new(Vec::new()),
             type_defs: vec![
                 TypeDef {
                     name: "collection".to_string(),

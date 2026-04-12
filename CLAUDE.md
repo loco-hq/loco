@@ -44,7 +44,7 @@ Instance namespace depends on whether the type's template includes `${version}`:
 
 ## Schema Files
 
-Type definitions live in `schemas/types/` with these supported field types: `string`, `integer`, `float`, `boolean`. Every type has a required `filePathTemplate` that controls where instance files live under `schemas/instances/` and how template variables are extracted from file paths.
+Type definitions live in `schemas/types/`. Supported field types: `string`, `integer`, `float`, `boolean`, and `list` (a `list` requires an `items:` sub-key naming a scalar type — nested lists are rejected at parse time). Every type has a required `filePathTemplate` that controls where instance files live under `schemas/instances/` and how template variables are extracted from file paths.
 
 ### filePathTemplate examples
 
@@ -53,10 +53,15 @@ Type definitions live in `schemas/types/` with these supported field types: `str
 | project | `${project}/project.yaml` |
 | dataset | `${project}/datasets/${name}.yaml` |
 | site | `${project}/sites/${name}.yaml` |
+| manifest | `${project}/versions/${version}/manifest.yaml` |
 | collection | `${project}/versions/${version}/collections/${name}.yaml` |
 | field | `${project}/versions/${version}/fields/${collection}/${name}.yaml` |
 
 `${project}` is a multi-segment variable (e.g., `ben/crm`). Instance files all live under `schemas/instances/`. Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `versions`).
+
+### Manifests
+
+Each versioned project must include a `manifest.yaml` declaring its dependencies. `manifest` is a regular schema type — loco-gen treats it no differently than `collection` or `site`. The dependency grammar (`{user}/{project}@{version}`) and transitive-tree resolution live in loco-apps (`src/manifest.rs`); loco-gen has no concept of dependencies. Missing-dependency validation runs at server startup.
 
 ## Naming Conventions
 

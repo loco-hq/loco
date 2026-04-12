@@ -1,0 +1,7 @@
+version: 1
+description: "A versioned project manifest declaring dependencies"
+filePathTemplate: "${project}/versions/${version}/manifest.yaml"
+properties:
+  dependencies:
+    type: list
+    items: string

@@ -746,9 +746,9 @@ async fn handle_schema_introspect(
     let namespace_str = format!("{namespace}@{version}");
 
     // Resolve the full dependency tree
-    let ns_pairs = match state.registry.resolve_namespace_tree(&namespace_str) {
+    let ns_pairs = match crate::manifest::resolve_dependency_tree(&state.registry, &namespace_str) {
         Ok(pairs) => pairs,
-        Err(e) => return schema_error_to_response(e),
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
     };
 
     // For each namespace, gather collections and their fields
@@ -1170,6 +1170,9 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
     let instances_dir = crate_dir.join("schemas/instances");
     let registry = SchemaRegistry::load(&instances_dir, &type_defs)
         .expect("failed to load schema registry");
+
+    crate::manifest::validate_manifests(&registry)
+        .expect("manifest validation failed");
 
     let all_collections = registry.list_all_instances("collection");
     println!("Loaded {} collection(s):", all_collections.len());
