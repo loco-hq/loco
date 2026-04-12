@@ -39,7 +39,7 @@ Runtime: `loco-apps` → `loco-gen-runtime` + `loco-lake`
 ### Namespace convention
 
 Instance namespace depends on whether the type's template includes `${version}`:
-- Versioned types (collection, field): `{user}/{project}.{item_key}` — e.g., `ben/crm.account`
+- Versioned types (collection, field): `{project}.{item_key}` — e.g., `ben/crm.account`
 - Unversioned types (project, dataset, site): relative path minus `.yaml` — e.g., `ben/crm/project`, `ben/crm/datasets/acme`
 
 ## Schema Files
@@ -50,13 +50,28 @@ Type definitions live in `schemas/types/` with these supported field types: `str
 
 | Type | Template |
 |------|----------|
-| project | `${namespace}/project.yaml` |
-| dataset | `${namespace}/datasets/${dataset_id}.yaml` |
-| site | `${namespace}/sites/${site_id}.yaml` |
-| collection | `${namespace}/versions/${version}/collection/${name}.yaml` |
-| field | `${namespace}/versions/${version}/field/${collection}/${name}.yaml` |
+| project | `${project}/project.yaml` |
+| dataset | `${project}/datasets/${name}.yaml` |
+| site | `${project}/sites/${name}.yaml` |
+| collection | `${project}/versions/${version}/collections/${name}.yaml` |
+| field | `${project}/versions/${version}/fields/${collection}/${name}.yaml` |
 
-`${namespace}` is a multi-segment variable (e.g., `ben/crm`). Instance files all live under `schemas/instances/`.
+`${project}` is a multi-segment variable (e.g., `ben/crm`). Instance files all live under `schemas/instances/`. Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `versions`).
+
+## Naming Conventions
+
+These conventions apply to property names in type definitions and variable names in `filePathTemplate`s.
+
+- **`id`** — opaque identifier (uuid/number) with no semantic meaning. Immutable once set. *(Reserved — not currently used anywhere in the codebase.)*
+- **`name`** — semantic slug identifier: `[a-z_]` only, lowercase, immutable. Used as path-segment identifiers in `filePathTemplate`s. When the template has `${name}`, the struct field is populated implicitly from the path — don't declare `name` as a property.
+- **`label`** — human-readable display string. Any characters, short, mutable.
+- **`description`** — free-form text. Any characters, longer, mutable.
+- **`project`** — fully-qualified project reference (e.g. `ben/crm`). Used for direct "belongs-to" links and in path templates via `${project}`. Preferred in user-facing contexts.
+- **`namespace`** — external scope reference, for pulling inherited metadata from another project (e.g. app-store dependency). Reserved for cross-project references; do not use as a synonym for `project`.
+
+### Implicit fields from template variables
+
+Every `${var}` in a `filePathTemplate` becomes an implicit `String` field on the generated struct. A declared property whose name collides with a template variable is a parse-time error — the template is the source of truth for those values.
 
 ## Key Patterns
 
