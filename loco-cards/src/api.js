@@ -51,7 +51,7 @@ export async function listProjects() {
 }
 
 export async function createProject(label, project) {
-  const id = `projects/${project}/project`;
+  const id = `${project}/project`;
   return request(`/config/create/project/${id}`, {
     method: 'POST',
     body: JSON.stringify({
