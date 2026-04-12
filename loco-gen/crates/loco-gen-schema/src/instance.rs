@@ -22,17 +22,32 @@ pub struct ScannedNamespace {
 }
 
 /// Parse an instance YAML file, validating values against the type definition.
+/// `vars` supplies values for template variables extracted from the file path;
+/// these become implicit `String` fields on the generated struct unless a
+/// declared property shadows them.
 pub fn parse_instance(
     yaml: &str,
     type_def: &TypeDef,
     namespace: &str,
+    vars: &HashMap<String, String>,
 ) -> Result<Instance, Error> {
     let value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
     let mapping = value
         .as_mapping()
         .ok_or(Error::MissingField("root mapping"))?;
 
+    let declared: HashSet<&str> =
+        type_def.properties.iter().map(|p| p.name.as_str()).collect();
+
     let mut values = Vec::new();
+    for var_name in type_def.template_vars() {
+        if declared.contains(var_name.as_str()) {
+            continue;
+        }
+        let val = vars.get(&var_name).cloned().unwrap_or_default();
+        values.push((var_name, FieldValue::String(val)));
+    }
+
     for prop in &type_def.properties {
         let key = serde_yaml::Value::String(prop.name.clone());
         let val = mapping
@@ -145,7 +160,7 @@ pub fn scan_all(
             if let Some(vars) = extract_template_vars(&rel, &type_def.file_path_template) {
                 let namespace_str = derive_namespace(&type_def.file_path_template, &vars, &rel);
                 let yaml = std::fs::read_to_string(file_path)?;
-                let instance = parse_instance(&yaml, type_def, &namespace_str)?;
+                let instance = parse_instance(&yaml, type_def, &namespace_str, &vars)?;
                 instances.push(instance);
                 break; // matched — don't try other templates
             }
@@ -372,12 +387,14 @@ label: "Opportunity"
 label_plural: "Opportunities"
 "#;
         let td = collection_type_def();
-        let inst = parse_instance(yaml, &td, "ben/crm.opportunity").unwrap();
+        let inst = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new()).unwrap();
         assert_eq!(inst.type_name, "Collection");
         assert_eq!(inst.namespace, "ben/crm.opportunity");
-        assert_eq!(inst.values.len(), 3);
-        assert_eq!(inst.values[0], ("name".to_string(), FieldValue::String("opportunity".to_string())));
-        assert_eq!(inst.values[1], ("label".to_string(), FieldValue::String("Opportunity".to_string())));
+        // 3 declared properties + 2 non-shadowed template vars (namespace, version);
+        // `name` is shadowed by the declared `name` property.
+        assert_eq!(inst.values.len(), 5);
+        assert!(inst.values.iter().any(|v| v == &("name".to_string(), FieldValue::String("opportunity".to_string()))));
+        assert!(inst.values.iter().any(|v| v == &("label".to_string(), FieldValue::String("Opportunity".to_string()))));
     }
 
     #[test]
@@ -387,7 +404,7 @@ name: "opportunity"
 label: "Opportunity"
 "#;
         let td = collection_type_def();
-        let result = parse_instance(yaml, &td, "ben/crm.opportunity");
+        let result = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new());
         assert!(result.is_err());
     }
 
@@ -399,7 +416,7 @@ label: "Opportunity"
 label_plural: "Opportunities"
 "#;
         let td = collection_type_def();
-        let result = parse_instance(yaml, &td, "ben/crm.opportunity");
+        let result = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new());
         assert!(result.is_err());
     }
 

@@ -19,16 +19,17 @@ fn rust_ident(name: &str) -> String {
 /// Generate Rust source code for a single TypeDef with its instances.
 pub fn generate(type_def: &TypeDef, instances: &[Instance]) -> String {
     let name = &type_def.name;
+    let fields = type_def.all_fields();
     let mut out = String::new();
 
     // Struct definition
     out.push_str("#[derive(Debug, Clone, PartialEq)]\n");
     out.push_str(&format!("pub struct {name} {{\n"));
-    for prop in &type_def.properties {
+    for (field_name, field_type) in &fields {
         out.push_str(&format!(
             "    {}: {},\n",
-            rust_ident(&prop.name),
-            prop.field_type.rust_type()
+            rust_ident(field_name),
+            field_type.rust_type()
         ));
     }
     out.push_str("}\n\n");
@@ -37,16 +38,16 @@ pub fn generate(type_def: &TypeDef, instances: &[Instance]) -> String {
     out.push_str(&format!("impl {name} {{\n"));
 
     // Constructor
-    generate_new(&mut out, type_def);
+    generate_new(&mut out, type_def, &fields);
 
     // Accessors
-    for prop in &type_def.properties {
-        generate_accessor(&mut out, prop);
+    for (field_name, field_type) in &fields {
+        generate_accessor(&mut out, field_name, field_type);
     }
 
     // Cache methods
-    generate_from_cache(&mut out, type_def);
-    generate_to_cache(&mut out, type_def);
+    generate_from_cache(&mut out, type_def, &fields);
+    generate_to_cache(&mut out, type_def, &fields);
 
     // Instance loaders
     let type_instances: Vec<&Instance> = instances
@@ -60,33 +61,32 @@ pub fn generate(type_def: &TypeDef, instances: &[Instance]) -> String {
     out
 }
 
-fn generate_new(out: &mut String, type_def: &TypeDef) {
-    let params: Vec<String> = type_def
-        .properties
+fn generate_new(out: &mut String, type_def: &TypeDef, fields: &[(String, FieldType)]) {
+    let params: Vec<String> = fields
         .iter()
-        .map(|p| format!("{}: {}", rust_ident(&p.name), p.field_type.rust_type()))
+        .map(|(name, ft)| format!("{}: {}", rust_ident(name), ft.rust_type()))
         .collect();
     out.push_str(&format!(
         "    pub fn new({}) -> Self {{\n",
         params.join(", ")
     ));
     out.push_str(&format!("        {} {{\n", type_def.name));
-    for prop in &type_def.properties {
-        out.push_str(&format!("            {},\n", rust_ident(&prop.name)));
+    for (name, _) in fields {
+        out.push_str(&format!("            {},\n", rust_ident(name)));
     }
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 }
 
-fn generate_accessor(out: &mut String, prop: &crate::types::Property) {
-    let ident = rust_ident(&prop.name);
-    let return_type = match prop.field_type {
+fn generate_accessor(out: &mut String, field_name: &str, field_type: &FieldType) {
+    let ident = rust_ident(field_name);
+    let return_type = match field_type {
         FieldType::String => "&str",
         FieldType::Integer => "i64",
         FieldType::Float => "f64",
         FieldType::Boolean => "bool",
     };
-    let body = match prop.field_type {
+    let body = match field_type {
         FieldType::String => format!("&self.{ident}"),
         _ => format!("self.{ident}"),
     };
@@ -96,7 +96,7 @@ fn generate_accessor(out: &mut String, prop: &crate::types::Property) {
     ));
 }
 
-fn generate_from_cache(out: &mut String, type_def: &TypeDef) {
+fn generate_from_cache(out: &mut String, type_def: &TypeDef, fields: &[(String, FieldType)]) {
     let name = &type_def.name;
     out.push_str(
         "    pub fn from_cache(cache: &loco_gen_runtime::TypedCache, key: &str) -> Option<Self> {\n",
@@ -104,8 +104,8 @@ fn generate_from_cache(out: &mut String, type_def: &TypeDef) {
     out.push_str("        let map = cache.get(key)?;\n");
 
     // Extract each field from the map
-    for prop in &type_def.properties {
-        let getter = match prop.field_type {
+    for (field_name, field_type) in fields {
+        let getter = match field_type {
             FieldType::String => "as_string",
             FieldType::Integer => "as_integer",
             FieldType::Float => "as_float",
@@ -113,33 +113,32 @@ fn generate_from_cache(out: &mut String, type_def: &TypeDef) {
         };
         out.push_str(&format!(
             "        let {} = map.get(\"{}\").and_then(|v| v.{getter}())?;\n",
-            rust_ident(&prop.name), prop.name
+            rust_ident(field_name), field_name
         ));
     }
 
     out.push_str(&format!("        Some({name} {{\n"));
-    for prop in &type_def.properties {
-        out.push_str(&format!("            {},\n", rust_ident(&prop.name)));
+    for (field_name, _) in fields {
+        out.push_str(&format!("            {},\n", rust_ident(field_name)));
     }
     out.push_str("        })\n");
     out.push_str("    }\n\n");
 }
 
-fn generate_to_cache(out: &mut String, type_def: &TypeDef) {
+fn generate_to_cache(out: &mut String, _type_def: &TypeDef, fields: &[(String, FieldType)]) {
     out.push_str("    pub fn to_cache(&self, cache: &loco_gen_runtime::TypedCache, key: &str) {\n");
     out.push_str("        let mut map = std::collections::HashMap::new();\n");
 
-    for prop in &type_def.properties {
-        let ident = rust_ident(&prop.name);
-        let conversion = match prop.field_type {
+    for (field_name, field_type) in fields {
+        let ident = rust_ident(field_name);
+        let conversion = match field_type {
             FieldType::String => format!("loco_gen_runtime::Value::String(self.{ident}.clone())"),
             FieldType::Integer => format!("loco_gen_runtime::Value::Integer(self.{ident})"),
             FieldType::Float => format!("loco_gen_runtime::Value::Float(self.{ident})"),
             FieldType::Boolean => format!("loco_gen_runtime::Value::Boolean(self.{ident})"),
         };
         out.push_str(&format!(
-            "        map.insert(\"{}\".to_string(), {conversion});\n",
-            prop.name
+            "        map.insert(\"{field_name}\".to_string(), {conversion});\n"
         ));
     }
 
@@ -250,7 +249,19 @@ mod tests {
     #[test]
     fn test_generates_constructor() {
         let code = generate(&sample_type_def(), &[]);
-        assert!(code.contains("pub fn new(name: String, item_count: i64, average_rating: f64, is_active: bool) -> Self"));
+        // Template vars `namespace` and `version` are prepended as implicit String fields;
+        // `name` is shadowed by the declared `name` property.
+        assert!(code.contains("pub fn new(namespace: String, version: String, name: String, item_count: i64, average_rating: f64, is_active: bool) -> Self"));
+    }
+
+    #[test]
+    fn test_template_vars_become_implicit_fields() {
+        let code = generate(&sample_type_def(), &[]);
+        // Implicit fields from `${namespace}` and `${version}` in the template.
+        assert!(code.contains("namespace: String,"));
+        assert!(code.contains("version: String,"));
+        assert!(code.contains("pub fn namespace(&self) -> &str"));
+        assert!(code.contains("pub fn version(&self) -> &str"));
     }
 
     #[test]
@@ -280,6 +291,8 @@ mod tests {
             type_name: "Collection".to_string(),
             namespace: "ben/crm.opportunity".to_string(),
             values: vec![
+                ("namespace".to_string(), FieldValue::String("ben/crm".to_string())),
+                ("version".to_string(), FieldValue::String("0.0.1-dev".to_string())),
                 ("name".to_string(), FieldValue::String("opportunity".to_string())),
                 ("item_count".to_string(), FieldValue::Integer(10)),
                 ("average_rating".to_string(), FieldValue::Float(4.5)),
