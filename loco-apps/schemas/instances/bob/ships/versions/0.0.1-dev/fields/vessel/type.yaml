@@ -1,3 +1,1 @@
-collection: vessel
-type: string
-name: type
+type: "string"

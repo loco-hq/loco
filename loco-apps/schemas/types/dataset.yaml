@@ -2,11 +2,7 @@ version: 1
 description: "A dataset that partitions data in the lake"
 filePathTemplate: "${project}/datasets/${name}.yaml"
 properties:
-  dataset_id:
-    type: string
-  project:
-    type: string
-  name:
+  label:
     type: string
   description:
     type: string

@@ -1,6 +1,3 @@
-site_id: "cards"
-project: "testapp"
-name: "Alice Cards"
-namespace: "alice/testapp"
+label: "Alice Cards"
 version: "0-draft"
 dataset: "dev"

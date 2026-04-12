@@ -1,4 +1,2 @@
-description: Default development dataset
-name: ships Dev
-project: ships
-dataset_id: dev
+label: "ships Dev"
+description: "Default development dataset"

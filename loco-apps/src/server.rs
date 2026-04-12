@@ -27,34 +27,34 @@ pub struct AppState {
 
 pub struct SiteId(pub String);
 
-/// Look up a site from the registry by its site_id field (global lookup).
-fn lookup_site(registry: &SchemaRegistry, site_id: &str) -> Option<HashMap<String, String>> {
-    registry.find_instance("site", "site_id", site_id)
+/// Look up a site from the registry by its name field (global lookup).
+fn lookup_site(registry: &SchemaRegistry, site_name: &str) -> Option<HashMap<String, String>> {
+    registry.find_instance("site", "name", site_name)
         .map(|(_, fields)| fields)
 }
 
-/// Look up a site scoped to a namespace + site_id.
-fn lookup_site_in_namespace(registry: &SchemaRegistry, namespace: &str, site_id: &str) -> Option<HashMap<String, String>> {
+/// Look up a site scoped to a project + name.
+fn lookup_site_in_project(registry: &SchemaRegistry, project: &str, site_name: &str) -> Option<HashMap<String, String>> {
     let sites = registry.list_all_instances("site");
     sites.into_iter().find(|(_, fields)| {
-        fields.get("namespace").map(|n| n == namespace).unwrap_or(false)
-            && fields.get("site_id").map(|s| s == site_id).unwrap_or(false)
+        fields.get("project").map(|p| p == project).unwrap_or(false)
+            && fields.get("name").map(|n| n == site_name).unwrap_or(false)
     }).map(|(_, fields)| fields)
 }
 
-/// Resolve a qualified dataset ID from namespace + site name.
-/// Returns `{namespace}/{dataset_name}` for use as the data lake tenant key.
-fn resolve_dataset_id(registry: &SchemaRegistry, namespace: &str, site_name: &str) -> Result<String, String> {
-    let site = lookup_site_in_namespace(registry, namespace, site_name)
-        .ok_or_else(|| format!("unknown site: {site_name} in namespace {namespace}"))?;
+/// Resolve a qualified dataset ID from project + site name.
+/// Returns `{project}/{dataset_name}` for use as the data lake tenant key.
+fn resolve_dataset_id(registry: &SchemaRegistry, project: &str, site_name: &str) -> Result<String, String> {
+    let site = lookup_site_in_project(registry, project, site_name)
+        .ok_or_else(|| format!("unknown site: {site_name} in project {project}"))?;
     let dataset = site.get("dataset").filter(|s| !s.is_empty())
         .map(|s| s.as_str())
         .unwrap_or(site_name);
-    Ok(format!("{namespace}/{dataset}"))
+    Ok(format!("{project}/{dataset}"))
 }
 
-/// Extract namespace from a config ID like "ben/crm/datasets/dev" -> "ben/crm"
-fn namespace_from_config_id(id: &str) -> Option<&str> {
+/// Extract project from a config ID like "ben/crm/datasets/dev" -> "ben/crm"
+fn project_from_config_id(id: &str) -> Option<&str> {
     let end = id.find("/datasets/")
         .or_else(|| id.find("/sites/"))
         .or_else(|| id.find("/project"))?;
@@ -62,19 +62,19 @@ fn namespace_from_config_id(id: &str) -> Option<&str> {
 }
 
 /// Build template_vars from a config ID for disk path resolution.
-/// - "ben/crm/project" -> {namespace: "ben/crm"}
-/// - "ben/crm/datasets/acme" -> {namespace: "ben/crm", dataset_id: "acme"}
-/// - "ben/crm/sites/dev" -> {namespace: "ben/crm", site_id: "dev"}
+/// - "ben/crm/project" -> {project: "ben/crm"}
+/// - "ben/crm/datasets/acme" -> {project: "ben/crm", name: "acme"}
+/// - "ben/crm/sites/dev" -> {project: "ben/crm", name: "dev"}
 fn template_vars_from_config_id(id: &str) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     if let Some(pos) = id.find("/datasets/") {
-        vars.insert("namespace".to_string(), id[..pos].to_string());
-        vars.insert("dataset_id".to_string(), id[pos + "/datasets/".len()..].to_string());
+        vars.insert("project".to_string(), id[..pos].to_string());
+        vars.insert("name".to_string(), id[pos + "/datasets/".len()..].to_string());
     } else if let Some(pos) = id.find("/sites/") {
-        vars.insert("namespace".to_string(), id[..pos].to_string());
-        vars.insert("site_id".to_string(), id[pos + "/sites/".len()..].to_string());
+        vars.insert("project".to_string(), id[..pos].to_string());
+        vars.insert("name".to_string(), id[pos + "/sites/".len()..].to_string());
     } else if let Some(pos) = id.find("/project") {
-        vars.insert("namespace".to_string(), id[..pos].to_string());
+        vars.insert("project".to_string(), id[..pos].to_string());
     }
     vars
 }
@@ -82,7 +82,7 @@ fn template_vars_from_config_id(id: &str) -> HashMap<String, String> {
 /// Build template_vars for a schema type (collection or field).
 fn schema_template_vars(user: &str, project: &str, version: &str) -> HashMap<String, String> {
     let mut vars = HashMap::new();
-    vars.insert("namespace".to_string(), format!("{user}/{project}"));
+    vars.insert("project".to_string(), format!("{user}/{project}"));
     vars.insert("version".to_string(), version.to_string());
     vars
 }
@@ -732,9 +732,9 @@ async fn handle_schema_introspect(
         None => return error_response(StatusCode::NOT_FOUND, "site not found"),
     };
 
-    let namespace = match site_fields.get("namespace") {
+    let namespace = match site_fields.get("project") {
         Some(ns) if !ns.is_empty() => ns.clone(),
-        _ => return error_response(StatusCode::BAD_REQUEST, "site has no namespace configured"),
+        _ => return error_response(StatusCode::BAD_REQUEST, "site has no project configured"),
     };
 
     let ns_user = namespace.split('/').next().unwrap_or("");
@@ -854,26 +854,22 @@ async fn handle_config_create(
 
     // When a project is created, bootstrap a default "dev" site and dataset
     if type_name == "project" {
-        if let (Some(namespace), Some(name)) = (result.get("namespace"), result.get("name")) {
-            let project_slug = namespace.split('/').last().unwrap_or("project");
+        if let Some(project_path) = result.get("project") {
+            let project_slug = project_path.split('/').next_back().unwrap_or("project");
+            let label = result.get("label").cloned().unwrap_or_else(|| project_slug.to_string());
 
             let mut dataset_fields = HashMap::new();
-            dataset_fields.insert("dataset_id".to_string(), "dev".to_string());
-            dataset_fields.insert("project".to_string(), project_slug.to_string());
-            dataset_fields.insert("name".to_string(), format!("{name} Dev"));
+            dataset_fields.insert("label".to_string(), format!("{label} Dev"));
             dataset_fields.insert("description".to_string(), "Default development dataset".to_string());
-            let dataset_config_id = format!("{namespace}/datasets/dev");
+            let dataset_config_id = format!("{project_path}/datasets/dev");
             let dataset_vars = template_vars_from_config_id(&dataset_config_id);
             let _ = state.registry.create_instance("dataset", &dataset_config_id, &dataset_vars, dataset_fields);
 
             let mut site_fields = HashMap::new();
-            site_fields.insert("site_id".to_string(), "dev".to_string());
-            site_fields.insert("project".to_string(), project_slug.to_string());
-            site_fields.insert("name".to_string(), format!("{name} Dev"));
-            site_fields.insert("namespace".to_string(), namespace.clone());
+            site_fields.insert("label".to_string(), format!("{label} Dev"));
             site_fields.insert("version".to_string(), "0.0.1-dev".to_string());
             site_fields.insert("dataset".to_string(), "dev".to_string());
-            let site_config_id = format!("{namespace}/sites/dev");
+            let site_config_id = format!("{project_path}/sites/dev");
             let site_vars = template_vars_from_config_id(&site_config_id);
             let _ = state.registry.create_instance("site", &site_config_id, &site_vars, site_fields);
         }
@@ -919,14 +915,14 @@ async fn handle_config_delete(
     if type_name == "project" {
         // Project ID is like "ben/crm/project" -> prefix is "ben/crm/"
         let prefix = id.trim_end_matches("project");
-        let namespace = prefix.trim_end_matches('/');
+        let project_path = prefix.trim_end_matches('/');
 
         // Delete child datasets (which cascades to lake data)
         let datasets = state.registry.list_all_instances("dataset");
         for (ds_id, ds_fields) in &datasets {
             if ds_id.starts_with(prefix) {
-                if let Some(dataset_name) = ds_fields.get("dataset_id") {
-                    let qualified = format!("{namespace}/{dataset_name}");
+                if let Some(dataset_name) = ds_fields.get("name") {
+                    let qualified = format!("{project_path}/{dataset_name}");
                     let _ = state.adapter.delete_dataset(&qualified);
                 }
                 let ds_vars = template_vars_from_config_id(ds_id);
@@ -947,9 +943,9 @@ async fn handle_config_delete(
     // Cascade: when deleting a dataset, purge all its records from the lake
     if type_name == "dataset" {
         if let Some(fields) = state.registry.get_instance(&type_name, &id) {
-            if let Some(dataset_name) = fields.get("dataset_id") {
-                let namespace = namespace_from_config_id(&id).unwrap_or("");
-                let qualified = format!("{namespace}/{dataset_name}");
+            if let Some(dataset_name) = fields.get("name") {
+                let project_path = project_from_config_id(&id).unwrap_or("");
+                let qualified = format!("{project_path}/{dataset_name}");
                 if let Err(e) = state.adapter.delete_dataset(&qualified) {
                     return error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,

@@ -1,3 +1,1 @@
-name: breed
-collection: pet
-type: string
+type: "string"

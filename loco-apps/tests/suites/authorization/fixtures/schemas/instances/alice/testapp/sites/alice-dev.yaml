@@ -1,6 +1,3 @@
-site_id: "alice-dev"
-project: "testapp"
-name: "Alice Dev Site"
-namespace: "alice/testapp"
+label: "Alice Dev Site"
 version: "0-draft"
 dataset: "alice-dev"

@@ -102,9 +102,8 @@ export async function getProject(id) {
   return getConfig('project', id);
 }
 
-export async function addProject(fields) {
-  const ns = fields.namespace;
-  const id = `${ns}/project`;
+export async function addProject({ project, ...fields }) {
+  const id = `${project}/project`;
   return createConfig('project', id, fields);
 }
 
@@ -122,9 +121,8 @@ export async function getSite(id) {
   return getConfig('site', id);
 }
 
-export async function addSite(fields) {
-  const ns = fields.namespace.split('@')[0]; // strip version
-  const id = `${ns}/sites/${fields.site_id}`;
+export async function addSite({ project, name, ...fields }) {
+  const id = `${project}/sites/${name}`;
   return createConfig('site', id, fields);
 }
 
@@ -146,8 +144,8 @@ export async function getDataset(id) {
   return getConfig('dataset', id);
 }
 
-export async function addDataset(namespace, fields) {
-  const id = `${namespace}/datasets/${fields.dataset_id}`;
+export async function addDataset({ project, name, ...fields }) {
+  const id = `${project}/datasets/${name}`;
   return createConfig('dataset', id, fields);
 }
 

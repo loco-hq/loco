@@ -11,8 +11,7 @@ export default function SiteDetail() {
   const [schemaNamespaces, setSchemaNamespaces] = useState([]);
   const [error, setError] = useState(null);
 
-  // Derive project config ID from site config ID
-  // e.g. "ben/crm/sites/acme" → "ben/crm/project"
+  // "ben/crm/sites/acme" → projectConfigId "ben/crm/project", nsPrefix "ben/crm/"
   const projectConfigId = siteId.replace(/\/sites\/.*$/, '/project');
   const nsPrefix = siteId.replace(/\/sites\/.*$/, '/');
 
@@ -28,9 +27,9 @@ export default function SiteDetail() {
 
       setAllDatasets(datasets.filter(([id]) => id.startsWith(nsPrefix + 'datasets/')));
 
-      if (s.site_id) {
+      if (s.name) {
         try {
-          setSchemaNamespaces(await getSiteCollections(s.site_id));
+          setSchemaNamespaces(await getSiteCollections(s.name));
         } catch { setSchemaNamespaces([]); }
       }
     } catch (err) {
@@ -61,22 +60,22 @@ export default function SiteDetail() {
       <div className="breadcrumb">
         <Link to="/">Projects</Link>
         {projectEntry && (
-          <> / <Link to={`/project/${projectEntry[0]}`}>{projectEntry[1].name || 'Unnamed'}</Link></>
+          <> / <Link to={`/project/${projectEntry[0]}`}>{projectEntry[1].label || 'Unnamed'}</Link></>
         )}
-        {' / '}<strong>{site.name || site.site_id || 'Unnamed'}</strong>
+        {' / '}<strong>{site.label || site.name || 'Unnamed'}</strong>
       </div>
 
       <section className="detail-header">
-        <h2>{site.name || 'Unnamed Site'}</h2>
-        <p className="project-ns">{site.site_id || ''}</p>
-        {site.namespace && <p className="site-ns-detail">Namespace: <code>{site.namespace}</code></p>}
+        <h2>{site.label || 'Unnamed Site'}</h2>
+        <p className="project-ns">{site.name || ''}</p>
+        {site.project && <p className="site-ns-detail">Project: <code>{site.project}</code></p>}
         <div className="site-dataset-detail">
           Dataset:{' '}
           <select value={site.dataset || ''} onChange={handleDatasetChange}>
             <option value="">None</option>
             {allDatasets.map(([id, fields]) => (
-              <option key={id} value={fields.dataset_id || ''}>
-                {fields.name || fields.dataset_id}
+              <option key={id} value={fields.name || ''}>
+                {fields.label || fields.name}
               </option>
             ))}
           </select>
@@ -84,7 +83,7 @@ export default function SiteDetail() {
         {projectEntry && (
           <p className="site-project-detail">
             Project: <Link to={`/project/${projectEntry[0]}`} className="row-link">
-              {projectEntry[1].name || 'Unnamed'}
+              {projectEntry[1].label || 'Unnamed'}
             </Link>
           </p>
         )}

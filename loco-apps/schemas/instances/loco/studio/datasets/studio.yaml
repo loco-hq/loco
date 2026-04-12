@@ -1,4 +1,2 @@
-dataset_id: "studio"
-project: "studio"
-name: "Loco Studio"
+label: "Loco Studio"
 description: "Studio management data"

@@ -10,6 +10,7 @@ pub enum Error {
     MissingDependency(String),
     AlreadyExists(String),
     NotFound(String),
+    PropertyTemplateCollision { type_name: String, property: String },
 }
 
 impl fmt::Display for Error {
@@ -23,6 +24,10 @@ impl fmt::Display for Error {
             Error::MissingDependency(dep) => write!(f, "missing dependency: {dep}"),
             Error::AlreadyExists(name) => write!(f, "already exists: {name}"),
             Error::NotFound(name) => write!(f, "not found: {name}"),
+            Error::PropertyTemplateCollision { type_name, property } => write!(
+                f,
+                "type '{type_name}' declares property '{property}' which collides with a filePathTemplate variable"
+            ),
         }
     }
 }

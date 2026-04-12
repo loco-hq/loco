@@ -1,6 +1,3 @@
-site_id: "cards"
-project: "sales"
-name: "Sales Cards"
-namespace: "acme/sales"
+label: "Sales Cards"
 version: "0-draft"
 dataset: "sales-dev"

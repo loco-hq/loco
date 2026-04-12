@@ -1,4 +1,2 @@
-dataset_id: "dev"
-project: "pets"
-name: "pets Dev"
+label: "pets Dev"
 description: "Default development dataset"

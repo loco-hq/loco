@@ -14,9 +14,9 @@ export default function ProjectDetail() {
   const [datasets, setDatasets] = useState([]);
   const [error, setError] = useState(null);
 
-  // Derive the namespace prefix from the project config ID
-  // e.g. "ben/crm/project" → "ben/crm/"
+  // "ben/crm/project" → "ben/crm/" / "ben/crm"
   const nsPrefix = projectId.replace(/\/project$/, '/');
+  const projectPath = projectId.replace(/\/project$/, '');
 
   const load = useCallback(async () => {
     try {
@@ -42,10 +42,9 @@ export default function ProjectDetail() {
     e.preventDefault();
     const form = e.target;
     const fields = {
-      site_id: form.elements.site_id.value,
+      project: projectPath,
       name: form.elements.name.value,
-      project: project.namespace.split('/').pop(),
-      namespace: project.namespace,
+      label: form.elements.label.value,
       version: form.elements.version.value || '0.0.1-dev',
     };
     if (form.elements.dataset.value) {
@@ -64,11 +63,11 @@ export default function ProjectDetail() {
   const handleAddDataset = async (e) => {
     e.preventDefault();
     const form = e.target;
-    await addDataset(project.namespace, {
-      dataset_id: form.elements.dataset_id.value,
+    await addDataset({
+      project: projectPath,
       name: form.elements.name.value,
+      label: form.elements.label.value,
       description: form.elements.description.value,
-      project: project.namespace.split('/').pop(),
     });
     form.reset();
     load();
@@ -82,17 +81,15 @@ export default function ProjectDetail() {
   if (error) return <p className="error">Error: {error}</p>;
   if (!project) return <p>Loading...</p>;
 
-  const ns = project.namespace || '';
-
   return (
     <>
       <div className="breadcrumb">
-        <Link to="/">Projects</Link> / <strong>{project.name || 'Unnamed'}</strong>
+        <Link to="/">Projects</Link> / <strong>{project.label || 'Unnamed'}</strong>
       </div>
 
       <section className="detail-header">
-        <h2>{project.name || 'Unnamed'}</h2>
-        <p className="project-ns">{ns}</p>
+        <h2>{project.label || 'Unnamed'}</h2>
+        <p className="project-ns">{projectPath}</p>
         <p className="project-desc">{project.description || ''}</p>
         <button className="delete-btn" onClick={handleDelete}>Delete Project</button>
       </section>
@@ -100,14 +97,14 @@ export default function ProjectDetail() {
       <section>
         <h3>Sites <span className="count">({sites.length})</span></h3>
         <form className="add-form" onSubmit={handleAddSite}>
-          <input name="site_id" placeholder="Site ID (e.g. acme-prod)" required />
-          <input name="name" placeholder="Site name" required />
+          <input name="name" placeholder="Site name (e.g. acme-prod)" required />
+          <input name="label" placeholder="Site label" required />
           <input name="version" placeholder="Version" defaultValue="0.0.1-dev" required />
           <select name="dataset">
             <option value="">No dataset</option>
             {datasets.map(([id, fields]) => (
-              <option key={id} value={fields.dataset_id || ''}>
-                {fields.name || fields.dataset_id}
+              <option key={id} value={fields.name || ''}>
+                {fields.label || fields.name}
               </option>
             ))}
           </select>
@@ -119,11 +116,10 @@ export default function ProjectDetail() {
             <div key={id} className="site-row">
               <div>
                 <Link to={`/site/${id}`} className="row-link">
-                  <strong>{fields.site_id || ''}</strong>
+                  <strong>{fields.name || ''}</strong>
                 </Link>
-                <span className="site-name">{fields.name || ''}</span>
+                <span className="site-name">{fields.label || ''}</span>
                 {fields.dataset && <span className="site-dataset">dataset: {fields.dataset}</span>}
-                {fields.namespace && <span className="site-ns">ns: {fields.namespace}</span>}
               </div>
               <button className="delete-btn" onClick={() => handleDeleteSite(id)}>delete</button>
             </div>
@@ -134,8 +130,8 @@ export default function ProjectDetail() {
       <section>
         <h3>Datasets <span className="count">({datasets.length})</span></h3>
         <form className="add-form" onSubmit={handleAddDataset}>
-          <input name="dataset_id" placeholder="Dataset ID (e.g. acme-prod)" required />
-          <input name="name" placeholder="Dataset name" required />
+          <input name="name" placeholder="Dataset name (e.g. acme-prod)" required />
+          <input name="label" placeholder="Dataset label" required />
           <input name="description" placeholder="Description" />
           <button type="submit">Add Dataset</button>
         </form>
@@ -145,9 +141,9 @@ export default function ProjectDetail() {
             <div key={id} className="site-row">
               <div>
                 <Link to={`/dataset/${id}`} className="row-link">
-                  <strong>{fields.dataset_id || ''}</strong>
+                  <strong>{fields.name || ''}</strong>
                 </Link>
-                <span className="site-name">{fields.name || ''}</span>
+                <span className="site-name">{fields.label || ''}</span>
                 {fields.description && <span className="site-dataset">{fields.description}</span>}
               </div>
               <button className="delete-btn" onClick={() => handleDeleteDataset(id)}>delete</button>

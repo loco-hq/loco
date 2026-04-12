@@ -1,3 +1,1 @@
-collection: pet
-name: age
-type: integer
+type: "integer"

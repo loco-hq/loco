@@ -1,4 +1,2 @@
-dataset_id: "sales-dev"
-project: "sales"
-name: "Sales Dev Dataset"
+label: "Sales Dev Dataset"
 description: "Dev dataset for Sales"

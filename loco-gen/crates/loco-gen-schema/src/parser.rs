@@ -50,15 +50,26 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<Schema, Error> {
         properties.push(Property { name, field_type });
     }
 
-    Ok(Schema {
-        version,
-        type_def: TypeDef {
-            name: to_pascal_case(type_name),
-            description,
-            file_path_template,
-            properties,
-        },
-    })
+    let type_def = TypeDef {
+        name: to_pascal_case(type_name),
+        description,
+        file_path_template,
+        properties,
+    };
+
+    // Template variables become implicit fields — a declared property with the
+    // same name would shadow (or conflict with) them, so reject at parse time.
+    let template_vars = type_def.template_vars();
+    for prop in &type_def.properties {
+        if template_vars.iter().any(|v| v == &prop.name) {
+            return Err(Error::PropertyTemplateCollision {
+                type_name: type_def.name.clone(),
+                property: prop.name.clone(),
+            });
+        }
+    }
+
+    Ok(Schema { version, type_def })
 }
 
 /// Parse a schema from a file path. The type name is derived from the filename.
@@ -93,7 +104,7 @@ version: 1
 description: "A named collection of items"
 filePathTemplate: "${namespace}/versions/${version}/collection/${name}.yaml"
 properties:
-  name:
+  label:
     type: string
   item_count:
     type: integer
@@ -118,7 +129,7 @@ properties:
         let props = &schema.type_def.properties;
 
         let find = |name: &str| props.iter().find(|p| p.name == name).unwrap();
-        assert_eq!(find("name").field_type, FieldType::String);
+        assert_eq!(find("label").field_type, FieldType::String);
         assert_eq!(find("item_count").field_type, FieldType::Integer);
         assert_eq!(find("average_rating").field_type, FieldType::Float);
         assert_eq!(find("is_active").field_type, FieldType::Boolean);
@@ -129,6 +140,20 @@ properties:
         assert_eq!(to_pascal_case("collection"), "Collection");
         assert_eq!(to_pascal_case("my_type"), "MyType");
         assert_eq!(to_pascal_case("a_b_c"), "ABC");
+    }
+
+    #[test]
+    fn test_property_template_collision() {
+        let yaml = r#"
+version: 1
+filePathTemplate: "${project}/${name}.yaml"
+properties:
+  name:
+    type: string
+"#;
+        let err = parse_schema(yaml, "thing").unwrap_err();
+        assert!(matches!(err, Error::PropertyTemplateCollision { .. }));
+        assert!(err.to_string().contains("name"));
     }
 
     #[test]

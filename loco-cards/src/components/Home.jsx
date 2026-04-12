@@ -50,8 +50,8 @@ export default function Home() {
         {projects.map(([id, fields]) => (
           <Link key={id} to={`/project/${id}`} className="card card-link">
             <div className="card-suit">&#9830;</div>
-            <h3 className="card-name">{fields.name}</h3>
-            <p className="card-ns">{fields.namespace}</p>
+            <h3 className="card-name">{fields.label}</h3>
+            <p className="card-ns">{fields.project}</p>
           </Link>
         ))}
 

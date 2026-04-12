@@ -12,9 +12,9 @@ export default function ProjectDetail() {
   const [creatingDeck, setCreatingDeck] = useState(false);
   const [newDeckName, setNewDeckName] = useState('');
 
-  // Parse namespace into user/project and hardcode dev version
-  const parseNamespace = (ns) => {
-    const [user, proj] = (ns || '').split('/');
+  // Parse project path into user/project and hardcode dev version
+  const parseProjectPath = (path) => {
+    const [user, proj] = (path || '').split('/');
     return { user, project: proj, version: '0.0.1-dev' };
   };
 
@@ -22,7 +22,7 @@ export default function ProjectDetail() {
     try {
       const proj = await getProject(projectId);
       setProject(proj);
-      const { user, project: projSlug, version } = parseNamespace(proj.namespace);
+      const { user, project: projSlug, version } = parseProjectPath(proj.project);
       if (user && projSlug) {
         setDecks(await listDecks(user, projSlug, version));
       }
@@ -46,7 +46,7 @@ export default function ProjectDetail() {
     e.preventDefault();
     if (!newDeckName.trim() || !project) return;
     const slug = newDeckName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const { user, project: projSlug, version } = parseNamespace(project.namespace);
+    const { user, project: projSlug, version } = parseProjectPath(project.project);
     try {
       await createDeck(user, projSlug, version, slug);
       setNewDeckName('');
@@ -58,7 +58,7 @@ export default function ProjectDetail() {
   };
 
   const handleDeleteDeck = async (name) => {
-    const { user, project: projSlug, version } = parseNamespace(project.namespace);
+    const { user, project: projSlug, version } = parseProjectPath(project.project);
     try {
       await deleteDeck(user, projSlug, version, name);
       load();
@@ -76,8 +76,8 @@ export default function ProjectDetail() {
 
       <div className="detail-card">
         <div className="detail-suit">&#9830;</div>
-        <h2 className="detail-name">{project.name}</h2>
-        <p className="detail-ns">{project.namespace}</p>
+        <h2 className="detail-name">{project.label}</h2>
+        <p className="detail-ns">{project.project}</p>
         {project.description && (
           <p className="detail-desc">{project.description}</p>
         )}

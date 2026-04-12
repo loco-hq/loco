@@ -1,4 +1,2 @@
-dataset_id: "acme-cars"
-project: "cars"
-name: "Acme Cars"
+label: "Acme Cars"
 description: "Vehicle data for Acme"

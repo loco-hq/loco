@@ -1,6 +1,3 @@
-site_id: "cards"
-project: "testapp"
-name: "Test Cards Site"
-namespace: "alice/testapp"
+label: "Test Cards Site"
 version: "0-draft"
 dataset: "dev"

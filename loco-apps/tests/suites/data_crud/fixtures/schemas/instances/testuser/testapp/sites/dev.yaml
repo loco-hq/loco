@@ -1,6 +1,3 @@
-site_id: "dev"
-project: "testapp"
-name: "Dev Site"
-namespace: "testuser/testapp"
+label: "Dev Site"
 version: "0-draft"
 dataset: "dev"

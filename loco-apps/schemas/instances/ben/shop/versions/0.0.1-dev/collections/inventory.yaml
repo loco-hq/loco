@@ -1,3 +1,2 @@
-label_plural: inventory
-name: inventory
-label: inventory
+label: "inventory"
+label_plural: "inventory"

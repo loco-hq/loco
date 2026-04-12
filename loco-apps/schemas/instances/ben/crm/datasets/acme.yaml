@@ -1,4 +1,2 @@
-dataset_id: "acme"
-project: "crm"
-name: "Acme Production"
+label: "Acme Production"
 description: "Production data for Acme"

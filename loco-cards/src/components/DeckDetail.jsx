@@ -31,8 +31,8 @@ export default function DeckDetail() {
   const [editingId, setEditingId] = useState(null);
   const [editFields, setEditFields] = useState({});
 
-  const parseNamespace = (ns) => {
-    const [user, proj] = (ns || '').split('/');
+  const parseProjectPath = (path) => {
+    const [user, proj] = (path || '').split('/');
     return { user, project: proj, version: '0.0.1-dev', siteId: 'dev' };
   };
 
@@ -40,7 +40,7 @@ export default function DeckDetail() {
     try {
       const proj = await getProject(projectId);
       setProject(proj);
-      const { user, project: projSlug, version, siteId } = parseNamespace(proj.namespace);
+      const { user, project: projSlug, version, siteId } = parseProjectPath(proj.project);
       if (!user || !projSlug) return;
 
       const fieldList = await listFields(user, projSlug, version, deckName);
@@ -70,7 +70,7 @@ export default function DeckDetail() {
     e.preventDefault();
     if (!newFieldName.trim() || !project) return;
     const slug = newFieldName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
-    const { user, project: projSlug, version } = parseNamespace(project.namespace);
+    const { user, project: projSlug, version } = parseProjectPath(project.project);
     try {
       await createField(user, projSlug, version, deckName, slug, newFieldType);
       setNewFieldName('');
@@ -83,7 +83,7 @@ export default function DeckDetail() {
   };
 
   const handleDeleteField = async (name) => {
-    const { user, project: projSlug, version } = parseNamespace(project.namespace);
+    const { user, project: projSlug, version } = parseProjectPath(project.project);
     try {
       await deleteField(user, projSlug, version, deckName, name);
       load();
@@ -96,7 +96,7 @@ export default function DeckDetail() {
 
   const handleAddRecord = async (e) => {
     e.preventDefault();
-    const { user, project: projSlug, siteId } = parseNamespace(project.namespace);
+    const { user, project: projSlug, siteId } = parseProjectPath(project.project);
     try {
       await addRecord(user, projSlug, deckName, siteId, newRecordFields);
       setNewRecordFields({});
@@ -108,7 +108,7 @@ export default function DeckDetail() {
   };
 
   const handleDeleteRecord = async (id) => {
-    const { user, project: projSlug, siteId } = parseNamespace(project.namespace);
+    const { user, project: projSlug, siteId } = parseProjectPath(project.project);
     try {
       await deleteRecord(user, projSlug, deckName, siteId, id);
       load();
@@ -128,7 +128,7 @@ export default function DeckDetail() {
   };
 
   const handleSaveEdit = async (id) => {
-    const { user, project: projSlug, siteId } = parseNamespace(project.namespace);
+    const { user, project: projSlug, siteId } = parseProjectPath(project.project);
     try {
       await updateRecord(user, projSlug, deckName, siteId, id, editFields);
       setEditingId(null);
@@ -147,7 +147,7 @@ export default function DeckDetail() {
       <div className="breadcrumb-nav">
         <Link to="/" className="back-link">Projects</Link>
         <span className="breadcrumb-sep">&#8250;</span>
-        <Link to={`/project/${projectId}`} className="back-link">{project.name}</Link>
+        <Link to={`/project/${projectId}`} className="back-link">{project.label}</Link>
         <span className="breadcrumb-sep">&#8250;</span>
         <span className="breadcrumb-current">{deckName}</span>
       </div>
@@ -155,7 +155,7 @@ export default function DeckDetail() {
       <div className="detail-card">
         <div className="detail-suit suit-spade">&#9824;</div>
         <h2 className="detail-name">{deckName}</h2>
-        <p className="detail-ns">{project.namespace}.{deckName}</p>
+        <p className="detail-ns">{project.project}.{deckName}</p>
       </div>
 
       {/* --- Properties --- */}

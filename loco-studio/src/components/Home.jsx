@@ -20,8 +20,8 @@ export default function Home() {
     e.preventDefault();
     const form = e.target;
     await addProject({
-      name: form.elements.name.value,
-      namespace: form.elements.namespace.value,
+      project: form.elements.project.value,
+      label: form.elements.label.value,
       description: form.elements.description.value,
     });
     form.reset();
@@ -37,8 +37,8 @@ export default function Home() {
         <h2>Projects <span className="count">({projects.length})</span></h2>
       </div>
       <form className="add-form" onSubmit={handleAdd}>
-        <input name="name" placeholder="Project name" required />
-        <input name="namespace" placeholder="Namespace (e.g. ben/crm)" required />
+        <input name="label" placeholder="Project label" required />
+        <input name="project" placeholder="Project path (e.g. ben/crm)" required />
         <input name="description" placeholder="Description" />
         <button type="submit">Create Project</button>
       </form>
@@ -46,8 +46,8 @@ export default function Home() {
         {projects.length === 0 && <p className="empty-state">No projects yet.</p>}
         {projects.map(([id, fields]) => (
           <Link key={id} to={`/project/${id}`} className="project-card">
-            <h3>{fields.name || 'Unnamed'}</h3>
-            <p className="project-ns">{fields.namespace || ''}</p>
+            <h3>{fields.label || 'Unnamed'}</h3>
+            <p className="project-ns">{fields.project || ''}</p>
             <p className="project-desc">{fields.description || ''}</p>
           </Link>
         ))}

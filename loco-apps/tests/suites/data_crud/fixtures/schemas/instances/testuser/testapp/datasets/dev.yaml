@@ -1,4 +1,2 @@
-dataset_id: "dev"
-project: "testapp"
-name: "Dev Dataset"
+label: "Dev Dataset"
 description: "Test dataset for integration tests"

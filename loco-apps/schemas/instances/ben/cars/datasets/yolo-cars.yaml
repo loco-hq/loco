@@ -1,4 +1,2 @@
-description: Vehicle data for yolo
-dataset_id: yolo-cars
-project: cars
-name: Yolo Cars
+label: "Yolo Cars"
+description: "Vehicle data for yolo"

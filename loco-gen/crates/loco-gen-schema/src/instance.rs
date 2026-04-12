@@ -50,35 +50,22 @@ pub fn parse_instance(
 
     for prop in &type_def.properties {
         let key = serde_yaml::Value::String(prop.name.clone());
-        let val = mapping
-            .get(&key)
-            .ok_or(Error::MissingField("instance field"))?;
-
-        let field_value = match prop.field_type {
-            FieldType::String => {
-                let s = val.as_str().ok_or_else(|| {
-                    Error::InvalidValue(format!("expected string for '{}'", prop.name))
-                })?;
-                FieldValue::String(s.to_string())
-            }
-            FieldType::Integer => {
-                let i = val.as_i64().ok_or_else(|| {
-                    Error::InvalidValue(format!("expected integer for '{}'", prop.name))
-                })?;
-                FieldValue::Integer(i)
-            }
-            FieldType::Float => {
-                let f = val.as_f64().ok_or_else(|| {
-                    Error::InvalidValue(format!("expected float for '{}'", prop.name))
-                })?;
-                FieldValue::Float(f)
-            }
-            FieldType::Boolean => {
-                let b = val.as_bool().ok_or_else(|| {
-                    Error::InvalidValue(format!("expected boolean for '{}'", prop.name))
-                })?;
-                FieldValue::Boolean(b)
-            }
+        // Loose on load: missing or mistyped fields fall back to type defaults.
+        let field_value = match mapping.get(&key) {
+            Some(val) => match prop.field_type {
+                FieldType::String => FieldValue::String(
+                    val.as_str().map(|s| s.to_string()).unwrap_or_default(),
+                ),
+                FieldType::Integer => FieldValue::Integer(val.as_i64().unwrap_or(0)),
+                FieldType::Float => FieldValue::Float(val.as_f64().unwrap_or(0.0)),
+                FieldType::Boolean => FieldValue::Boolean(val.as_bool().unwrap_or(false)),
+            },
+            None => match prop.field_type {
+                FieldType::String => FieldValue::String(String::new()),
+                FieldType::Integer => FieldValue::Integer(0),
+                FieldType::Float => FieldValue::Float(0.0),
+                FieldType::Boolean => FieldValue::Boolean(false),
+            },
         };
         values.push((prop.name.clone(), field_value));
     }
@@ -402,26 +389,30 @@ label_plural: "Opportunities"
     }
 
     #[test]
-    fn test_parse_instance_missing_field() {
+    fn test_parse_instance_missing_field_defaults() {
+        // Loose on load: missing declared fields fall back to type defaults.
         let yaml = r#"
 name: "opportunity"
 label: "Opportunity"
 "#;
         let td = collection_type_def();
-        let result = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new());
-        assert!(result.is_err());
+        let inst = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new()).unwrap();
+        assert!(inst.values.iter().any(|v|
+            v == &("label_plural".to_string(), FieldValue::String(String::new()))));
     }
 
     #[test]
-    fn test_parse_instance_wrong_type() {
+    fn test_parse_instance_wrong_type_defaults() {
+        // Loose on load: type mismatches fall back to type defaults.
         let yaml = r#"
 name: 123
 label: "Opportunity"
 label_plural: "Opportunities"
 "#;
         let td = collection_type_def();
-        let result = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new());
-        assert!(result.is_err());
+        let inst = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new()).unwrap();
+        assert!(inst.values.iter().any(|v|
+            v == &("name".to_string(), FieldValue::String(String::new()))));
     }
 
     #[test]

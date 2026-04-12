@@ -1,4 +1,2 @@
-dataset_id: "cards"
-project: "cards"
-name: "Loco Cards"
+label: "Loco Cards"
 description: "Cards app data"

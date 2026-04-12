@@ -1,6 +1,3 @@
-dataset: acme-cars
-project: cars
-namespace: ben/cars
-version: 0.0.1-dev
-name: Acme Cars
-site_id: acme-cars
+label: "Acme Cars"
+version: "0.0.1-dev"
+dataset: "acme-cars"

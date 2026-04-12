@@ -1,4 +1,2 @@
-dataset_id: "alice-dev"
-project: "testapp"
-name: "Alice Dev Dataset"
+label: "Alice Dev Dataset"
 description: "Development dataset for Alice"

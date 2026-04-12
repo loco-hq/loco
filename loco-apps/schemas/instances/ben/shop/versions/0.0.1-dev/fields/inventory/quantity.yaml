@@ -1,3 +1,1 @@
-collection: inventory
-type: integer
-name: quantity
+type: "integer"

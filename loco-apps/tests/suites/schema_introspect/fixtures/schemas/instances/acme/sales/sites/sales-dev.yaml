@@ -1,6 +1,3 @@
-site_id: "sales-dev"
-project: "sales"
-name: "Sales Dev"
-namespace: "acme/sales"
+label: "Sales Dev"
 version: "0-draft"
 dataset: "sales-dev"

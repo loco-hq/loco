@@ -10,8 +10,7 @@ export default function DatasetDetail() {
   const [linkedSites, setLinkedSites] = useState([]);
   const [error, setError] = useState(null);
 
-  // Derive project config ID from dataset config ID
-  // e.g. "ben/crm/datasets/acme" → "ben/crm/project"
+  // "ben/crm/datasets/acme" → projectConfigId "ben/crm/project", nsPrefix "ben/crm/"
   const projectConfigId = datasetId.replace(/\/datasets\/.*$/, '/project');
   const nsPrefix = datasetId.replace(/\/datasets\/.*$/, '/');
 
@@ -26,7 +25,7 @@ export default function DatasetDetail() {
       if (proj) setProjectEntry(proj);
 
       setLinkedSites(allSites.filter(([id, fields]) =>
-        id.startsWith(nsPrefix + 'sites/') && fields.dataset === d.dataset_id
+        id.startsWith(nsPrefix + 'sites/') && fields.dataset === d.name
       ));
     } catch (err) {
       setError(err.message);
@@ -48,19 +47,19 @@ export default function DatasetDetail() {
       <div className="breadcrumb">
         <Link to="/">Projects</Link>
         {projectEntry && (
-          <> / <Link to={`/project/${projectEntry[0]}`}>{projectEntry[1].name || 'Unnamed'}</Link></>
+          <> / <Link to={`/project/${projectEntry[0]}`}>{projectEntry[1].label || 'Unnamed'}</Link></>
         )}
-        {' / '}<strong>{dataset.name || dataset.dataset_id || 'Unnamed'}</strong>
+        {' / '}<strong>{dataset.label || dataset.name || 'Unnamed'}</strong>
       </div>
 
       <section className="detail-header">
-        <h2>{dataset.name || 'Unnamed Dataset'}</h2>
-        <p className="project-ns">{dataset.dataset_id || ''}</p>
+        <h2>{dataset.label || 'Unnamed Dataset'}</h2>
+        <p className="project-ns">{dataset.name || ''}</p>
         {dataset.description && <p className="project-desc">{dataset.description}</p>}
         {projectEntry && (
           <p className="site-project-detail">
             Project: <Link to={`/project/${projectEntry[0]}`} className="row-link">
-              {projectEntry[1].name || 'Unnamed'}
+              {projectEntry[1].label || 'Unnamed'}
             </Link>
           </p>
         )}
@@ -75,10 +74,10 @@ export default function DatasetDetail() {
             <div key={id} className="site-row">
               <div>
                 <Link to={`/site/${id}`} className="row-link">
-                  <strong>{fields.site_id || ''}</strong>
+                  <strong>{fields.name || ''}</strong>
                 </Link>
-                <span className="site-name">{fields.name || ''}</span>
-                {fields.namespace && <span className="site-ns">ns: {fields.namespace}</span>}
+                <span className="site-name">{fields.label || ''}</span>
+                {fields.project && <span className="site-ns">project: {fields.project}</span>}
               </div>
             </div>
           ))}

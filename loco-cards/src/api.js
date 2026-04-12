@@ -50,12 +50,12 @@ export async function listProjects() {
   return request('/config/project/list');
 }
 
-export async function createProject(name, namespace) {
-  const id = `projects/${namespace}/project`;
+export async function createProject(label, project) {
+  const id = `projects/${project}/project`;
   return request(`/config/create/project/${id}`, {
     method: 'POST',
     body: JSON.stringify({
-      fields: { name, namespace, description: '' },
+      fields: { label, description: '' },
     }),
   });
 }
