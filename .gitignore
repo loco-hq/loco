@@ -24,3 +24,6 @@ Thumbs.db
 
 # Auth session/user data (local dev)
 auth/
+
+# My personal notes
+NOTES.md
