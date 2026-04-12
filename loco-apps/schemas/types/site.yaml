@@ -1,6 +1,6 @@
 version: 1
 description: "A site configuration that maps to a namespace and dataset"
-filePathTemplate: "${namespace}/sites/${site_id}.yaml"
+filePathTemplate: "${project}/sites/${name}.yaml"
 properties:
   site_id:
     type: string

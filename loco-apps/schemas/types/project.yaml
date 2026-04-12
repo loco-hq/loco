@@ -1,6 +1,6 @@
 version: 1
 description: "A project defining a schema namespace"
-filePathTemplate: "${namespace}/project.yaml"
+filePathTemplate: "${project}/project.yaml"
 properties:
   name:
     type: string

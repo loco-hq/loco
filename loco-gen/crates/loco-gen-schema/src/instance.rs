@@ -132,15 +132,15 @@ pub fn scan_all(
             .to_string_lossy()
             .to_string();
 
-        // Detect loco.yaml namespace configs: {namespace}/versions/{version}/loco.yaml
+        // Detect loco.yaml namespace configs: {project}/versions/{version}/loco.yaml
         if rel.ends_with("/loco.yaml") || rel == "loco.yaml" {
             if let Some(vars) = extract_template_vars(
                 &rel,
-                "${namespace}/versions/${version}/loco.yaml",
+                "${project}/versions/${version}/loco.yaml",
             ) {
-                let ns_str = vars.get("namespace").cloned().unwrap_or_default();
+                let project_path = vars.get("project").cloned().unwrap_or_default();
                 let version = vars.get("version").cloned().unwrap_or_default();
-                let (user, project) = ns_str.split_once('/').unwrap_or(("", &ns_str));
+                let (user, project) = project_path.split_once('/').unwrap_or(("", &project_path));
 
                 let yaml = std::fs::read_to_string(file_path)?;
                 let config = namespace::parse_namespace_config(&yaml)?;
@@ -216,7 +216,7 @@ pub fn scan_all(
 }
 
 /// Derive instance namespace/key from extracted template variables.
-/// For versioned types (template contains `${version}`): `{namespace}.{item_key}`
+/// For versioned types (template contains `${version}`): `{project}.{item_key}`
 ///   where item_key is the relative path after the version segment, minus `.yaml`.
 /// For unversioned types: the relative path minus `.yaml`.
 fn derive_namespace(
@@ -224,7 +224,11 @@ fn derive_namespace(
     vars: &HashMap<String, String>,
     rel_path: &str,
 ) -> String {
-    let ns = vars.get("namespace").cloned().unwrap_or_default();
+    let ns = vars
+        .get("project")
+        .or_else(|| vars.get("namespace"))
+        .cloned()
+        .unwrap_or_default();
     if template.contains("${version}") {
         // Versioned: build item_key from path segments after versions/{version}/
         // e.g., "ben/crm/versions/0.0.1-dev/field/account/company.yaml" → "account/company"

@@ -251,6 +251,21 @@ impl SchemaRegistry {
                 .unwrap_or_default()
         };
 
+        // Derive the type folder from the type's filePathTemplate, so plural
+        // folder names (e.g. "fields") come from a single source of truth.
+        let type_folder = self
+            .type_defs
+            .iter()
+            .find(|td| td.name.to_lowercase() == type_name)
+            .and_then(|td| {
+                td.file_path_template
+                    .split("versions/${version}/")
+                    .nth(1)
+                    .and_then(|rest| rest.split('/').next())
+            })
+            .unwrap_or(type_name)
+            .to_string();
+
         // Delete files from disk
         for ns in &to_delete {
             // Derive path from namespace: "user/project.parent/name" → file path
@@ -268,7 +283,7 @@ impl SchemaRegistry {
                 .join(project)
                 .join("versions")
                 .join(version)
-                .join(type_name)
+                .join(&type_folder)
                 .join(format!("{rel_path}.yaml"));
             let _ = delete_instance_yaml(&file_path);
         }
