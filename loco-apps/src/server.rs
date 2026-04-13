@@ -53,14 +53,6 @@ fn resolve_dataset_id(registry: &SchemaRegistry, project: &str, site_name: &str)
     Ok(format!("{project}/{dataset}"))
 }
 
-/// Extract project from a config ID like "ben/crm/datasets/dev" -> "ben/crm"
-fn project_from_config_id(id: &str) -> Option<&str> {
-    let end = id.find("/datasets/")
-        .or_else(|| id.find("/sites/"))
-        .or_else(|| id.find("/project"))?;
-    Some(&id[..end])
-}
-
 /// Build template_vars from a config ID for disk path resolution.
 /// - "ben/crm/project" -> {project: "ben/crm"}
 /// - "ben/crm/datasets/acme" -> {project: "ben/crm", name: "acme"}
@@ -854,7 +846,7 @@ async fn handle_config_create(
 
     // When a project is created, bootstrap a default "dev" site and dataset
     if type_name == "project" {
-        if let Some(project_path) = result.get("project") {
+        if let Some(project_path) = template_vars.get("project") {
             let project_slug = project_path.split('/').next_back().unwrap_or("project");
             let label = result.get("label").cloned().unwrap_or_else(|| project_slug.to_string());
 
@@ -919,13 +911,13 @@ async fn handle_config_delete(
 
         // Delete child datasets (which cascades to lake data)
         let datasets = state.registry.list_all_instances("dataset");
-        for (ds_id, ds_fields) in &datasets {
+        for (ds_id, _) in &datasets {
             if ds_id.starts_with(prefix) {
-                if let Some(dataset_name) = ds_fields.get("name") {
+                let ds_vars = template_vars_from_config_id(ds_id);
+                if let Some(dataset_name) = ds_vars.get("name") {
                     let qualified = format!("{project_path}/{dataset_name}");
                     let _ = state.adapter.delete_dataset(&qualified);
                 }
-                let ds_vars = template_vars_from_config_id(ds_id);
                 let _ = state.registry.delete_instance("dataset", ds_id, &ds_vars);
             }
         }
@@ -942,16 +934,14 @@ async fn handle_config_delete(
 
     // Cascade: when deleting a dataset, purge all its records from the lake
     if type_name == "dataset" {
-        if let Some(fields) = state.registry.get_instance(&type_name, &id) {
-            if let Some(dataset_name) = fields.get("name") {
-                let project_path = project_from_config_id(&id).unwrap_or("");
-                let qualified = format!("{project_path}/{dataset_name}");
-                if let Err(e) = state.adapter.delete_dataset(&qualified) {
-                    return error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!("failed to purge dataset records: {e}"),
-                    );
-                }
+        let ds_vars = template_vars_from_config_id(&id);
+        if let (Some(project_path), Some(dataset_name)) = (ds_vars.get("project"), ds_vars.get("name")) {
+            let qualified = format!("{project_path}/{dataset_name}");
+            if let Err(e) = state.adapter.delete_dataset(&qualified) {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("failed to purge dataset records: {e}"),
+                );
             }
         }
     }

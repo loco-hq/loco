@@ -129,3 +129,8 @@ fn suite_schema_introspect() {
 fn suite_authorization() {
     run_suite(&suites_dir().join("authorization"));
 }
+
+#[test]
+fn suite_project_lifecycle() {
+    run_suite(&suites_dir().join("project_lifecycle"));
+}
