@@ -1,4 +1,3 @@
-version: 1
 description: "A field belonging to a collection"
 filePathTemplate: "${project}/versions/${version}/fields/${collection}/${name}.yaml"
 properties:

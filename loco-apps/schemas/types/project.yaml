@@ -1,4 +1,3 @@
-version: 1
 description: "A project defining a schema namespace"
 filePathTemplate: "${project}/project.yaml"
 properties:

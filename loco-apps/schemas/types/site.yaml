@@ -1,4 +1,3 @@
-version: 1
 description: "A site configuration that maps to a namespace and dataset"
 filePathTemplate: "${project}/sites/${name}.yaml"
 properties:

@@ -1,66 +1,54 @@
 use std::path::Path;
 
+use indexmap::IndexMap;
+use serde::Deserialize;
+
 use crate::error::Error;
 use crate::types::{FieldType, Property, TypeDef};
 
-/// Parse a YAML schema file into a `TypeDef`.
+// ── Raw deserialization structs (serde shapes) ────────────────────────────────
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TypeDefRaw {
+    #[serde(default)]
+    description: String,
+    file_path_template: String,
+    properties: IndexMap<String, PropertyRaw>,
+}
+
+#[derive(Deserialize)]
+struct PropertyRaw {
+    #[serde(rename = "type")]
+    field_type: String,
+    items: Option<String>,
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Parse a YAML schema string into a `TypeDef`.
 /// The `type_name` is derived from the filename by the caller.
-/// Uses `serde_yaml::Value` to preserve the insertion order of properties.
 pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
-    let value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
-    let mapping = value
-        .as_mapping()
-        .ok_or(Error::MissingField("root mapping"))?;
-
-    let description = mapping
-        .get(serde_yaml::Value::String("description".into()))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let props_mapping = mapping
-        .get(serde_yaml::Value::String("properties".into()))
-        .and_then(|v| v.as_mapping())
-        .ok_or(Error::MissingField("properties"))?;
-
-    let file_path_template = mapping
-        .get(serde_yaml::Value::String("filePathTemplate".into()))
-        .and_then(|v| v.as_str())
-        .ok_or(Error::MissingField("filePathTemplate"))?
-        .to_string();
+    let raw: TypeDefRaw = serde_yaml::from_str(yaml)?;
 
     let mut properties = Vec::new();
-    for (key, val) in props_mapping {
-        let name = key
-            .as_str()
-            .ok_or(Error::MissingField("property name"))?
-            .to_string();
-        let prop_map = val
-            .as_mapping()
-            .ok_or(Error::MissingField("property definition"))?;
-        let type_str = prop_map
-            .get(serde_yaml::Value::String("type".into()))
-            .and_then(|v| v.as_str())
-            .ok_or(Error::MissingField("type"))?;
-        let field_type = if type_str == "list" {
-            let items_str = prop_map
-                .get(serde_yaml::Value::String("items".into()))
-                .and_then(|v| v.as_str())
-                .ok_or(Error::MissingField("items"))?;
-            let item_type = FieldType::parse_scalar(items_str)
-                .ok_or_else(|| Error::InvalidFieldType(items_str.to_string()))?;
+    for (name, prop) in raw.properties {
+        let field_type = if prop.field_type == "list" {
+            let items_str = prop.items.ok_or(Error::MissingField("items"))?;
+            let item_type = FieldType::parse_scalar(&items_str)
+                .ok_or_else(|| Error::InvalidFieldType(items_str.clone()))?;
             FieldType::List(Box::new(item_type))
         } else {
-            FieldType::parse_scalar(type_str)
-                .ok_or_else(|| Error::InvalidFieldType(type_str.to_string()))?
+            FieldType::parse_scalar(&prop.field_type)
+                .ok_or_else(|| Error::InvalidFieldType(prop.field_type.clone()))?
         };
         properties.push(Property { name, field_type });
     }
 
     let type_def = TypeDef {
         name: to_pascal_case(type_name),
-        description,
-        file_path_template,
+        description: raw.description,
+        file_path_template: raw.file_path_template,
         properties,
     };
 

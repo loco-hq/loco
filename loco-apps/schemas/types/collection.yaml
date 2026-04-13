@@ -1,4 +1,3 @@
-version: 1
 description: "A named collection of items"
 filePathTemplate: "${project}/versions/${version}/collections/${name}.yaml"
 properties:
