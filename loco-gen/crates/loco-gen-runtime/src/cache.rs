@@ -1,12 +1,13 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use crate::Value;
 
 /// A thread-safe cache that stores typed values keyed by string.
-/// Each entry is a map of field names to `Value`s.
+/// Each entry is a map of field names to `Value`s, wrapped in an `Arc` so
+/// concurrent reads are O(1) (a reference-count bump, not a deep clone).
 pub struct TypedCache {
-    inner: RwLock<HashMap<String, HashMap<String, Value>>>,
+    inner: RwLock<HashMap<String, Arc<HashMap<String, Value>>>>,
 }
 
 impl TypedCache {
@@ -16,17 +17,18 @@ impl TypedCache {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<HashMap<String, Value>> {
+    /// Returns a shared reference to the field map. Cloning the `Arc` is O(1).
+    pub fn get(&self, key: &str) -> Option<Arc<HashMap<String, Value>>> {
         let guard = self.inner.read().unwrap();
         guard.get(key).cloned()
     }
 
     pub fn set(&self, key: &str, value: HashMap<String, Value>) {
         let mut guard = self.inner.write().unwrap();
-        guard.insert(key.to_string(), value);
+        guard.insert(key.to_string(), Arc::new(value));
     }
 
-    pub fn remove(&self, key: &str) -> Option<HashMap<String, Value>> {
+    pub fn remove(&self, key: &str) -> Option<Arc<HashMap<String, Value>>> {
         let mut guard = self.inner.write().unwrap();
         guard.remove(key)
     }
@@ -58,10 +60,7 @@ mod tests {
         cache.set("my_key", map);
 
         let retrieved = cache.get("my_key").unwrap();
-        assert_eq!(
-            retrieved.get("name").unwrap().as_string(),
-            Some("test".to_string())
-        );
+        assert_eq!(retrieved.get("name").unwrap().as_string(), Some("test"));
         assert_eq!(retrieved.get("count").unwrap().as_integer(), Some(42));
     }
 

@@ -337,9 +337,40 @@ fn write_instance_yaml(path: &Path, fields: &HashMap<String, String>) -> Result<
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let yaml = serde_yaml::to_string(fields)?;
+    // List fields are stored in the registry as JSON-encoded strings (e.g. `["a","b"]`).
+    // Detect them and write proper YAML sequences so they round-trip correctly on re-read.
+    let mut map = serde_yaml::Mapping::new();
+    for (k, v) in fields {
+        let yaml_val = if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(v) {
+            serde_yaml::Value::Sequence(arr.into_iter().map(json_to_yaml_scalar).collect())
+        } else {
+            serde_yaml::Value::String(v.clone())
+        };
+        map.insert(serde_yaml::Value::String(k.clone()), yaml_val);
+    }
+    let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(map))?;
     std::fs::write(path, yaml)?;
     Ok(())
+}
+
+fn json_to_yaml_scalar(v: serde_json::Value) -> serde_yaml::Value {
+    match v {
+        serde_json::Value::String(s) => serde_yaml::Value::String(s),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                serde_yaml::Value::Number(i.into())
+            } else if let Some(f) = n.as_f64() {
+                serde_yaml::Value::Number(f.into())
+            } else {
+                serde_yaml::Value::Null
+            }
+        }
+        serde_json::Value::Bool(b) => serde_yaml::Value::Bool(b),
+        serde_json::Value::Array(arr) => {
+            serde_yaml::Value::Sequence(arr.into_iter().map(json_to_yaml_scalar).collect())
+        }
+        _ => serde_yaml::Value::Null,
+    }
 }
 
 fn delete_instance_yaml(path: &Path) -> Result<(), Error> {
@@ -709,5 +740,69 @@ mod tests {
 
         registry.create_instance("site", "loco/studio/sites/test", &vars, fields.clone()).unwrap();
         assert!(registry.create_instance("site", "loco/studio/sites/test", &vars, fields).is_err());
+    }
+
+    /// Regression test: list fields written via `create_instance` (or `update_instance`) must
+    /// survive a registry reload. Previously, lists were serialized as JSON strings into the
+    /// YAML file (e.g. `'["a","b"]'`), and `coerce_value` would then call `as_sequence()` on
+    /// that string, get `None`, and silently default the field to an empty list.
+    #[test]
+    fn test_list_field_roundtrips_through_disk() {
+        use crate::types::{FieldType, Property};
+
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_type = TypeDef {
+            name: "manifest".to_string(),
+            description: "".to_string(),
+            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            properties: vec![Property {
+                name: "dependencies".to_string(),
+                field_type: FieldType::List(Box::new(FieldType::String)),
+            }],
+        };
+
+        let registry = SchemaRegistry {
+            instances: RwLock::new(HashMap::new()),
+            type_defs: vec![manifest_type.clone()],
+            instances_dir: dir.path().to_path_buf(),
+        };
+
+        let vars: HashMap<String, String> = [
+            ("project".to_string(), "ben/crm".to_string()),
+            ("version".to_string(), "0.0.1-dev".to_string()),
+        ].into();
+
+        // The registry API stores list fields as JSON-encoded strings.
+        let mut fields = HashMap::new();
+        fields.insert(
+            "dependencies".to_string(),
+            r#"["loco/core@0.0.1-dev","alice/billing@0.1.0"]"#.to_string(),
+        );
+
+        // The namespace used at create-time; derive_namespace will produce "ben/crm.manifest"
+        // from the file path on reload, so we use that same key for consistency.
+        let ns = "ben/crm.manifest";
+        registry
+            .create_instance("manifest", ns, &vars, fields)
+            .unwrap();
+
+        // The YAML file must have a proper sequence, not the raw JSON string.
+        let yaml_path = dir.path().join("ben/crm/versions/0.0.1-dev/manifest.yaml");
+        let yaml_content = std::fs::read_to_string(&yaml_path).unwrap();
+        assert!(
+            !yaml_content.contains('['),
+            "YAML on disk should not contain a JSON array literal; got:\n{yaml_content}"
+        );
+
+        // Reload the registry from disk and verify both items are present.
+        let reloaded = SchemaRegistry::load(dir.path(), &[manifest_type]).unwrap();
+        let instance = reloaded
+            .get_instance("manifest", ns)
+            .expect("instance should survive reload");
+
+        let raw = instance.get("dependencies").expect("dependencies field missing after reload");
+        let deps: Vec<String> = serde_json::from_str(raw)
+            .expect("dependencies should be a valid JSON array in the registry");
+        assert_eq!(deps, vec!["loco/core@0.0.1-dev", "alice/billing@0.1.0"]);
     }
 }

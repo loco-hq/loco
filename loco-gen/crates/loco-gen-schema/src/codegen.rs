@@ -109,7 +109,7 @@ fn generate_from_cache(out: &mut String, type_def: &TypeDef, fields: &[(String, 
         match field_type {
             FieldType::String => {
                 out.push_str(&format!(
-                    "        let {ident} = map.get(\"{field_name}\").and_then(|v| v.as_string())?;\n"
+                    "        let {ident} = map.get(\"{field_name}\").and_then(|v| v.as_string())?.to_owned();\n"
                 ));
             }
             FieldType::Integer => {
@@ -129,7 +129,8 @@ fn generate_from_cache(out: &mut String, type_def: &TypeDef, fields: &[(String, 
             }
             FieldType::List(inner) => {
                 let extractor = match inner.as_ref() {
-                    FieldType::String => "as_string()",
+                    // as_string() returns &str; map to owned String for collection
+                    FieldType::String => "as_string().map(str::to_owned)",
                     FieldType::Integer => "as_integer()",
                     FieldType::Float => "as_float()",
                     FieldType::Boolean => "as_boolean()",

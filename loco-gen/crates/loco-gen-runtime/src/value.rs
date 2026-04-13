@@ -8,9 +8,9 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn as_string(&self) -> Option<String> {
+    pub fn as_string(&self) -> Option<&str> {
         match self {
-            Value::String(s) => Some(s.clone()),
+            Value::String(s) => Some(s.as_str()),
             _ => None,
         }
     }
@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn test_string_value() {
         let v = Value::String("hello".to_string());
-        assert_eq!(v.as_string(), Some("hello".to_string()));
+        assert_eq!(v.as_string(), Some("hello"));
         assert_eq!(v.as_integer(), None);
     }
 
