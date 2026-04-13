@@ -6,16 +6,20 @@
 
 # Login as alice
 POST http://127.0.0.1:{{port}}/auth/login
+X-Project-Id: alice/testapp
+X-Site-Id: cards
 Content-Type: application/json
-{"username": "alice", "site_id": "cards"}
+{"username": "alice"}
 HTTP 200
 [Captures]
 alice_token: jsonpath "$.data.token"
 
 # Login as bob
 POST http://127.0.0.1:{{port}}/auth/login
+X-Project-Id: bob/myapp
+X-Site-Id: cards
 Content-Type: application/json
-{"username": "bob", "site_id": "cards"}
+{"username": "bob"}
 HTTP 200
 [Captures]
 bob_token: jsonpath "$.data.token"

@@ -27,12 +27,6 @@ pub struct AppState {
 
 pub struct SiteId(pub String);
 
-/// Look up a site from the registry by its name field (global lookup).
-fn lookup_site(registry: &SchemaRegistry, site_name: &str) -> Option<HashMap<String, String>> {
-    registry.find_instance("site", "name", site_name)
-        .map(|(_, fields)| fields)
-}
-
 /// Look up a site scoped to a project + name.
 fn lookup_site_in_project(registry: &SchemaRegistry, project: &str, site_name: &str) -> Option<HashMap<String, String>> {
     let sites = registry.list_all_instances("site");
@@ -201,7 +195,9 @@ fn validate_project(state: &AppState, user: &str, project: &str) -> Result<(), B
 const CONFIG_SITES: &[&str] = &["studio", "cards"];
 
 fn require_config_site(auth_user: &AuthUser) -> Result<(), Response> {
-    if CONFIG_SITES.contains(&auth_user.site_id.as_str()) {
+    // site_id is fully qualified (e.g. "alice/testapp/cards"); check only the site name
+    let site_name = auth_user.site_id.rsplit('/').next().unwrap_or(&auth_user.site_id);
+    if CONFIG_SITES.contains(&site_name) {
         Ok(())
     } else {
         Err(error_response(
@@ -714,20 +710,30 @@ struct NamespaceCollections {
 
 async fn handle_schema_introspect(
     auth_user: AuthenticatedUser,
-    site: SiteId,
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
 
-    let site_fields = match lookup_site(&state.registry, &site.0) {
+    let project_id = headers.get("x-project-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string());
+    let site_name = headers.get("x-site-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string());
+
+    let (Some(project_id), Some(site_name)) = (project_id, site_name) else {
+        return error_response(StatusCode::BAD_REQUEST, "missing site context: use X-Project-Id and X-Site-Id headers");
+    };
+
+    let site_fields = match lookup_site_in_project(&state.registry, &project_id, &site_name) {
         Some(f) => f,
         None => return error_response(StatusCode::NOT_FOUND, "site not found"),
     };
 
-    let namespace = match site_fields.get("project") {
-        Some(ns) if !ns.is_empty() => ns.clone(),
-        _ => return error_response(StatusCode::BAD_REQUEST, "site has no project configured"),
-    };
+    let namespace = project_id.clone();
 
     let ns_user = namespace.split('/').next().unwrap_or("");
     if let Err(resp) = authorize_user(&auth_user.0.user, ns_user) { return resp; }
@@ -958,24 +964,38 @@ async fn handle_config_delete(
 #[derive(Deserialize)]
 struct LoginRequest {
     username: String,
-    site_id: String,
 }
 
 async fn handle_auth_login(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Response {
-    if lookup_site(&state.registry, &body.site_id).is_none() {
-        return error_response(StatusCode::BAD_REQUEST, &format!("unknown site: {}", body.site_id));
+    let project_id = headers.get("x-project-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string());
+    let site_name = headers.get("x-site-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string());
+
+    let (Some(project_id), Some(site_name)) = (project_id, site_name) else {
+        return error_response(StatusCode::BAD_REQUEST, "missing site context: use X-Project-Id and X-Site-Id headers");
+    };
+
+    if lookup_site_in_project(&state.registry, &project_id, &site_name).is_none() {
+        return error_response(StatusCode::BAD_REQUEST, &format!("unknown site: {site_name} in project {project_id}"));
     }
 
+    let qualified_site_id = format!("{project_id}/{site_name}");
     let credentials = LoginCredentials {
         username: body.username,
         password: None,
-        site_id: body.site_id.clone(),
+        site_id: qualified_site_id.clone(),
     };
 
-    match state.auth.login(&body.site_id, &credentials) {
+    match state.auth.login(&qualified_site_id, &credentials) {
         Ok(session) => ApiResponse::success(session).into_response(),
         Err(e) => auth_error_to_response(e),
     }

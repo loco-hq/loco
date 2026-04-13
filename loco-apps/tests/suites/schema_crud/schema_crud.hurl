@@ -3,8 +3,10 @@
 
 # Login as alice on a config-editing site
 POST http://127.0.0.1:{{port}}/auth/login
+X-Project-Id: alice/testapp
+X-Site-Id: cards
 Content-Type: application/json
-{"username": "alice", "site_id": "cards"}
+{"username": "alice"}
 HTTP 200
 [Captures]
 token: jsonpath "$.data.token"

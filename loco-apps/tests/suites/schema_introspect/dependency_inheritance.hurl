@@ -12,8 +12,10 @@
 
 # Login as acme on the cards site (config-editing site in acme/sales namespace)
 POST http://127.0.0.1:{{port}}/auth/login
+X-Project-Id: acme/sales
+X-Site-Id: cards
 Content-Type: application/json
-{"username": "acme", "site_id": "cards"}
+{"username": "acme"}
 HTTP 200
 [Captures]
 token: jsonpath "$.data.token"
@@ -21,6 +23,7 @@ token: jsonpath "$.data.token"
 # 1. Introspect sales-dev — should see all 3 namespaces
 GET http://127.0.0.1:{{port}}/schema/collections
 Authorization: Bearer {{token}}
+X-Project-Id: acme/sales
 X-Site-Id: sales-dev
 HTTP 200
 [Asserts]
@@ -45,6 +48,7 @@ jsonpath "$.data[2].collections[0].collection_fields" count == 1
 # 2. Introspect crm-dev — should see only 2 namespaces (no sales)
 GET http://127.0.0.1:{{port}}/schema/collections
 Authorization: Bearer {{token}}
+X-Project-Id: acme/crm
 X-Site-Id: crm-dev
 HTTP 200
 [Asserts]
@@ -59,6 +63,7 @@ jsonpath "$.data[1].collections[0].name" == "user"
 #    The deal collection's amount field should have correct metadata
 GET http://127.0.0.1:{{port}}/schema/collections
 Authorization: Bearer {{token}}
+X-Project-Id: acme/sales
 X-Site-Id: sales-dev
 HTTP 200
 [Asserts]
@@ -75,6 +80,7 @@ jsonpath "$.data[2].collections[0].collection_fields[0][1].type" == "string"
 # 4. Unknown site returns error
 GET http://127.0.0.1:{{port}}/schema/collections
 Authorization: Bearer {{token}}
+X-Project-Id: acme/sales
 X-Site-Id: nonexistent
 HTTP 404
 [Asserts]
