@@ -1,21 +1,16 @@
 use std::path::Path;
 
 use crate::error::Error;
-use crate::types::{FieldType, Property, Schema, TypeDef};
+use crate::types::{FieldType, Property, TypeDef};
 
-/// Parse a YAML schema file into a `Schema`.
+/// Parse a YAML schema file into a `TypeDef`.
 /// The `type_name` is derived from the filename by the caller.
 /// Uses `serde_yaml::Value` to preserve the insertion order of properties.
-pub fn parse_schema(yaml: &str, type_name: &str) -> Result<Schema, Error> {
+pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
     let value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
     let mapping = value
         .as_mapping()
         .ok_or(Error::MissingField("root mapping"))?;
-
-    let version = mapping
-        .get(serde_yaml::Value::String("version".into()))
-        .and_then(|v| v.as_u64())
-        .ok_or(Error::MissingField("version"))? as u32;
 
     let description = mapping
         .get(serde_yaml::Value::String("description".into()))
@@ -81,11 +76,11 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<Schema, Error> {
         }
     }
 
-    Ok(Schema { version, type_def })
+    Ok(type_def)
 }
 
 /// Parse a schema from a file path. The type name is derived from the filename.
-pub fn parse_schema_file(path: &Path) -> Result<Schema, Error> {
+pub fn parse_schema_file(path: &Path) -> Result<TypeDef, Error> {
     let type_name = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -128,17 +123,16 @@ properties:
 
     #[test]
     fn test_parse_schema() {
-        let schema = parse_schema(SAMPLE_YAML, "collection").unwrap();
-        assert_eq!(schema.version, 1);
-        assert_eq!(schema.type_def.name, "Collection");
-        assert_eq!(schema.type_def.description, "A named collection of items");
-        assert_eq!(schema.type_def.properties.len(), 4);
+        let type_def = parse_schema(SAMPLE_YAML, "collection").unwrap();
+        assert_eq!(type_def.name, "Collection");
+        assert_eq!(type_def.description, "A named collection of items");
+        assert_eq!(type_def.properties.len(), 4);
     }
 
     #[test]
     fn test_field_types() {
-        let schema = parse_schema(SAMPLE_YAML, "collection").unwrap();
-        let props = &schema.type_def.properties;
+        let type_def = parse_schema(SAMPLE_YAML, "collection").unwrap();
+        let props = &type_def.properties;
 
         let find = |name: &str| props.iter().find(|p| p.name == name).unwrap();
         assert_eq!(find("label").field_type, FieldType::String);
@@ -178,8 +172,8 @@ properties:
     type: list
     items: string
 "#;
-        let schema = parse_schema(yaml, "manifest").unwrap();
-        let prop = &schema.type_def.properties[0];
+        let type_def = parse_schema(yaml, "manifest").unwrap();
+        let prop = &type_def.properties[0];
         assert_eq!(prop.name, "dependencies");
         assert_eq!(
             prop.field_type,

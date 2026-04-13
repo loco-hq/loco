@@ -86,12 +86,6 @@ impl TypeDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Schema {
-    pub version: u32,
-    pub type_def: TypeDef,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum FieldValue {
     String(String),
     Integer(i64),

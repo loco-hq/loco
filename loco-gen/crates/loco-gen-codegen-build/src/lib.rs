@@ -26,10 +26,10 @@ pub fn generate(types_dir: &str, instances_dir: &str) {
         if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
             println!("cargo:rerun-if-changed={}", path.display());
 
-            let schema = loco_gen_schema::parser::parse_schema_file(&path)
+            let type_def = loco_gen_schema::parser::parse_schema_file(&path)
                 .unwrap_or_else(|e| panic!("failed to parse {}: {}", path.display(), e));
 
-            type_defs.push(schema.type_def);
+            type_defs.push(type_def);
         }
     }
 
