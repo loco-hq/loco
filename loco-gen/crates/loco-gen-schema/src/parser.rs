@@ -54,15 +54,23 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
         properties,
     };
 
-    // Every template variable must be declared as a property.
-    let declared: std::collections::HashSet<&str> =
-        type_def.properties.iter().map(|p| p.name.as_str()).collect();
+    // Every template variable must be declared as a createOnly: true, type: string property.
     for var in type_def.template_vars() {
-        if !declared.contains(var.as_str()) {
-            return Err(Error::TemplateVarNotDeclared {
+        let prop = type_def.properties.iter().find(|p| p.name == var);
+        match prop {
+            None => return Err(Error::TemplateVarNotDeclared {
                 type_name: type_def.name.clone(),
                 var,
-            });
+            }),
+            Some(p) if !p.create_only => return Err(Error::TemplateVarNotCreateOnly {
+                type_name: type_def.name.clone(),
+                var,
+            }),
+            Some(p) if p.field_type != FieldType::String => return Err(Error::TemplateVarNotString {
+                type_name: type_def.name.clone(),
+                var,
+            }),
+            _ => {}
         }
     }
 
@@ -166,6 +174,41 @@ properties:
 "#;
         let err = parse_schema(yaml, "thing").unwrap_err();
         assert!(matches!(err, Error::TemplateVarNotDeclared { .. }));
+        assert!(err.to_string().contains("project"));
+    }
+
+    #[test]
+    fn test_template_var_must_be_create_only() {
+        let yaml = r#"
+version: 1
+filePathTemplate: "${project}/${name}.yaml"
+properties:
+  project:
+    type: string
+  name:
+    type: string
+    createOnly: true
+"#;
+        let err = parse_schema(yaml, "thing").unwrap_err();
+        assert!(matches!(err, Error::TemplateVarNotCreateOnly { .. }));
+        assert!(err.to_string().contains("project"));
+    }
+
+    #[test]
+    fn test_template_var_must_be_string() {
+        let yaml = r#"
+version: 1
+filePathTemplate: "${project}/${name}.yaml"
+properties:
+  project:
+    type: integer
+    createOnly: true
+  name:
+    type: string
+    createOnly: true
+"#;
+        let err = parse_schema(yaml, "thing").unwrap_err();
+        assert!(matches!(err, Error::TemplateVarNotString { .. }));
         assert!(err.to_string().contains("project"));
     }
 

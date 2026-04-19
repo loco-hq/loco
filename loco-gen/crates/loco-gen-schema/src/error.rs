@@ -10,6 +10,8 @@ pub enum Error {
     AlreadyExists(String),
     NotFound(String),
     TemplateVarNotDeclared { type_name: String, var: String },
+    TemplateVarNotCreateOnly { type_name: String, var: String },
+    TemplateVarNotString { type_name: String, var: String },
 }
 
 impl fmt::Display for Error {
@@ -25,6 +27,14 @@ impl fmt::Display for Error {
             Error::TemplateVarNotDeclared { type_name, var } => write!(
                 f,
                 "type '{type_name}' uses template variable '{var}' which must be declared as a property"
+            ),
+            Error::TemplateVarNotCreateOnly { type_name, var } => write!(
+                f,
+                "type '{type_name}' property '{var}' is used in filePathTemplate and must have createOnly: true"
+            ),
+            Error::TemplateVarNotString { type_name, var } => write!(
+                f,
+                "type '{type_name}' property '{var}' is used in filePathTemplate and must have type: string"
             ),
         }
     }
