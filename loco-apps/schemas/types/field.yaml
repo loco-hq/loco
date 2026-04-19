@@ -1,5 +1,17 @@
 description: "A field belonging to a collection"
 filePathTemplate: "${project}/versions/${version}/fields/${collection}/${name}.yaml"
 properties:
+  project:
+    type: string
+    createOnly: true
+  version:
+    type: string
+    createOnly: true
+  collection:
+    type: string
+    createOnly: true
+  name:
+    type: string
+    createOnly: true
   type:
     type: string

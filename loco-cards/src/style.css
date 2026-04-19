@@ -399,6 +399,70 @@ body {
   margin-top: 0.75rem;
 }
 
+.btn-edit {
+  margin-top: 1rem;
+  padding: 0.35rem 0.75rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-edit:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.detail-edit-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.edit-label-input {
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-family: inherit;
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.edit-label-input:focus {
+  border-color: var(--accent);
+}
+
+.edit-desc-input {
+  font-family: inherit;
+  font-size: 0.95rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  margin-top: 0.5rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+  color: var(--text-muted);
+}
+
+.edit-desc-input:focus {
+  border-color: var(--accent);
+}
+
+.edit-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
 /* --- Decks --- */
 
 .decks-title {

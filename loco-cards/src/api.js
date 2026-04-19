@@ -65,6 +65,13 @@ export async function getProject(id) {
   return request(`/config/get/project/${id}`);
 }
 
+export async function updateProject(id, fields) {
+  return request(`/config/update/project/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ fields }),
+  });
+}
+
 export async function deleteProject(id) {
   return request(`/config/delete/project/${id}`, { method: 'DELETE' });
 }

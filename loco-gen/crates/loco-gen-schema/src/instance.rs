@@ -19,24 +19,21 @@ pub fn parse_instance(
         .as_mapping()
         .ok_or(Error::MissingField("root mapping"))?;
 
-    let declared: HashSet<&str> =
-        type_def.properties.iter().map(|p| p.name.as_str()).collect();
+    let template_vars = type_def.template_vars();
+    let template_var_set: HashSet<&str> = template_vars.iter().map(|s| s.as_str()).collect();
 
     let mut values = Vec::new();
-    for var_name in type_def.template_vars() {
-        if declared.contains(var_name.as_str()) {
-            continue;
-        }
-        let val = vars.get(&var_name).cloned().unwrap_or_default();
-        values.push((var_name, FieldValue::String(val)));
-    }
-
     for prop in &type_def.properties {
-        let key = serde_yaml::Value::String(prop.name.clone());
-        // Loose on load: missing or mistyped fields fall back to type defaults.
-        let field_value = match mapping.get(&key) {
-            Some(val) => coerce_value(val, &prop.field_type),
-            None => default_value(&prop.field_type),
+        let field_value = if template_var_set.contains(prop.name.as_str()) {
+            // Template vars source their value from the file path, not the YAML body.
+            FieldValue::String(vars.get(&prop.name).cloned().unwrap_or_default())
+        } else {
+            let key = serde_yaml::Value::String(prop.name.clone());
+            // Loose on load: missing or mistyped fields fall back to type defaults.
+            match mapping.get(&key) {
+                Some(val) => coerce_value(val, &prop.field_type),
+                None => default_value(&prop.field_type),
+            }
         };
         values.push((prop.name.clone(), field_value));
     }
@@ -262,18 +259,11 @@ mod tests {
             description: "A named collection of items".to_string(),
             file_path_template: "${namespace}/versions/${version}/collection/${name}.yaml".to_string(),
             properties: vec![
-                Property {
-                    name: "name".to_string(),
-                    field_type: FieldType::String,
-                },
-                Property {
-                    name: "label".to_string(),
-                    field_type: FieldType::String,
-                },
-                Property {
-                    name: "label_plural".to_string(),
-                    field_type: FieldType::String,
-                },
+                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "label".to_string(), field_type: FieldType::String, create_only: false },
+                Property { name: "label_plural".to_string(), field_type: FieldType::String, create_only: false },
             ],
         }
     }
@@ -284,14 +274,10 @@ mod tests {
             description: "A field belonging to a collection".to_string(),
             file_path_template: "${namespace}/versions/${version}/field/${collection}/${name}.yaml".to_string(),
             properties: vec![
-                Property {
-                    name: "name".to_string(),
-                    field_type: FieldType::String,
-                },
-                Property {
-                    name: "collection".to_string(),
-                    field_type: FieldType::String,
-                },
+                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "collection".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::String, create_only: true },
             ],
         }
     }
@@ -299,16 +285,18 @@ mod tests {
     #[test]
     fn test_parse_instance() {
         let yaml = r#"
-name: "opportunity"
 label: "Opportunity"
 label_plural: "Opportunities"
 "#;
         let td = collection_type_def();
-        let inst = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new()).unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("namespace".to_string(), "ben/crm".to_string());
+        vars.insert("version".to_string(), "0.0.1-dev".to_string());
+        vars.insert("name".to_string(), "opportunity".to_string());
+        let inst = parse_instance(yaml, &td, "ben/crm.opportunity", &vars).unwrap();
         assert_eq!(inst.type_name, "Collection");
         assert_eq!(inst.namespace, "ben/crm.opportunity");
-        // 3 declared properties + 2 non-shadowed template vars (namespace, version);
-        // `name` is shadowed by the declared `name` property.
+        // 5 declared properties: namespace, version, name (template vars) + label, label_plural
         assert_eq!(inst.values.len(), 5);
         assert!(inst.values.iter().any(|v| v == &("name".to_string(), FieldValue::String("opportunity".to_string()))));
         assert!(inst.values.iter().any(|v| v == &("label".to_string(), FieldValue::String("Opportunity".to_string()))));
@@ -347,10 +335,11 @@ label_plural: "Opportunities"
             name: "Manifest".to_string(),
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
-            properties: vec![Property {
-                name: "dependencies".to_string(),
-                field_type: FieldType::List(Box::new(FieldType::String)),
-            }],
+            properties: vec![
+                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
+            ],
         };
         let yaml = "dependencies:\n  - loco/core@0.0.1\n  - alice/billing@0.1.0\n";
         let inst = parse_instance(yaml, &td, "ben/crm/versions/0.0.1-dev/manifest", &HashMap::new()).unwrap();
@@ -370,10 +359,11 @@ label_plural: "Opportunities"
             name: "Manifest".to_string(),
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
-            properties: vec![Property {
-                name: "dependencies".to_string(),
-                field_type: FieldType::List(Box::new(FieldType::String)),
-            }],
+            properties: vec![
+                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
+            ],
         };
         let inst = parse_instance("{}", &td, "ns", &HashMap::new()).unwrap();
         let deps = inst.values.iter().find(|(k, _)| k == "dependencies").unwrap();
@@ -386,10 +376,11 @@ label_plural: "Opportunities"
             name: "Manifest".to_string(),
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
-            properties: vec![Property {
-                name: "dependencies".to_string(),
-                field_type: FieldType::List(Box::new(FieldType::String)),
-            }],
+            properties: vec![
+                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
+            ],
         };
         let inst = parse_instance("dependencies: not-a-list\n", &td, "ns", &HashMap::new()).unwrap();
         let deps = inst.values.iter().find(|(k, _)| k == "dependencies").unwrap();
@@ -468,9 +459,9 @@ label_plural: "Opportunities"
             description: "A project".to_string(),
             file_path_template: "${namespace}/project.yaml".to_string(),
             properties: vec![
-                Property { name: "name".to_string(), field_type: FieldType::String },
-                Property { name: "namespace".to_string(), field_type: FieldType::String },
-                Property { name: "description".to_string(), field_type: FieldType::String },
+                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::String, create_only: false },
+                Property { name: "description".to_string(), field_type: FieldType::String, create_only: false },
             ],
         };
 
@@ -479,7 +470,7 @@ label_plural: "Opportunities"
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::write(
             project_dir.join("project.yaml"),
-            "name: \"CRM\"\nnamespace: \"ben/crm\"\ndescription: \"Customer relationship management\"\n",
+            "name: \"CRM\"\ndescription: \"Customer relationship management\"\n",
         ).unwrap();
 
         let instances = scan_all(base, &[project_def]).unwrap();
@@ -498,9 +489,9 @@ label_plural: "Opportunities"
             description: "A project".to_string(),
             file_path_template: "${namespace}/project.yaml".to_string(),
             properties: vec![
-                Property { name: "name".to_string(), field_type: FieldType::String },
-                Property { name: "namespace".to_string(), field_type: FieldType::String },
-                Property { name: "description".to_string(), field_type: FieldType::String },
+                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::String, create_only: false },
+                Property { name: "description".to_string(), field_type: FieldType::String, create_only: false },
             ],
         };
 
@@ -511,7 +502,7 @@ label_plural: "Opportunities"
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::write(
             project_dir.join("project.yaml"),
-            "name: \"CRM\"\nnamespace: \"ben/crm\"\ndescription: \"CRM app\"\n",
+            "name: \"CRM\"\ndescription: \"CRM app\"\n",
         ).unwrap();
 
         // Create versioned collection

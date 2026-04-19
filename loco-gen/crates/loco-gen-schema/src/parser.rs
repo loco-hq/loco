@@ -22,6 +22,8 @@ struct PropertyRaw {
     #[serde(rename = "type")]
     field_type: String,
     items: Option<String>,
+    #[serde(default, rename = "createOnly")]
+    create_only: bool,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -42,7 +44,7 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
             FieldType::parse_scalar(&prop.field_type)
                 .ok_or_else(|| Error::InvalidFieldType(prop.field_type.clone()))?
         };
-        properties.push(Property { name, field_type });
+        properties.push(Property { name, field_type, create_only: prop.create_only });
     }
 
     let type_def = TypeDef {
@@ -52,14 +54,14 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
         properties,
     };
 
-    // Template variables become implicit fields — a declared property with the
-    // same name would shadow (or conflict with) them, so reject at parse time.
-    let template_vars = type_def.template_vars();
-    for prop in &type_def.properties {
-        if template_vars.iter().any(|v| v == &prop.name) {
-            return Err(Error::PropertyTemplateCollision {
+    // Every template variable must be declared as a property.
+    let declared: std::collections::HashSet<&str> =
+        type_def.properties.iter().map(|p| p.name.as_str()).collect();
+    for var in type_def.template_vars() {
+        if !declared.contains(var.as_str()) {
+            return Err(Error::TemplateVarNotDeclared {
                 type_name: type_def.name.clone(),
-                property: prop.name.clone(),
+                var,
             });
         }
     }
@@ -99,6 +101,15 @@ version: 1
 description: "A named collection of items"
 filePathTemplate: "${namespace}/versions/${version}/collection/${name}.yaml"
 properties:
+  namespace:
+    type: string
+    createOnly: true
+  version:
+    type: string
+    createOnly: true
+  name:
+    type: string
+    createOnly: true
   label:
     type: string
   item_count:
@@ -114,7 +125,7 @@ properties:
         let type_def = parse_schema(SAMPLE_YAML, "collection").unwrap();
         assert_eq!(type_def.name, "Collection");
         assert_eq!(type_def.description, "A named collection of items");
-        assert_eq!(type_def.properties.len(), 4);
+        assert_eq!(type_def.properties.len(), 7);
     }
 
     #[test]
@@ -123,7 +134,14 @@ properties:
         let props = &type_def.properties;
 
         let find = |name: &str| props.iter().find(|p| p.name == name).unwrap();
+        assert_eq!(find("namespace").field_type, FieldType::String);
+        assert!(find("namespace").create_only);
+        assert_eq!(find("version").field_type, FieldType::String);
+        assert!(find("version").create_only);
+        assert_eq!(find("name").field_type, FieldType::String);
+        assert!(find("name").create_only);
         assert_eq!(find("label").field_type, FieldType::String);
+        assert!(!find("label").create_only);
         assert_eq!(find("item_count").field_type, FieldType::Integer);
         assert_eq!(find("average_rating").field_type, FieldType::Float);
         assert_eq!(find("is_active").field_type, FieldType::Boolean);
@@ -137,17 +155,18 @@ properties:
     }
 
     #[test]
-    fn test_property_template_collision() {
+    fn test_template_var_must_be_declared() {
         let yaml = r#"
 version: 1
 filePathTemplate: "${project}/${name}.yaml"
 properties:
   name:
     type: string
+    createOnly: true
 "#;
         let err = parse_schema(yaml, "thing").unwrap_err();
-        assert!(matches!(err, Error::PropertyTemplateCollision { .. }));
-        assert!(err.to_string().contains("name"));
+        assert!(matches!(err, Error::TemplateVarNotDeclared { .. }));
+        assert!(err.to_string().contains("project"));
     }
 
     #[test]
@@ -156,12 +175,18 @@ properties:
 version: 1
 filePathTemplate: "${project}/versions/${version}/manifest.yaml"
 properties:
+  project:
+    type: string
+    createOnly: true
+  version:
+    type: string
+    createOnly: true
   dependencies:
     type: list
     items: string
 "#;
         let type_def = parse_schema(yaml, "manifest").unwrap();
-        let prop = &type_def.properties[0];
+        let prop = type_def.properties.iter().find(|p| p.name == "dependencies").unwrap();
         assert_eq!(prop.name, "dependencies");
         assert_eq!(
             prop.field_type,
@@ -175,6 +200,12 @@ properties:
 version: 1
 filePathTemplate: "${project}/${name}.yaml"
 properties:
+  project:
+    type: string
+    createOnly: true
+  name:
+    type: string
+    createOnly: true
   tags:
     type: list
 "#;
@@ -187,6 +218,12 @@ properties:
 version: 1
 filePathTemplate: "${project}/${name}.yaml"
 properties:
+  project:
+    type: string
+    createOnly: true
+  name:
+    type: string
+    createOnly: true
   nested:
     type: list
     items: list
@@ -200,6 +237,12 @@ properties:
 version: 1
 filePathTemplate: "${namespace}/${name}.yaml"
 properties:
+  namespace:
+    type: string
+    createOnly: true
+  name:
+    type: string
+    createOnly: true
   bad:
     type: datetime
 "#;

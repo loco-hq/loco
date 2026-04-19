@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getProject, deleteProject, listDecks, createDeck, deleteDeck } from '../api.js';
+import { getProject, updateProject, deleteProject, listDecks, createDeck, deleteDeck } from '../api.js';
 
 export default function ProjectDetail() {
   const { '*': projectId } = useParams();
@@ -9,6 +9,9 @@ export default function ProjectDetail() {
   const [decks, setDecks] = useState([]);
   const [error, setError] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editLabel, setEditLabel] = useState('');
+  const [editDescription, setEditDescription] = useState('');
   const [creatingDeck, setCreatingDeck] = useState(false);
   const [newDeckName, setNewDeckName] = useState('');
 
@@ -32,6 +35,23 @@ export default function ProjectDetail() {
   }, [projectId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleEdit = () => {
+    setEditLabel(project.label || '');
+    setEditDescription(project.description || '');
+    setEditing(true);
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    try {
+      await updateProject(projectId, { label: editLabel, description: editDescription });
+      setEditing(false);
+      load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   const handleDelete = async () => {
     try {
@@ -74,14 +94,41 @@ export default function ProjectDetail() {
     <section className="project-detail">
       <Link to="/" className="back-link">&#8592; All Projects</Link>
 
-      <div className="detail-card">
-        <div className="detail-suit">&#9830;</div>
-        <h2 className="detail-name">{project.label}</h2>
-        <p className="detail-ns">{project.project}</p>
-        {project.description && (
-          <p className="detail-desc">{project.description}</p>
-        )}
-      </div>
+      {editing ? (
+        <form className="detail-card detail-edit-form" onSubmit={handleSave}>
+          <div className="detail-suit">&#9830;</div>
+          <input
+            className="edit-label-input"
+            type="text"
+            value={editLabel}
+            onChange={(e) => setEditLabel(e.target.value)}
+            placeholder="Label"
+            autoFocus
+          />
+          <p className="detail-ns">{project.project}</p>
+          <textarea
+            className="edit-desc-input"
+            value={editDescription}
+            onChange={(e) => setEditDescription(e.target.value)}
+            placeholder="Description"
+            rows={3}
+          />
+          <div className="edit-actions">
+            <button type="submit" className="btn-create">Save</button>
+            <button type="button" className="btn-cancel" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+        </form>
+      ) : (
+        <div className="detail-card">
+          <div className="detail-suit">&#9830;</div>
+          <h2 className="detail-name">{project.label}</h2>
+          <p className="detail-ns">{project.project}</p>
+          {project.description && (
+            <p className="detail-desc">{project.description}</p>
+          )}
+          <button className="btn-edit" onClick={handleEdit}>Edit</button>
+        </div>
+      )}
 
       <h3 className="decks-title">
         Decks <span className="count">({decks.length})</span>

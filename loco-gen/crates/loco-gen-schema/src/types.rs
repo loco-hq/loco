@@ -35,6 +35,7 @@ impl FieldType {
 pub struct Property {
     pub name: String,
     pub field_type: FieldType,
+    pub create_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,23 +66,13 @@ impl TypeDef {
         result
     }
 
-    /// All generated struct fields in order: template variables that aren't
-    /// shadowed by a declared property (always `String`), then declared
-    /// properties in declaration order. A declared property with the same
-    /// name as a template variable shadows it.
+    /// All generated struct fields in declaration order.
+    /// Template variables must be declared as properties (enforced at parse time).
     pub fn all_fields(&self) -> Vec<(String, FieldType)> {
-        let declared: std::collections::HashSet<&str> =
-            self.properties.iter().map(|p| p.name.as_str()).collect();
-        let mut fields: Vec<(String, FieldType)> = self
-            .template_vars()
-            .into_iter()
-            .filter(|v| !declared.contains(v.as_str()))
-            .map(|name| (name, FieldType::String))
-            .collect();
-        for prop in &self.properties {
-            fields.push((prop.name.clone(), prop.field_type.clone()));
-        }
-        fields
+        self.properties
+            .iter()
+            .map(|p| (p.name.clone(), p.field_type.clone()))
+            .collect()
     }
 }
 

@@ -259,22 +259,12 @@ mod tests {
             description: "A named collection".to_string(),
             file_path_template: "${namespace}/versions/${version}/collection/${name}.yaml".to_string(),
             properties: vec![
-                Property {
-                    name: "name".to_string(),
-                    field_type: FieldType::String,
-                },
-                Property {
-                    name: "item_count".to_string(),
-                    field_type: FieldType::Integer,
-                },
-                Property {
-                    name: "average_rating".to_string(),
-                    field_type: FieldType::Float,
-                },
-                Property {
-                    name: "is_active".to_string(),
-                    field_type: FieldType::Boolean,
-                },
+                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "item_count".to_string(), field_type: FieldType::Integer, create_only: false },
+                Property { name: "average_rating".to_string(), field_type: FieldType::Float, create_only: false },
+                Property { name: "is_active".to_string(), field_type: FieldType::Boolean, create_only: false },
             ],
         }
     }
@@ -298,9 +288,9 @@ mod tests {
     }
 
     #[test]
-    fn test_template_vars_become_implicit_fields() {
+    fn test_template_vars_generate_as_declared_fields() {
         let code = generate(&sample_type_def(), &[]);
-        // Implicit fields from `${namespace}` and `${version}` in the template.
+        // Template vars are declared properties — they appear as regular struct fields.
         assert!(code.contains("namespace: String,"));
         assert!(code.contains("version: String,"));
         assert!(code.contains("pub fn namespace(&self) -> &str"));
@@ -334,10 +324,11 @@ mod tests {
             name: "Manifest".to_string(),
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
-            properties: vec![Property {
-                name: "dependencies".to_string(),
-                field_type: FieldType::List(Box::new(FieldType::String)),
-            }],
+            properties: vec![
+                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
+            ],
         };
         let instances = vec![Instance {
             type_name: "Manifest".to_string(),

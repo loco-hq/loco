@@ -1,6 +1,9 @@
 description: "A project defining a schema namespace"
 filePathTemplate: "${project}/project.yaml"
 properties:
+  project:
+    type: string
+    createOnly: true
   label:
     type: string
   description:

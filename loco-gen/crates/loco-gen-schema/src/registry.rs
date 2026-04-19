@@ -755,10 +755,11 @@ mod tests {
             name: "manifest".to_string(),
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
-            properties: vec![Property {
-                name: "dependencies".to_string(),
-                field_type: FieldType::List(Box::new(FieldType::String)),
-            }],
+            properties: vec![
+                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
+            ],
         };
 
         let registry = SchemaRegistry {
