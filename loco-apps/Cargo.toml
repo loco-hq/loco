@@ -8,7 +8,6 @@ name = "loco_apps"
 path = "src/lib.rs"
 
 [dependencies]
-loco-gen-runtime = { path = "../loco-gen/crates/loco-gen-runtime" }
 loco-gen-schema = { path = "../loco-gen/crates/loco-gen-schema" }
 loco-lake = { path = "../loco-lake/crates/loco-lake" }
 axum = "0.8"

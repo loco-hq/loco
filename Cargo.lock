@@ -430,7 +430,6 @@ dependencies = [
  "axum",
  "chrono",
  "loco-gen-codegen-build",
- "loco-gen-runtime",
  "loco-gen-schema",
  "loco-lake",
  "serde",
@@ -448,10 +447,6 @@ version = "0.1.0"
 dependencies = [
  "loco-gen-schema",
 ]
-
-[[package]]
-name = "loco-gen-runtime"
-version = "0.1.0"
 
 [[package]]
 name = "loco-gen-schema"
