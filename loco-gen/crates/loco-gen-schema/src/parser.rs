@@ -24,6 +24,8 @@ struct PropertyRaw {
     items: Option<String>,
     #[serde(default, rename = "createOnly")]
     create_only: bool,
+    #[serde(default)]
+    segments: Option<u32>,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -40,6 +42,8 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
             let item_type = FieldType::parse_scalar(&items_str)
                 .ok_or_else(|| Error::InvalidFieldType(items_str.clone()))?;
             FieldType::List(Box::new(item_type))
+        } else if prop.field_type == "slug" {
+            FieldType::Slug { segments: prop.segments.unwrap_or(1) }
         } else {
             FieldType::parse_scalar(&prop.field_type)
                 .ok_or_else(|| Error::InvalidFieldType(prop.field_type.clone()))?
@@ -66,7 +70,7 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
                 type_name: type_def.name.clone(),
                 var,
             }),
-            Some(p) if p.field_type != FieldType::String => return Err(Error::TemplateVarNotString {
+            Some(p) if !matches!(p.field_type, FieldType::Slug { .. }) => return Err(Error::TemplateVarNotSlug {
                 type_name: type_def.name.clone(),
                 var,
             }),
@@ -110,13 +114,14 @@ description: "A named collection of items"
 filePathTemplate: "${namespace}/versions/${version}/collection/${name}.yaml"
 properties:
   namespace:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   version:
-    type: string
+    type: slug
     createOnly: true
   name:
-    type: string
+    type: slug
     createOnly: true
   label:
     type: string
@@ -142,11 +147,11 @@ properties:
         let props = &type_def.properties;
 
         let find = |name: &str| props.iter().find(|p| p.name == name).unwrap();
-        assert_eq!(find("namespace").field_type, FieldType::String);
+        assert_eq!(find("namespace").field_type, FieldType::Slug { segments: 2 });
         assert!(find("namespace").create_only);
-        assert_eq!(find("version").field_type, FieldType::String);
+        assert_eq!(find("version").field_type, FieldType::Slug { segments: 1 });
         assert!(find("version").create_only);
-        assert_eq!(find("name").field_type, FieldType::String);
+        assert_eq!(find("name").field_type, FieldType::Slug { segments: 1 });
         assert!(find("name").create_only);
         assert_eq!(find("label").field_type, FieldType::String);
         assert!(!find("label").create_only);
@@ -169,7 +174,7 @@ version: 1
 filePathTemplate: "${project}/${name}.yaml"
 properties:
   name:
-    type: string
+    type: slug
     createOnly: true
 "#;
         let err = parse_schema(yaml, "thing").unwrap_err();
@@ -184,9 +189,9 @@ version: 1
 filePathTemplate: "${project}/${name}.yaml"
 properties:
   project:
-    type: string
+    type: slug
   name:
-    type: string
+    type: slug
     createOnly: true
 "#;
         let err = parse_schema(yaml, "thing").unwrap_err();
@@ -195,7 +200,7 @@ properties:
     }
 
     #[test]
-    fn test_template_var_must_be_string() {
+    fn test_template_var_must_be_slug() {
         let yaml = r#"
 version: 1
 filePathTemplate: "${project}/${name}.yaml"
@@ -204,12 +209,32 @@ properties:
     type: integer
     createOnly: true
   name:
-    type: string
+    type: slug
     createOnly: true
 "#;
         let err = parse_schema(yaml, "thing").unwrap_err();
-        assert!(matches!(err, Error::TemplateVarNotString { .. }));
+        assert!(matches!(err, Error::TemplateVarNotSlug { .. }));
         assert!(err.to_string().contains("project"));
+    }
+
+    #[test]
+    fn test_parse_slug_field() {
+        let yaml = r#"
+version: 1
+filePathTemplate: "${project}/${name}.yaml"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+"#;
+        let type_def = parse_schema(yaml, "thing").unwrap();
+        let find = |n: &str| type_def.properties.iter().find(|p| p.name == n).unwrap();
+        assert_eq!(find("project").field_type, FieldType::Slug { segments: 2 });
+        assert_eq!(find("name").field_type, FieldType::Slug { segments: 1 });
     }
 
     #[test]
@@ -219,10 +244,11 @@ version: 1
 filePathTemplate: "${project}/versions/${version}/manifest.yaml"
 properties:
   project:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   version:
-    type: string
+    type: slug
     createOnly: true
   dependencies:
     type: list
@@ -244,10 +270,11 @@ version: 1
 filePathTemplate: "${project}/${name}.yaml"
 properties:
   project:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   name:
-    type: string
+    type: slug
     createOnly: true
   tags:
     type: list
@@ -262,10 +289,11 @@ version: 1
 filePathTemplate: "${project}/${name}.yaml"
 properties:
   project:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   name:
-    type: string
+    type: slug
     createOnly: true
   nested:
     type: list
@@ -281,10 +309,11 @@ version: 1
 filePathTemplate: "${namespace}/${name}.yaml"
 properties:
   namespace:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   name:
-    type: string
+    type: slug
     createOnly: true
   bad:
     type: datetime

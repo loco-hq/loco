@@ -2,10 +2,11 @@ description: "A dataset that partitions data in the lake"
 filePathTemplate: "${project}/datasets/${name}.yaml"
 properties:
   project:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   name:
-    type: string
+    type: slug
     createOnly: true
   label:
     type: string

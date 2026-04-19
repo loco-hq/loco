@@ -5,10 +5,13 @@ pub enum FieldType {
     Float,
     Boolean,
     List(Box<FieldType>),
+    /// A path-safe identifier: `[a-z0-9_.-]+` per segment, `/`-separated.
+    /// `segments` controls how many `/`-separated parts are expected (default 1).
+    Slug { segments: u32 },
 }
 
 impl FieldType {
-    /// Parse a scalar type name. Lists require an `items` sub-key and are built
+    /// Parse a scalar type name. Lists and slugs have sub-keys and are built
     /// by the parser, not this function.
     pub fn parse_scalar(s: &str) -> Option<Self> {
         match s {
@@ -22,7 +25,7 @@ impl FieldType {
 
     pub fn rust_type(&self) -> String {
         match self {
-            FieldType::String => "String".to_string(),
+            FieldType::String | FieldType::Slug { .. } => "String".to_string(),
             FieldType::Integer => "i64".to_string(),
             FieldType::Float => "f64".to_string(),
             FieldType::Boolean => "bool".to_string(),

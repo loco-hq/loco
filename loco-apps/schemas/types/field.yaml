@@ -2,16 +2,17 @@ description: "A field belonging to a collection"
 filePathTemplate: "${project}/versions/${version}/fields/${collection}/${name}.yaml"
 properties:
   project:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   version:
-    type: string
+    type: slug
     createOnly: true
   collection:
-    type: string
+    type: slug
     createOnly: true
   name:
-    type: string
+    type: slug
     createOnly: true
   type:
     type: string

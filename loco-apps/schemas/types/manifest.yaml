@@ -2,10 +2,11 @@ description: "A versioned project manifest declaring dependencies"
 filePathTemplate: "${project}/versions/${version}/manifest.yaml"
 properties:
   project:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   version:
-    type: string
+    type: slug
     createOnly: true
   dependencies:
     type: list

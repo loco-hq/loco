@@ -11,7 +11,7 @@ pub enum Error {
     NotFound(String),
     TemplateVarNotDeclared { type_name: String, var: String },
     TemplateVarNotCreateOnly { type_name: String, var: String },
-    TemplateVarNotString { type_name: String, var: String },
+    TemplateVarNotSlug { type_name: String, var: String },
 }
 
 impl fmt::Display for Error {
@@ -32,9 +32,9 @@ impl fmt::Display for Error {
                 f,
                 "type '{type_name}' property '{var}' is used in filePathTemplate and must have createOnly: true"
             ),
-            Error::TemplateVarNotString { type_name, var } => write!(
+            Error::TemplateVarNotSlug { type_name, var } => write!(
                 f,
-                "type '{type_name}' property '{var}' is used in filePathTemplate and must have type: string"
+                "type '{type_name}' property '{var}' is used in filePathTemplate and must have type: slug"
             ),
         }
     }

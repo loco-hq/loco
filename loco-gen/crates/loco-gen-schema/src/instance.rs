@@ -48,7 +48,7 @@ pub fn parse_instance(
 /// Loose-on-load coercion of a YAML value into a `FieldValue` of the expected type.
 fn coerce_value(val: &serde_yaml::Value, field_type: &FieldType) -> FieldValue {
     match field_type {
-        FieldType::String => FieldValue::String(val.as_str().map(|s| s.to_string()).unwrap_or_default()),
+        FieldType::String | FieldType::Slug { .. } => FieldValue::String(val.as_str().map(|s| s.to_string()).unwrap_or_default()),
         FieldType::Integer => FieldValue::Integer(val.as_i64().unwrap_or(0)),
         FieldType::Float => FieldValue::Float(val.as_f64().unwrap_or(0.0)),
         FieldType::Boolean => FieldValue::Boolean(val.as_bool().unwrap_or(false)),
@@ -65,7 +65,7 @@ fn coerce_value(val: &serde_yaml::Value, field_type: &FieldType) -> FieldValue {
 /// Default value for a `FieldType` when the field is missing from the YAML.
 fn default_value(field_type: &FieldType) -> FieldValue {
     match field_type {
-        FieldType::String => FieldValue::String(String::new()),
+        FieldType::String | FieldType::Slug { .. } => FieldValue::String(String::new()),
         FieldType::Integer => FieldValue::Integer(0),
         FieldType::Float => FieldValue::Float(0.0),
         FieldType::Boolean => FieldValue::Boolean(false),
@@ -259,9 +259,9 @@ mod tests {
             description: "A named collection of items".to_string(),
             file_path_template: "${namespace}/versions/${version}/collection/${name}.yaml".to_string(),
             properties: vec![
-                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "name".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
                 Property { name: "label".to_string(), field_type: FieldType::String, create_only: false },
                 Property { name: "label_plural".to_string(), field_type: FieldType::String, create_only: false },
             ],
@@ -274,10 +274,10 @@ mod tests {
             description: "A field belonging to a collection".to_string(),
             file_path_template: "${namespace}/versions/${version}/field/${collection}/${name}.yaml".to_string(),
             properties: vec![
-                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "collection".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "name".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
+                Property { name: "collection".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
             ],
         }
     }
@@ -336,8 +336,8 @@ label_plural: "Opportunities"
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
             properties: vec![
-                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
                 Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
             ],
         };
@@ -360,8 +360,8 @@ label_plural: "Opportunities"
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
             properties: vec![
-                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
                 Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
             ],
         };
@@ -377,8 +377,8 @@ label_plural: "Opportunities"
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
             properties: vec![
-                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
                 Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
             ],
         };
@@ -459,7 +459,7 @@ label_plural: "Opportunities"
             description: "A project".to_string(),
             file_path_template: "${namespace}/project.yaml".to_string(),
             properties: vec![
-                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "name".to_string(), field_type: FieldType::String, create_only: false },
                 Property { name: "description".to_string(), field_type: FieldType::String, create_only: false },
             ],
@@ -489,7 +489,7 @@ label_plural: "Opportunities"
             description: "A project".to_string(),
             file_path_template: "${namespace}/project.yaml".to_string(),
             properties: vec![
-                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "name".to_string(), field_type: FieldType::String, create_only: false },
                 Property { name: "description".to_string(), field_type: FieldType::String, create_only: false },
             ],

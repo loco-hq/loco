@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -9,7 +9,8 @@ use crate::types::TypeDef;
 /// Thread-safe in-memory registry for instances of any TypeDef.
 /// Works with generic type names — knows nothing about domain concepts
 /// like "collection" or "field".
-type InstanceMap = HashMap<String, HashMap<String, HashMap<String, String>>>;
+/// Outer key: type name. Inner key: instance namespace (BTreeMap for efficient prefix queries).
+type InstanceMap = HashMap<String, BTreeMap<String, HashMap<String, String>>>;
 
 pub struct SchemaRegistry {
     /// All instances: type_name → { namespace → field_values }
@@ -78,7 +79,8 @@ impl SchemaRegistry {
         })
     }
 
-    /// List all instances of a type, filtered by a namespace prefix.
+    /// List all instances of a type whose namespace starts with `prefix`.
+    /// Uses a BTreeMap range scan — O(log n + results) rather than a full scan.
     pub fn list_instances(
         &self,
         type_name: &str,
@@ -89,8 +91,8 @@ impl SchemaRegistry {
             .get(type_name)
             .map(|type_map| {
                 type_map
-                    .iter()
-                    .filter(|(ns, _)| ns.starts_with(prefix))
+                    .range(prefix.to_string()..)
+                    .take_while(|(ns, _)| ns.starts_with(prefix))
                     .map(|(ns, fields)| (ns.clone(), fields.clone()))
                     .collect()
             })
@@ -756,8 +758,8 @@ mod tests {
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
             properties: vec![
-                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
                 Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
             ],
         };

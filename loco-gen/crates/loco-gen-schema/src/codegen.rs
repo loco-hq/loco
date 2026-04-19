@@ -81,7 +81,7 @@ fn generate_new(out: &mut String, type_def: &TypeDef, fields: &[(String, FieldTy
 fn generate_accessor(out: &mut String, field_name: &str, field_type: &FieldType) {
     let ident = rust_ident(field_name);
     let (return_type, body) = match field_type {
-        FieldType::String => ("&str".to_string(), format!("&self.{ident}")),
+        FieldType::String | FieldType::Slug { .. } => ("&str".to_string(), format!("&self.{ident}")),
         FieldType::Integer => ("i64".to_string(), format!("self.{ident}")),
         FieldType::Float => ("f64".to_string(), format!("self.{ident}")),
         FieldType::Boolean => ("bool".to_string(), format!("self.{ident}")),
@@ -107,7 +107,7 @@ fn generate_from_cache(out: &mut String, type_def: &TypeDef, fields: &[(String, 
     for (field_name, field_type) in fields {
         let ident = rust_ident(field_name);
         match field_type {
-            FieldType::String => {
+            FieldType::String | FieldType::Slug { .. } => {
                 out.push_str(&format!(
                     "        let {ident} = map.get(\"{field_name}\").and_then(|v| v.as_string())?.to_owned();\n"
                 ));
@@ -130,7 +130,7 @@ fn generate_from_cache(out: &mut String, type_def: &TypeDef, fields: &[(String, 
             FieldType::List(inner) => {
                 let extractor = match inner.as_ref() {
                     // as_string() returns &str; map to owned String for collection
-                    FieldType::String => "as_string().map(str::to_owned)",
+                    FieldType::String | FieldType::Slug { .. } => "as_string().map(str::to_owned)",
                     FieldType::Integer => "as_integer()",
                     FieldType::Float => "as_float()",
                     FieldType::Boolean => "as_boolean()",
@@ -159,13 +159,13 @@ fn generate_to_cache(out: &mut String, _type_def: &TypeDef, fields: &[(String, F
     for (field_name, field_type) in fields {
         let ident = rust_ident(field_name);
         let conversion = match field_type {
-            FieldType::String => format!("loco_gen_runtime::Value::String(self.{ident}.clone())"),
+            FieldType::String | FieldType::Slug { .. } => format!("loco_gen_runtime::Value::String(self.{ident}.clone())"),
             FieldType::Integer => format!("loco_gen_runtime::Value::Integer(self.{ident})"),
             FieldType::Float => format!("loco_gen_runtime::Value::Float(self.{ident})"),
             FieldType::Boolean => format!("loco_gen_runtime::Value::Boolean(self.{ident})"),
             FieldType::List(inner) => {
                 let wrap = match inner.as_ref() {
-                    FieldType::String => "loco_gen_runtime::Value::String(v.clone())",
+                    FieldType::String | FieldType::Slug { .. } => "loco_gen_runtime::Value::String(v.clone())",
                     FieldType::Integer => "loco_gen_runtime::Value::Integer(*v)",
                     FieldType::Float => "loco_gen_runtime::Value::Float(*v)",
                     FieldType::Boolean => "loco_gen_runtime::Value::Boolean(*v)",
@@ -259,9 +259,9 @@ mod tests {
             description: "A named collection".to_string(),
             file_path_template: "${namespace}/versions/${version}/collection/${name}.yaml".to_string(),
             properties: vec![
-                Property { name: "namespace".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "name".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
                 Property { name: "item_count".to_string(), field_type: FieldType::Integer, create_only: false },
                 Property { name: "average_rating".to_string(), field_type: FieldType::Float, create_only: false },
                 Property { name: "is_active".to_string(), field_type: FieldType::Boolean, create_only: false },
@@ -325,8 +325,8 @@ mod tests {
             description: "".to_string(),
             file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
             properties: vec![
-                Property { name: "project".to_string(), field_type: FieldType::String, create_only: true },
-                Property { name: "version".to_string(), field_type: FieldType::String, create_only: true },
+                Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
+                Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
                 Property { name: "dependencies".to_string(), field_type: FieldType::List(Box::new(FieldType::String)), create_only: false },
             ],
         };

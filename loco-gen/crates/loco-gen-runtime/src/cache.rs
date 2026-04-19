@@ -1,19 +1,20 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
 use crate::Value;
 
 /// A thread-safe cache that stores typed values keyed by string.
+/// Keys are stored in a BTreeMap so prefix-range queries are O(log n + results).
 /// Each entry is a map of field names to `Value`s, wrapped in an `Arc` so
 /// concurrent reads are O(1) (a reference-count bump, not a deep clone).
 pub struct TypedCache {
-    inner: RwLock<HashMap<String, Arc<HashMap<String, Value>>>>,
+    inner: RwLock<BTreeMap<String, Arc<HashMap<String, Value>>>>,
 }
 
 impl TypedCache {
     pub fn new() -> Self {
         TypedCache {
-            inner: RwLock::new(HashMap::new()),
+            inner: RwLock::new(BTreeMap::new()),
         }
     }
 

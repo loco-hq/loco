@@ -2,13 +2,14 @@ description: "A named collection of items"
 filePathTemplate: "${project}/versions/${version}/collections/${name}.yaml"
 properties:
   project:
-    type: string
+    type: slug
+    segments: 2
     createOnly: true
   version:
-    type: string
+    type: slug
     createOnly: true
   name:
-    type: string
+    type: slug
     createOnly: true
   label:
     type: string
