@@ -1,5 +1,8 @@
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+
+static SUITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Copy a directory tree recursively.
 fn copy_dir_all(src: &Path, dst: &Path) {
@@ -34,6 +37,8 @@ fn crate_dir() -> &'static Path {
 /// - `schemas/instances/`, `auth/` come from the suite's `fixtures/` folder
 ///   if present, otherwise empty dirs are created
 fn run_suite(suite_dir: &Path) {
+    let _guard = SUITE_LOCK.lock().unwrap();
+
     // 1. Build server root in a tempdir
     let tmp = tempfile::TempDir::new().unwrap();
 

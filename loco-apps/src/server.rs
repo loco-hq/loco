@@ -10,7 +10,18 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 
-use loco_gen_schema::registry::SchemaRegistry;
+use crate::{
+    Collection, Field, Site,
+    init_schema,
+    schema_list_all, schema_list, schema_get, schema_create, schema_update, schema_delete,
+    create_collection, update_collection, delete_collection,
+    get_collection, list_collections, list_all_collections,
+    create_field, update_field, delete_field, delete_fields_by_prefix,
+    list_fields, list_all_fields,
+    create_site, delete_site, list_all_sites,
+    create_dataset, delete_dataset, list_all_datasets,
+    has_project,
+};
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter, Record, Value};
 
 use crate::auth::{
@@ -21,29 +32,23 @@ use crate::auth::local::LocalAuthAdapter;
 
 pub struct AppState {
     pub adapter: Box<dyn DataAdapter>,
-    pub registry: SchemaRegistry,
     pub auth: Box<dyn AuthAdapter>,
 }
 
 pub struct SiteId(pub String);
 
-/// Look up a site scoped to a project + name.
-fn lookup_site_in_project(registry: &SchemaRegistry, project: &str, site_name: &str) -> Option<HashMap<String, String>> {
-    let sites = registry.list_all_instances("site");
-    sites.into_iter().find(|(_, fields)| {
-        fields.get("project").map(|p| p == project).unwrap_or(false)
-            && fields.get("name").map(|n| n == site_name).unwrap_or(false)
-    }).map(|(_, fields)| fields)
+fn lookup_site_in_project(project: &str, site_name: &str) -> Option<Site> {
+    list_all_sites()
+        .into_iter()
+        .find(|(_, site)| site.project() == project && site.name() == site_name)
+        .map(|(_, site)| site)
 }
 
-/// Resolve a qualified dataset ID from project + site name.
-/// Returns `{project}/{dataset_name}` for use as the data lake tenant key.
-fn resolve_dataset_id(registry: &SchemaRegistry, project: &str, site_name: &str) -> Result<String, String> {
-    let site = lookup_site_in_project(registry, project, site_name)
+fn resolve_dataset_id(project: &str, site_name: &str) -> Result<String, String> {
+    let site = lookup_site_in_project(project, site_name)
         .ok_or_else(|| format!("unknown site: {site_name} in project {project}"))?;
-    let dataset = site.get("dataset").filter(|s| !s.is_empty())
-        .map(|s| s.as_str())
-        .unwrap_or(site_name);
+    let dataset_field = site.dataset();
+    let dataset = if dataset_field.is_empty() { site_name } else { dataset_field };
     Ok(format!("{project}/{dataset}"))
 }
 
@@ -161,11 +166,10 @@ fn collection_key(user: &str, project: &str, name: &str) -> String {
     format!("{user}/{project}.{name}")
 }
 
-fn validate_collection(state: &AppState, user: &str, project: &str, name: &str) -> Result<(), Box<Response>> {
-    let found = state.registry
-        .list_instances("collection", &format!("{user}/{project}/"))
+fn validate_collection(user: &str, project: &str, name: &str) -> Result<(), Box<Response>> {
+    let found = list_collections(&format!("{user}/{project}/"))
         .into_iter()
-        .any(|(_, fields)| fields.get("name").map(|n| n == name).unwrap_or(false));
+        .any(|(_, c)| c.name() == name);
     if found {
         Ok(())
     } else {
@@ -176,9 +180,9 @@ fn validate_collection(state: &AppState, user: &str, project: &str, name: &str) 
     }
 }
 
-fn validate_project(state: &AppState, user: &str, project: &str) -> Result<(), Box<Response>> {
+fn validate_project(user: &str, project: &str) -> Result<(), Box<Response>> {
     let config_id = format!("{user}/{project}/project");
-    if state.registry.has_instance("project", &config_id) {
+    if has_project(&config_id) {
         Ok(())
     } else {
         Err(Box::new(error_response(
@@ -251,12 +255,12 @@ async fn handle_add(
     Json(body): Json<AddRecordRequest>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
+    if let Err(resp) = validate_collection(&user, &project, &name) {
         return *resp;
     }
 
     let namespace = format!("{user}/{project}");
-    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+    let dataset_id = match resolve_dataset_id(&namespace, &site.0) {
         Ok(id) => id,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
     };
@@ -285,12 +289,12 @@ async fn handle_list(
     Path((user, project, name)): Path<(String, String, String)>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
+    if let Err(resp) = validate_collection(&user, &project, &name) {
         return *resp;
     }
 
     let namespace = format!("{user}/{project}");
-    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+    let dataset_id = match resolve_dataset_id(&namespace, &site.0) {
         Ok(id) => id,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
     };
@@ -306,12 +310,12 @@ async fn handle_get(
     Path((user, project, name, id)): Path<(String, String, String, String)>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
+    if let Err(resp) = validate_collection(&user, &project, &name) {
         return *resp;
     }
 
     let namespace = format!("{user}/{project}");
-    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+    let dataset_id = match resolve_dataset_id(&namespace, &site.0) {
         Ok(id) => id,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
     };
@@ -328,12 +332,12 @@ async fn handle_delete(
     Path((user, project, name, id)): Path<(String, String, String, String)>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
+    if let Err(resp) = validate_collection(&user, &project, &name) {
         return *resp;
     }
 
     let namespace = format!("{user}/{project}");
-    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+    let dataset_id = match resolve_dataset_id(&namespace, &site.0) {
         Ok(id) => id,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
     };
@@ -350,12 +354,12 @@ async fn handle_update(
     Json(body): Json<AddRecordRequest>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
+    if let Err(resp) = validate_collection(&user, &project, &name) {
         return *resp;
     }
 
     let namespace = format!("{user}/{project}");
-    let dataset_id = match resolve_dataset_id(&state.registry, &namespace, &site.0) {
+    let dataset_id = match resolve_dataset_id(&namespace, &site.0) {
         Ok(id) => id,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
     };
@@ -394,12 +398,12 @@ async fn handle_update(
 
 async fn handle_meta_list(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, type_name)): Path<(String, String, String)>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    let entries = state.registry.list_instances(&type_name, &format!("{user}/{project}/"));
+    let entries = schema_list(&type_name, &format!("{user}/{project}/"));
     ApiResponse::success(entries).into_response()
 }
 
@@ -434,13 +438,13 @@ struct UpdateFieldRequest {
 
 async fn handle_schema_create_collection(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, version)): Path<(String, String, String)>,
     Json(body): Json<CreateCollectionRequest>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
     if let Err(resp) = require_draft(&version) {
@@ -454,10 +458,7 @@ async fn handle_schema_create_collection(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/collections/{}", body.name);
 
-    match state
-        .registry
-        .create_instance("collection", &namespace_key, fields)
-    {
+    match create_collection(&namespace_key, fields) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -465,44 +466,44 @@ async fn handle_schema_create_collection(
 
 async fn handle_schema_list_collections(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, _version)): Path<(String, String, String)>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
-    let entries = state.registry.list_instances("collection", &format!("{user}/{project}/"));
+    let entries = list_collections(&format!("{user}/{project}/"));
     ApiResponse::success(entries).into_response()
 }
 
 async fn handle_schema_get_collection(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, version, name)): Path<(String, String, String, String)>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
     let namespace = format!("{user}/{project}/versions/{version}/collections/{name}");
-    match state.registry.get_instance("collection", &namespace) {
-        Some(fields) => ApiResponse::success(fields).into_response(),
+    match get_collection(&namespace) {
+        Some(c) => ApiResponse::success(c).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("collection not found: {name}")),
     }
 }
 
 async fn handle_schema_update_collection(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, version, name)): Path<(String, String, String, String)>,
     Json(body): Json<UpdateCollectionRequest>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
     if let Err(resp) = require_draft(&version) {
@@ -519,10 +520,7 @@ async fn handle_schema_update_collection(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/collections/{name}");
 
-    match state
-        .registry
-        .update_instance("collection", &namespace_key, fields)
-    {
+    match update_collection(&namespace_key, fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -530,12 +528,12 @@ async fn handle_schema_update_collection(
 
 async fn handle_schema_delete_collection(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, version, name)): Path<(String, String, String, String)>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
     if let Err(resp) = require_draft(&version) {
@@ -544,12 +542,11 @@ async fn handle_schema_delete_collection(
 
     // First delete all fields belonging to this collection
     let field_prefix = format!("{user}/{project}/versions/{version}/fields/{name}/");
-    let _ = state.registry.delete_instances_by_prefix("field", &field_prefix);
+    let _ = delete_fields_by_prefix(&field_prefix);
 
     let namespace_key = format!("{user}/{project}/versions/{version}/collections/{name}");
 
-    match state.registry.delete_instance("collection", &namespace_key)
-    {
+    match delete_collection(&namespace_key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -557,13 +554,13 @@ async fn handle_schema_delete_collection(
 
 async fn handle_schema_create_field(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, version, collection)): Path<(String, String, String, String)>,
     Json(body): Json<CreateFieldRequest>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
     if let Err(resp) = require_draft(&version) {
@@ -577,7 +574,7 @@ async fn handle_schema_create_field(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{}", body.name);
 
-    match state.registry.create_instance("field", &namespace_key, fields) {
+    match create_field(&namespace_key, fields) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -585,28 +582,28 @@ async fn handle_schema_create_field(
 
 async fn handle_schema_list_fields(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, version, collection)): Path<(String, String, String, String)>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
     let prefix = format!("{user}/{project}/versions/{version}/fields/{collection}/");
-    let entries = state.registry.list_instances("field", &prefix);
+    let entries = list_fields(&prefix);
     ApiResponse::success(entries).into_response()
 }
 
 async fn handle_schema_update_field(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, version, collection, name)): Path<(String, String, String, String, String)>,
     Json(body): Json<UpdateFieldRequest>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
     if let Err(resp) = require_draft(&version) {
@@ -620,7 +617,7 @@ async fn handle_schema_update_field(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{name}");
 
-    match state.registry.update_instance("field", &namespace_key, fields) {
+    match update_field(&namespace_key, fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -628,12 +625,12 @@ async fn handle_schema_update_field(
 
 async fn handle_schema_delete_field(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path((user, project, version, collection, name)): Path<(String, String, String, String, String)>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    if let Err(resp) = validate_project(&state, &user, &project) {
+    if let Err(resp) = validate_project(&user, &project) {
         return *resp;
     }
     if let Err(resp) = require_draft(&version) {
@@ -642,7 +639,7 @@ async fn handle_schema_delete_field(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{name}");
 
-    match state.registry.delete_instance("field", &namespace_key) {
+    match delete_field(&namespace_key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -653,8 +650,8 @@ async fn handle_schema_delete_field(
 #[derive(Serialize)]
 struct CollectionWithFields {
     name: String,
-    fields: HashMap<String, String>,
-    collection_fields: Vec<(String, HashMap<String, String>)>,
+    fields: Collection,
+    collection_fields: Vec<(String, Field)>,
 }
 
 #[derive(Serialize)]
@@ -665,7 +662,7 @@ struct NamespaceCollections {
 
 async fn handle_schema_introspect(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
@@ -683,8 +680,8 @@ async fn handle_schema_introspect(
         return error_response(StatusCode::BAD_REQUEST, "missing site context: use X-Project-Id and X-Site-Id headers");
     };
 
-    let site_fields = match lookup_site_in_project(&state.registry, &project_id, &site_name) {
-        Some(f) => f,
+    let site = match lookup_site_in_project(&project_id, &site_name) {
+        Some(s) => s,
         None => return error_response(StatusCode::NOT_FOUND, "site not found"),
     };
 
@@ -692,14 +689,17 @@ async fn handle_schema_introspect(
 
     let ns_user = namespace.split('/').next().unwrap_or("");
     if let Err(resp) = authorize_user(&auth_user.0.user, ns_user) { return resp; }
-    let version = match site_fields.get("version") {
-        Some(v) if !v.is_empty() => v.clone(),
-        _ => return error_response(StatusCode::BAD_REQUEST, "site has no version configured"),
+    let version = {
+        let v = site.version();
+        if v.is_empty() {
+            return error_response(StatusCode::BAD_REQUEST, "site has no version configured");
+        }
+        v.to_string()
     };
     let namespace_str = format!("{namespace}@{version}");
 
     // Resolve the full dependency tree
-    let ns_pairs = match crate::manifest::resolve_dependency_tree(&state.registry, &namespace_str) {
+    let ns_pairs = match crate::manifest::resolve_dependency_tree(&namespace_str) {
         Ok(pairs) => pairs,
         Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
     };
@@ -707,14 +707,12 @@ async fn handle_schema_introspect(
     // For each namespace, gather collections and their fields
     let mut result: Vec<NamespaceCollections> = Vec::new();
     for (user, project) in &ns_pairs {
-        let collections = state.registry.list_instances("collection", &format!("{user}/{project}/"));
-        let all_fields = state.registry.list_instances("field", &format!("{user}/{project}/"));
+        let collections = list_collections(&format!("{user}/{project}/"));
+        let all_fields = list_fields(&format!("{user}/{project}/"));
 
         let mut coll_with_fields: Vec<CollectionWithFields> = Vec::new();
-        for (col_ns, col_fields) in &collections {
-            // col_ns = "{project}/versions/{version}/collections/{name}"
-            let col_name = col_ns.rsplit('/').next().unwrap_or("");
-            // Build matching field prefix: replace "/collections/" with "/fields/{col_name}/"
+        for (col_ns, col) in &collections {
+            let col_name = col.name();
             let version_prefix = col_ns.split("/collections/").next().unwrap_or("");
             let field_prefix = format!("{version_prefix}/fields/{col_name}/");
             let matching_fields: Vec<_> = all_fields
@@ -725,7 +723,7 @@ async fn handle_schema_introspect(
 
             coll_with_fields.push(CollectionWithFields {
                 name: col_name.to_string(),
-                fields: col_fields.clone(),
+                fields: col.clone(),
                 collection_fields: matching_fields,
             });
         }
@@ -748,12 +746,12 @@ struct CreateConfigRequest {
 
 async fn handle_config_list(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path(type_name): Path<String>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     let username = &auth_user.0.user.username;
-    let entries = state.registry.list_all_instances(&type_name);
+    let entries = schema_list_all(&type_name);
     let filtered: Vec<_> = entries
         .into_iter()
         .filter(|(id, _)| id.starts_with(&format!("{username}/")))
@@ -773,7 +771,7 @@ fn split_config_path(path: &str) -> Option<(String, String)> {
 
 async fn handle_config_get(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
@@ -783,7 +781,7 @@ async fn handle_config_get(
     if let Some(path_user) = user_from_config_id(&id) {
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
-    match state.registry.get_instance(&type_name, &id) {
+    match schema_get(&type_name, &id) {
         Some(fields) => ApiResponse::success(fields).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("{type_name} not found: {id}")),
     }
@@ -791,7 +789,7 @@ async fn handle_config_get(
 
 async fn handle_config_create(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path(path): Path<String>,
     Json(body): Json<CreateConfigRequest>,
 ) -> Response {
@@ -803,7 +801,7 @@ async fn handle_config_create(
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
     let template_vars = template_vars_from_config_id(&id);
-    let result = match state.registry.create_instance(&type_name, &id, body.fields) {
+    let result = match schema_create(&type_name, &id, body.fields) {
         Ok(r) => r,
         Err(e) => return schema_error_to_response(e),
     };
@@ -818,14 +816,14 @@ async fn handle_config_create(
             dataset_fields.insert("label".to_string(), format!("{label} Dev"));
             dataset_fields.insert("description".to_string(), "Default development dataset".to_string());
             let dataset_config_id = format!("{project_path}/datasets/dev");
-            let _ = state.registry.create_instance("dataset", &dataset_config_id, dataset_fields);
+            let _ = create_dataset(&dataset_config_id, dataset_fields);
 
             let mut site_fields = HashMap::new();
             site_fields.insert("label".to_string(), format!("{label} Dev"));
             site_fields.insert("version".to_string(), "0.0.1-dev".to_string());
             site_fields.insert("dataset".to_string(), "dev".to_string());
             let site_config_id = format!("{project_path}/sites/dev");
-            let _ = state.registry.create_instance("site", &site_config_id, site_fields);
+            let _ = create_site(&site_config_id, site_fields);
         }
     }
 
@@ -834,7 +832,7 @@ async fn handle_config_create(
 
 async fn handle_config_update(
     auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path(path): Path<String>,
     Json(body): Json<CreateConfigRequest>,
 ) -> Response {
@@ -845,7 +843,7 @@ async fn handle_config_update(
     if let Some(path_user) = user_from_config_id(&id) {
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
-    match state.registry.update_instance(&type_name, &id, body.fields) {
+    match schema_update(&type_name, &id, body.fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -871,23 +869,23 @@ async fn handle_config_delete(
         let project_path = prefix.trim_end_matches('/');
 
         // Delete child datasets (which cascades to lake data)
-        let datasets = state.registry.list_all_instances("dataset");
+        let datasets = list_all_datasets();
         for (ds_id, _) in &datasets {
             if ds_id.starts_with(prefix) {
-                let ds_vars = template_vars_from_config_id(ds_id);
+                let ds_vars = template_vars_from_config_id(&ds_id);
                 if let Some(dataset_name) = ds_vars.get("name") {
                     let qualified = format!("{project_path}/{dataset_name}");
                     let _ = state.adapter.delete_dataset(&qualified);
                 }
-                let _ = state.registry.delete_instance("dataset", ds_id);
+                let _ = delete_dataset(&ds_id);
             }
         }
 
         // Delete child sites
-        let sites = state.registry.list_all_instances("site");
+        let sites = list_all_sites();
         for (site_id, _) in &sites {
             if site_id.starts_with(prefix) {
-                let _ = state.registry.delete_instance("site", site_id);
+                let _ = delete_site(&site_id);
             }
         }
     }
@@ -906,7 +904,7 @@ async fn handle_config_delete(
         }
     }
 
-    match state.registry.delete_instance(&type_name, &id) {
+    match schema_delete(&type_name, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -937,7 +935,7 @@ async fn handle_auth_login(
         return error_response(StatusCode::BAD_REQUEST, "missing site context: use X-Project-Id and X-Site-Id headers");
     };
 
-    if lookup_site_in_project(&state.registry, &project_id, &site_name).is_none() {
+    if lookup_site_in_project(&project_id, &site_name).is_none() {
         return error_response(StatusCode::BAD_REQUEST, &format!("unknown site: {site_name} in project {project_id}"));
     }
 
@@ -1114,42 +1112,25 @@ pub fn build_app() -> Router {
 pub fn build_app_with_root(root: &std::path::Path) -> Router {
     let crate_dir = root;
 
-    // Load type definitions for runtime schema loading
-    let types_dir = crate_dir.join("schemas/types");
-    let mut type_defs = Vec::new();
-    if types_dir.exists() {
-        for entry in std::fs::read_dir(&types_dir).expect("failed to read schemas/types") {
-            let entry = entry.expect("failed to read type entry");
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-                let type_def = loco_gen_schema::parser::parse_schema_file(&path)
-                    .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()));
-                type_defs.push(type_def);
-            }
-        }
-    }
-
-    // Load schema registry from disk
+    // Initialize schema from disk
     let instances_dir = crate_dir.join("schemas/instances");
-    let registry = SchemaRegistry::load(&instances_dir, &type_defs)
-        .expect("failed to load schema registry");
+    init_schema(&instances_dir).expect("failed to load schema");
 
-    crate::manifest::validate_manifests(&registry)
-        .expect("manifest validation failed");
+    crate::manifest::validate_manifests().expect("manifest validation failed");
 
-    let all_collections = registry.list_all_instances("collection");
+    let all_collections = list_all_collections();
     println!("Loaded {} collection(s):", all_collections.len());
     for (ns, _) in &all_collections {
         println!("  - {ns}");
     }
 
-    let all_fields = registry.list_all_instances("field");
+    let all_fields = list_all_fields();
     println!("Loaded {} field(s):", all_fields.len());
     for (ns, _) in &all_fields {
         println!("  - {ns}");
     }
 
-    let all_sites = registry.list_all_instances("site");
+    let all_sites = list_all_sites();
     println!("Loaded {} site(s):", all_sites.len());
     for (id, _) in &all_sites {
         println!("  - {id}");
@@ -1166,7 +1147,6 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
 
     let state = Arc::new(AppState {
         adapter,
-        registry,
         auth: auth_adapter,
     });
 

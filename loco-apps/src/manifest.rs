@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 
-use loco_gen_schema::registry::SchemaRegistry;
+use crate::Manifest;
 
 #[derive(Debug)]
 pub enum ManifestError {
@@ -32,40 +32,26 @@ pub fn parse_dependency(dep: &str) -> Result<(&str, &str, &str), ManifestError> 
     Ok((user, project, version))
 }
 
-/// Look up a Manifest's fields by (project, version). Returns `None` if no
-/// matching Manifest instance is registered.
-fn find_manifest(
-    registry: &SchemaRegistry,
-    project: &str,
-    version: &str,
-) -> Option<HashMap<String, String>> {
-    registry
-        .list_all_instances("manifest")
+fn find_manifest(project: &str, version: &str) -> Option<Manifest> {
+    crate::list_all_manifests()
         .into_iter()
-        .find(|(_, fields)| {
-            fields.get("project").map(|p| p == project).unwrap_or(false)
-                && fields.get("version").map(|v| v == version).unwrap_or(false)
-        })
-        .map(|(_, fields)| fields)
+        .find(|(_, m)| m.project() == project && m.version() == version)
+        .map(|(_, m)| m)
 }
 
-/// Read the `dependencies` list from a Manifest's fields. The registry
-/// stores list values as JSON strings (see `instance_values_to_strings` in
-/// loco-gen-schema).
-fn parse_dependencies(fields: &HashMap<String, String>) -> Vec<String> {
-    fields
-        .get("dependencies")
-        .and_then(|raw| serde_json::from_str(raw).ok())
-        .unwrap_or_default()
+fn manifest_dep_key(manifest: &Manifest) -> Option<String> {
+    let project = manifest.project();
+    let version = manifest.version();
+    if project.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some(format!("{project}@{version}"))
 }
 
 /// Given a root dependency string like `ben/cars@0.0.1-dev`, walk the full
 /// transitive dependency graph via Manifest instances. Returns every
 /// `(user, project)` reachable from the root, root first.
-pub fn resolve_dependency_tree(
-    registry: &SchemaRegistry,
-    root: &str,
-) -> Result<Vec<(String, String)>, ManifestError> {
+pub fn resolve_dependency_tree(root: &str) -> Result<Vec<(String, String)>, ManifestError> {
     let (root_user, root_project, root_version) = parse_dependency(root)?;
 
     let mut visited: HashSet<(String, String)> = HashSet::new();
@@ -84,9 +70,9 @@ pub fn resolve_dependency_tree(
         result.push((user.clone(), project.clone()));
 
         let project_str = format!("{user}/{project}");
-        if let Some(fields) = find_manifest(registry, &project_str, &version) {
-            for dep in parse_dependencies(&fields) {
-                let (du, dp, dv) = parse_dependency(&dep)?;
+        if let Some(manifest) = find_manifest(&project_str, &version) {
+            for dep in manifest.dependencies() {
+                let (du, dp, dv) = parse_dependency(dep)?;
                 queue.push_back((du.to_string(), dp.to_string(), dv.to_string()));
             }
         }
@@ -97,36 +83,28 @@ pub fn resolve_dependency_tree(
 
 /// Walk every Manifest in the registry and verify that each declared
 /// dependency is itself present as a Manifest. Intended for startup.
-pub fn validate_manifests(registry: &SchemaRegistry) -> Result<(), ManifestError> {
-    let all = registry.list_all_instances("manifest");
+pub fn validate_manifests() -> Result<(), ManifestError> {
+    let all = crate::list_all_manifests();
     let available: HashSet<String> = all
         .iter()
-        .filter_map(|(_, fields)| manifest_dep_key(fields))
+        .filter_map(|(_, m)| manifest_dep_key(m))
         .collect();
 
-    for (_, fields) in &all {
-        let Some(from) = manifest_dep_key(fields) else { continue };
-        for dep in parse_dependencies(fields) {
-            parse_dependency(&dep)?;
-            if !available.contains(&dep) {
+    for (_, manifest) in &all {
+        let Some(from) = manifest_dep_key(manifest) else {
+            continue;
+        };
+        for dep in manifest.dependencies() {
+            parse_dependency(dep)?;
+            if !available.contains(dep.as_str()) {
                 return Err(ManifestError::UnsatisfiedDependency {
                     from,
-                    missing: dep,
+                    missing: dep.to_string(),
                 });
             }
         }
     }
     Ok(())
-}
-
-/// Derive the dependency-string form (`{project}@{version}`) from a Manifest's fields.
-fn manifest_dep_key(fields: &HashMap<String, String>) -> Option<String> {
-    let project = fields.get("project")?;
-    let version = fields.get("version")?;
-    if project.is_empty() || version.is_empty() {
-        return None;
-    }
-    Some(format!("{project}@{version}"))
 }
 
 #[cfg(test)]
@@ -147,9 +125,11 @@ mod tests {
 
     #[test]
     fn test_manifest_dep_key() {
-        let mut fields = HashMap::new();
-        fields.insert("project".to_string(), "ben/crm".to_string());
-        fields.insert("version".to_string(), "0.0.1-dev".to_string());
-        assert_eq!(manifest_dep_key(&fields), Some("ben/crm@0.0.1-dev".to_string()));
+        let manifest = Manifest::new(
+            "ben/crm".to_string(),
+            "0.0.1-dev".to_string(),
+            vec![],
+        );
+        assert_eq!(manifest_dep_key(&manifest), Some("ben/crm@0.0.1-dev".to_string()));
     }
 }
