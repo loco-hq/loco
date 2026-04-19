@@ -65,13 +65,6 @@ fn template_vars_from_config_id(id: &str) -> HashMap<String, String> {
     vars
 }
 
-/// Build template_vars for a schema type (collection or field).
-fn schema_template_vars(user: &str, project: &str, version: &str) -> HashMap<String, String> {
-    let mut vars = HashMap::new();
-    vars.insert("project".to_string(), format!("{user}/{project}"));
-    vars.insert("version".to_string(), version.to_string());
-    vars
-}
 
 impl FromRequestParts<Arc<AppState>> for SiteId {
     type Rejection = Response;
@@ -168,13 +161,17 @@ fn collection_key(user: &str, project: &str, name: &str) -> String {
     format!("{user}/{project}.{name}")
 }
 
-fn validate_collection(state: &AppState, key: &str) -> Result<(), Box<Response>> {
-    if state.registry.has_instance("collection", key) {
+fn validate_collection(state: &AppState, user: &str, project: &str, name: &str) -> Result<(), Box<Response>> {
+    let found = state.registry
+        .list_instances("collection", &format!("{user}/{project}/"))
+        .into_iter()
+        .any(|(_, fields)| fields.get("name").map(|n| n == name).unwrap_or(false));
+    if found {
         Ok(())
     } else {
         Err(Box::new(error_response(
             StatusCode::NOT_FOUND,
-            &format!("unknown collection: {key}"),
+            &format!("unknown collection: {user}/{project}.{name}"),
         )))
     }
 }
@@ -254,7 +251,7 @@ async fn handle_add(
     Json(body): Json<AddRecordRequest>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &key) {
+    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
         return *resp;
     }
 
@@ -288,7 +285,7 @@ async fn handle_list(
     Path((user, project, name)): Path<(String, String, String)>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &key) {
+    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
         return *resp;
     }
 
@@ -309,7 +306,7 @@ async fn handle_get(
     Path((user, project, name, id)): Path<(String, String, String, String)>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &key) {
+    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
         return *resp;
     }
 
@@ -331,7 +328,7 @@ async fn handle_delete(
     Path((user, project, name, id)): Path<(String, String, String, String)>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &key) {
+    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
         return *resp;
     }
 
@@ -353,7 +350,7 @@ async fn handle_update(
     Json(body): Json<AddRecordRequest>,
 ) -> Response {
     let key = collection_key(&user, &project, &name);
-    if let Err(resp) = validate_collection(&state, &key) {
+    if let Err(resp) = validate_collection(&state, &user, &project, &name) {
         return *resp;
     }
 
@@ -402,7 +399,7 @@ async fn handle_meta_list(
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
-    let entries = state.registry.list_instances(&type_name, &format!("{user}/{project}."));
+    let entries = state.registry.list_instances(&type_name, &format!("{user}/{project}/"));
     ApiResponse::success(entries).into_response()
 }
 
@@ -455,13 +452,11 @@ async fn handle_schema_create_collection(
     fields.insert("label".to_string(), body.label);
     fields.insert("label_plural".to_string(), body.label_plural);
 
-    let namespace_key = format!("{user}/{project}.{}", body.name);
-    let mut template_vars = schema_template_vars(&user, &project, &version);
-    template_vars.insert("name".to_string(), body.name);
+    let namespace_key = format!("{user}/{project}/versions/{version}/collections/{}", body.name);
 
     match state
         .registry
-        .create_instance("collection", &namespace_key, &template_vars, fields)
+        .create_instance("collection", &namespace_key, fields)
     {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -478,21 +473,21 @@ async fn handle_schema_list_collections(
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
-    let entries = state.registry.list_instances("collection", &format!("{user}/{project}."));
+    let entries = state.registry.list_instances("collection", &format!("{user}/{project}/"));
     ApiResponse::success(entries).into_response()
 }
 
 async fn handle_schema_get_collection(
     auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
-    Path((user, project, _version, name)): Path<(String, String, String, String)>,
+    Path((user, project, version, name)): Path<(String, String, String, String)>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
-    let namespace = format!("{user}/{project}.{name}");
+    let namespace = format!("{user}/{project}/versions/{version}/collections/{name}");
     match state.registry.get_instance("collection", &namespace) {
         Some(fields) => ApiResponse::success(fields).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("collection not found: {name}")),
@@ -522,13 +517,11 @@ async fn handle_schema_update_collection(
         fields.insert("label_plural".to_string(), label_plural);
     }
 
-    let namespace_key = format!("{user}/{project}.{name}");
-    let mut template_vars = schema_template_vars(&user, &project, &version);
-    template_vars.insert("name".to_string(), name);
+    let namespace_key = format!("{user}/{project}/versions/{version}/collections/{name}");
 
     match state
         .registry
-        .update_instance("collection", &namespace_key, &template_vars, fields)
+        .update_instance("collection", &namespace_key, fields)
     {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -550,18 +543,12 @@ async fn handle_schema_delete_collection(
     }
 
     // First delete all fields belonging to this collection
-    let prefix = format!("{user}/{project}.{name}/");
-    let _ = state
-        .registry
-        .delete_instances_by_prefix("field", &prefix, &version);
+    let field_prefix = format!("{user}/{project}/versions/{version}/fields/{name}/");
+    let _ = state.registry.delete_instances_by_prefix("field", &field_prefix);
 
-    let namespace_key = format!("{user}/{project}.{name}");
-    let mut template_vars = schema_template_vars(&user, &project, &version);
-    template_vars.insert("name".to_string(), name);
+    let namespace_key = format!("{user}/{project}/versions/{version}/collections/{name}");
 
-    match state
-        .registry
-        .delete_instance("collection", &namespace_key, &template_vars)
+    match state.registry.delete_instance("collection", &namespace_key)
     {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
@@ -588,17 +575,9 @@ async fn handle_schema_create_field(
     fields.insert("collection".to_string(), collection.clone());
     fields.insert("type".to_string(), body.r#type);
 
-    let namespace_key = format!("{user}/{project}.{collection}/{}", body.name);
-    let mut template_vars = schema_template_vars(&user, &project, &version);
-    template_vars.insert("collection".to_string(), collection);
-    template_vars.insert("name".to_string(), body.name);
+    let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{}", body.name);
 
-    match state.registry.create_instance(
-        "field",
-        &namespace_key,
-        &template_vars,
-        fields,
-    ) {
+    match state.registry.create_instance("field", &namespace_key, fields) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -607,20 +586,16 @@ async fn handle_schema_create_field(
 async fn handle_schema_list_fields(
     auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
-    Path((user, project, _version, collection)): Path<(String, String, String, String)>,
+    Path((user, project, version, collection)): Path<(String, String, String, String)>,
 ) -> Response {
     if let Err(resp) = require_config_site(&auth_user.0.user) { return resp; }
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) { return resp; }
     if let Err(resp) = validate_project(&state, &user, &project) {
         return *resp;
     }
-    let all_fields = state.registry.list_instances("field", &format!("{user}/{project}."));
-    let prefix = format!("{user}/{project}.{collection}/");
-    let filtered: Vec<_> = all_fields
-        .into_iter()
-        .filter(|(ns, _)| ns.starts_with(&prefix))
-        .collect();
-    ApiResponse::success(filtered).into_response()
+    let prefix = format!("{user}/{project}/versions/{version}/fields/{collection}/");
+    let entries = state.registry.list_instances("field", &prefix);
+    ApiResponse::success(entries).into_response()
 }
 
 async fn handle_schema_update_field(
@@ -643,17 +618,9 @@ async fn handle_schema_update_field(
         fields.insert("type".to_string(), r#type);
     }
 
-    let namespace_key = format!("{user}/{project}.{collection}/{name}");
-    let mut template_vars = schema_template_vars(&user, &project, &version);
-    template_vars.insert("collection".to_string(), collection);
-    template_vars.insert("name".to_string(), name);
+    let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{name}");
 
-    match state.registry.update_instance(
-        "field",
-        &namespace_key,
-        &template_vars,
-        fields,
-    ) {
+    match state.registry.update_instance("field", &namespace_key, fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -673,21 +640,9 @@ async fn handle_schema_delete_field(
         return resp;
     }
 
-    let namespace_key = format!("{user}/{project}.{collection}/{name}");
+    let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{name}");
 
-    // Verify it exists
-    if state.registry.get_instance("field", &namespace_key).is_none() {
-        return error_response(StatusCode::NOT_FOUND, &format!("field not found: {collection}/{name}"));
-    }
-
-    let mut template_vars = schema_template_vars(&user, &project, &version);
-    template_vars.insert("collection".to_string(), collection);
-    template_vars.insert("name".to_string(), name);
-
-    match state
-        .registry
-        .delete_instance("field", &namespace_key, &template_vars)
-    {
+    match state.registry.delete_instance("field", &namespace_key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -752,13 +707,16 @@ async fn handle_schema_introspect(
     // For each namespace, gather collections and their fields
     let mut result: Vec<NamespaceCollections> = Vec::new();
     for (user, project) in &ns_pairs {
-        let collections = state.registry.list_instances("collection", &format!("{user}/{project}."));
-        let all_fields = state.registry.list_instances("field", &format!("{user}/{project}."));
+        let collections = state.registry.list_instances("collection", &format!("{user}/{project}/"));
+        let all_fields = state.registry.list_instances("field", &format!("{user}/{project}/"));
 
         let mut coll_with_fields: Vec<CollectionWithFields> = Vec::new();
         for (col_ns, col_fields) in &collections {
-            let col_name = col_ns.split_once('.').map(|(_, n)| n).unwrap_or("");
-            let field_prefix = format!("{col_ns}/");
+            // col_ns = "{project}/versions/{version}/collections/{name}"
+            let col_name = col_ns.rsplit('/').next().unwrap_or("");
+            // Build matching field prefix: replace "/collections/" with "/fields/{col_name}/"
+            let version_prefix = col_ns.split("/collections/").next().unwrap_or("");
+            let field_prefix = format!("{version_prefix}/fields/{col_name}/");
             let matching_fields: Vec<_> = all_fields
                 .iter()
                 .filter(|(ns, _)| ns.starts_with(&field_prefix))
@@ -845,7 +803,7 @@ async fn handle_config_create(
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
     let template_vars = template_vars_from_config_id(&id);
-    let result = match state.registry.create_instance(&type_name, &id, &template_vars, body.fields) {
+    let result = match state.registry.create_instance(&type_name, &id, body.fields) {
         Ok(r) => r,
         Err(e) => return schema_error_to_response(e),
     };
@@ -860,16 +818,14 @@ async fn handle_config_create(
             dataset_fields.insert("label".to_string(), format!("{label} Dev"));
             dataset_fields.insert("description".to_string(), "Default development dataset".to_string());
             let dataset_config_id = format!("{project_path}/datasets/dev");
-            let dataset_vars = template_vars_from_config_id(&dataset_config_id);
-            let _ = state.registry.create_instance("dataset", &dataset_config_id, &dataset_vars, dataset_fields);
+            let _ = state.registry.create_instance("dataset", &dataset_config_id, dataset_fields);
 
             let mut site_fields = HashMap::new();
             site_fields.insert("label".to_string(), format!("{label} Dev"));
             site_fields.insert("version".to_string(), "0.0.1-dev".to_string());
             site_fields.insert("dataset".to_string(), "dev".to_string());
             let site_config_id = format!("{project_path}/sites/dev");
-            let site_vars = template_vars_from_config_id(&site_config_id);
-            let _ = state.registry.create_instance("site", &site_config_id, &site_vars, site_fields);
+            let _ = state.registry.create_instance("site", &site_config_id, site_fields);
         }
     }
 
@@ -889,8 +845,7 @@ async fn handle_config_update(
     if let Some(path_user) = user_from_config_id(&id) {
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
-    let template_vars = template_vars_from_config_id(&id);
-    match state.registry.update_instance(&type_name, &id, &template_vars, body.fields) {
+    match state.registry.update_instance(&type_name, &id, body.fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -924,7 +879,7 @@ async fn handle_config_delete(
                     let qualified = format!("{project_path}/{dataset_name}");
                     let _ = state.adapter.delete_dataset(&qualified);
                 }
-                let _ = state.registry.delete_instance("dataset", ds_id, &ds_vars);
+                let _ = state.registry.delete_instance("dataset", ds_id);
             }
         }
 
@@ -932,8 +887,7 @@ async fn handle_config_delete(
         let sites = state.registry.list_all_instances("site");
         for (site_id, _) in &sites {
             if site_id.starts_with(prefix) {
-                let site_vars = template_vars_from_config_id(site_id);
-                let _ = state.registry.delete_instance("site", site_id, &site_vars);
+                let _ = state.registry.delete_instance("site", site_id);
             }
         }
     }
@@ -952,8 +906,7 @@ async fn handle_config_delete(
         }
     }
 
-    let template_vars = template_vars_from_config_id(&id);
-    match state.registry.delete_instance(&type_name, &id, &template_vars) {
+    match state.registry.delete_instance(&type_name, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }

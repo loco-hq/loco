@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::error::Error;
-use crate::instance::{self, fill_template};
+use crate::instance;
 use crate::types::TypeDef;
 
 /// Thread-safe in-memory registry for instances of any TypeDef.
@@ -15,8 +15,6 @@ type InstanceMap = HashMap<String, BTreeMap<String, HashMap<String, String>>>;
 pub struct SchemaRegistry {
     /// All instances: type_name → { namespace → field_values }
     instances: RwLock<InstanceMap>,
-    /// Type definitions, for template-based path resolution
-    type_defs: Vec<TypeDef>,
     instances_dir: PathBuf,
 }
 
@@ -74,7 +72,6 @@ impl SchemaRegistry {
 
         Ok(SchemaRegistry {
             instances: RwLock::new(instances),
-            type_defs: type_defs.to_vec(),
             instances_dir: instances_dir.to_path_buf(),
         })
     }
@@ -154,12 +151,10 @@ impl SchemaRegistry {
     }
 
     /// Create a new instance. Writes YAML to disk and updates in-memory state.
-    /// `template_vars` are used to resolve the file path from the type's filePathTemplate.
     pub fn create_instance(
         &self,
         type_name: &str,
         namespace: &str,
-        template_vars: &HashMap<String, String>,
         fields: HashMap<String, String>,
     ) -> Result<HashMap<String, String>, Error> {
         // Check for duplicates
@@ -173,7 +168,7 @@ impl SchemaRegistry {
         }
 
         // Write to disk
-        let file_path = self.resolve_file_path(type_name, template_vars);
+        let file_path = self.resolve_file_path(namespace);
         write_instance_yaml(&file_path, &fields)?;
 
         // Update in-memory state
@@ -189,7 +184,6 @@ impl SchemaRegistry {
         &self,
         type_name: &str,
         namespace: &str,
-        template_vars: &HashMap<String, String>,
         fields: HashMap<String, String>,
     ) -> Result<HashMap<String, String>, Error> {
         // Verify it exists and get current fields
@@ -208,7 +202,7 @@ impl SchemaRegistry {
         }
 
         // Write to disk
-        let file_path = self.resolve_file_path(type_name, template_vars);
+        let file_path = self.resolve_file_path(namespace);
         write_instance_yaml(&file_path, &merged)?;
 
         // Update in-memory state
@@ -224,7 +218,6 @@ impl SchemaRegistry {
         &self,
         type_name: &str,
         namespace: &str,
-        template_vars: &HashMap<String, String>,
     ) -> Result<(), Error> {
         // Verify it exists
         {
@@ -239,7 +232,7 @@ impl SchemaRegistry {
         }
 
         // Delete from disk
-        let file_path = self.resolve_file_path(type_name, template_vars);
+        let file_path = self.resolve_file_path(namespace);
         delete_instance_yaml(&file_path)?;
 
         // Remove from in-memory state
@@ -257,7 +250,6 @@ impl SchemaRegistry {
         &self,
         type_name: &str,
         namespace_prefix: &str,
-        version: &str,
     ) -> Result<Vec<String>, Error> {
         let to_delete: Vec<String> = {
             let instances = self.instances.read().unwrap();
@@ -273,40 +265,9 @@ impl SchemaRegistry {
                 .unwrap_or_default()
         };
 
-        // Derive the type folder from the type's filePathTemplate, so plural
-        // folder names (e.g. "fields") come from a single source of truth.
-        let type_folder = self
-            .type_defs
-            .iter()
-            .find(|td| td.name.to_lowercase() == type_name)
-            .and_then(|td| {
-                td.file_path_template
-                    .split("versions/${version}/")
-                    .nth(1)
-                    .and_then(|rest| rest.split('/').next())
-            })
-            .unwrap_or(type_name)
-            .to_string();
-
-        // Delete files from disk
+        // Delete files from disk — namespace IS the path relative to instances_dir
         for ns in &to_delete {
-            // Derive path from namespace: "user/project.parent/name" → file path
-            let after_dot = ns.split_once('.').map(|(_, rest)| rest).unwrap_or("");
-            let parts: Vec<&str> = ns.split_once('.').map(|(pre, _)| pre).unwrap_or("").split('/').collect();
-            let (user, project) = if parts.len() >= 2 {
-                (parts[0], parts[1])
-            } else {
-                continue;
-            };
-            let rel_path = after_dot.replace('/', std::path::MAIN_SEPARATOR_STR);
-            let file_path = self
-                .instances_dir
-                .join(user)
-                .join(project)
-                .join("versions")
-                .join(version)
-                .join(&type_folder)
-                .join(format!("{rel_path}.yaml"));
+            let file_path = self.resolve_file_path(ns);
             let _ = delete_instance_yaml(&file_path);
         }
 
@@ -321,16 +282,9 @@ impl SchemaRegistry {
         Ok(to_delete)
     }
 
-    /// Resolve file path for a type instance using its filePathTemplate and template variables.
-    fn resolve_file_path(&self, type_name: &str, template_vars: &HashMap<String, String>) -> PathBuf {
-        let type_def = self.type_defs.iter().find(|td| td.name.to_lowercase() == type_name);
-        if let Some(td) = type_def {
-            let rel = fill_template(&td.file_path_template, template_vars);
-            self.instances_dir.join(rel)
-        } else {
-            // Fallback for unknown types — shouldn't happen in practice
-            self.instances_dir.join(format!("{type_name}.yaml"))
-        }
+    /// Resolve file path for an instance — namespace IS the path relative to instances_dir.
+    fn resolve_file_path(&self, namespace: &str) -> PathBuf {
+        self.instances_dir.join(format!("{namespace}.yaml"))
     }
 
 }
@@ -400,57 +354,16 @@ mod tests {
     fn test_registry(base: &Path) -> SchemaRegistry {
         SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
-            type_defs: vec![
-                TypeDef {
-                    name: "collection".to_string(),
-                    description: "".to_string(),
-                    file_path_template: "${namespace}/versions/${version}/collection/${name}.yaml".to_string(),
-                    properties: vec![],
-                },
-                TypeDef {
-                    name: "field".to_string(),
-                    description: "".to_string(),
-                    file_path_template: "${namespace}/versions/${version}/field/${collection}/${name}.yaml".to_string(),
-                    properties: vec![],
-                },
-                TypeDef {
-                    name: "project".to_string(),
-                    description: "".to_string(),
-                    file_path_template: "${namespace}/project.yaml".to_string(),
-                    properties: vec![],
-                },
-                TypeDef {
-                    name: "site".to_string(),
-                    description: "".to_string(),
-                    file_path_template: "${namespace}/sites/${site_id}.yaml".to_string(),
-                    properties: vec![],
-                },
-            ],
             instances_dir: base.to_path_buf(),
         }
     }
 
-    fn collection_vars(user: &str, project: &str, version: &str, name: &str) -> HashMap<String, String> {
-        let mut vars = HashMap::new();
-        vars.insert("namespace".to_string(), format!("{user}/{project}"));
-        vars.insert("version".to_string(), version.to_string());
-        vars.insert("name".to_string(), name.to_string());
-        vars
+    fn collection_ns(user: &str, project: &str, version: &str, name: &str) -> String {
+        format!("{user}/{project}/versions/{version}/collection/{name}")
     }
 
-    fn field_vars(user: &str, project: &str, version: &str, collection: &str, name: &str) -> HashMap<String, String> {
-        let mut vars = HashMap::new();
-        vars.insert("namespace".to_string(), format!("{user}/{project}"));
-        vars.insert("version".to_string(), version.to_string());
-        vars.insert("collection".to_string(), collection.to_string());
-        vars.insert("name".to_string(), name.to_string());
-        vars
-    }
-
-    fn config_vars(user: &str, project: &str) -> HashMap<String, String> {
-        let mut vars = HashMap::new();
-        vars.insert("namespace".to_string(), format!("{user}/{project}"));
-        vars
+    fn field_ns(user: &str, project: &str, version: &str, collection: &str, name: &str) -> String {
+        format!("{user}/{project}/versions/{version}/field/{collection}/{name}")
     }
 
     #[test]
@@ -462,20 +375,16 @@ mod tests {
         fields.insert("name".to_string(), "account".to_string());
         fields.insert("label".to_string(), "Account".to_string());
 
-        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
-        registry
-            .create_instance("collection", "ben/crm.account", &vars, fields)
-            .unwrap();
+        let ns = collection_ns("ben", "crm", "0.0.1-dev", "account");
+        registry.create_instance("collection", &ns, fields).unwrap();
 
         // Verify in-memory
-        let result = registry.get_instance("collection", "ben/crm.account");
+        let result = registry.get_instance("collection", &ns);
         assert!(result.is_some());
         assert_eq!(result.unwrap().get("label").unwrap(), "Account");
 
         // Verify on disk
-        let file_path = dir
-            .path()
-            .join("ben/crm/versions/0.0.1-dev/collection/account.yaml");
+        let file_path = dir.path().join(format!("{ns}.yaml"));
         assert!(file_path.exists());
     }
 
@@ -487,12 +396,9 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
 
-        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
-        registry
-            .create_instance("collection", "ben/crm.account", &vars, fields.clone())
-            .unwrap();
-        let result =
-            registry.create_instance("collection", "ben/crm.account", &vars, fields);
+        let ns = collection_ns("ben", "crm", "0.0.1-dev", "account");
+        registry.create_instance("collection", &ns, fields.clone()).unwrap();
+        let result = registry.create_instance("collection", &ns, fields);
         assert!(result.is_err());
     }
 
@@ -504,13 +410,11 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
 
-        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
-        registry
-            .create_instance("collection", "ben/crm.account", &vars, fields)
-            .unwrap();
+        let ns = collection_ns("ben", "crm", "0.0.1-dev", "account");
+        registry.create_instance("collection", &ns, fields).unwrap();
 
-        assert!(registry.has_instance("collection", "ben/crm.account"));
-        assert!(!registry.has_instance("collection", "ben/crm.missing"));
+        assert!(registry.has_instance("collection", &ns));
+        assert!(!registry.has_instance("collection", &collection_ns("ben", "crm", "0.0.1-dev", "missing")));
     }
 
     #[test]
@@ -523,18 +427,18 @@ mod tests {
         let mut f2 = HashMap::new();
         f2.insert("name".to_string(), "contact".to_string());
 
-        let v1 = collection_vars("ben", "crm", "0.0.1-dev", "account");
-        let v2 = collection_vars("ben", "crm", "0.0.1-dev", "contact");
-        let v3 = collection_vars("ben", "cars", "0.0.1-dev", "vehicle");
+        let ns1 = collection_ns("ben", "crm", "0.0.1-dev", "account");
+        let ns2 = collection_ns("ben", "crm", "0.0.1-dev", "contact");
+        let ns3 = collection_ns("ben", "cars", "0.0.1-dev", "vehicle");
 
-        registry.create_instance("collection", "ben/crm.account", &v1, f1).unwrap();
-        registry.create_instance("collection", "ben/crm.contact", &v2, f2).unwrap();
-        registry.create_instance("collection", "ben/cars.vehicle", &v3, HashMap::new()).unwrap();
+        registry.create_instance("collection", &ns1, f1).unwrap();
+        registry.create_instance("collection", &ns2, f2).unwrap();
+        registry.create_instance("collection", &ns3, HashMap::new()).unwrap();
 
-        let crm_list = registry.list_instances("collection", "ben/crm.");
+        let crm_list = registry.list_instances("collection", "ben/crm/");
         assert_eq!(crm_list.len(), 2);
 
-        let cars_list = registry.list_instances("collection", "ben/cars.");
+        let cars_list = registry.list_instances("collection", "ben/cars/");
         assert_eq!(cars_list.len(), 1);
     }
 
@@ -547,17 +451,13 @@ mod tests {
         fields.insert("name".to_string(), "account".to_string());
         fields.insert("label".to_string(), "Account".to_string());
 
-        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
-        registry
-            .create_instance("collection", "ben/crm.account", &vars, fields)
-            .unwrap();
+        let ns = collection_ns("ben", "crm", "0.0.1-dev", "account");
+        registry.create_instance("collection", &ns, fields).unwrap();
 
         let mut updates = HashMap::new();
         updates.insert("label".to_string(), "Customer Account".to_string());
 
-        let result = registry
-            .update_instance("collection", "ben/crm.account", &vars, updates)
-            .unwrap();
+        let result = registry.update_instance("collection", &ns, updates).unwrap();
 
         assert_eq!(result.get("label").unwrap(), "Customer Account");
         assert_eq!(result.get("name").unwrap(), "account"); // unchanged field preserved
@@ -568,11 +468,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = test_registry(dir.path());
 
-        let vars = collection_vars("ben", "crm", "0.0.1-dev", "missing");
         let result = registry.update_instance(
             "collection",
-            "ben/crm.missing",
-            &vars,
+            &collection_ns("ben", "crm", "0.0.1-dev", "missing"),
             HashMap::new(),
         );
         assert!(result.is_err());
@@ -586,20 +484,14 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "account".to_string());
 
-        let vars = collection_vars("ben", "crm", "0.0.1-dev", "account");
-        registry
-            .create_instance("collection", "ben/crm.account", &vars, fields)
-            .unwrap();
+        let ns = collection_ns("ben", "crm", "0.0.1-dev", "account");
+        registry.create_instance("collection", &ns, fields).unwrap();
 
-        registry
-            .delete_instance("collection", "ben/crm.account", &vars)
-            .unwrap();
+        registry.delete_instance("collection", &ns).unwrap();
 
-        assert!(!registry.has_instance("collection", "ben/crm.account"));
+        assert!(!registry.has_instance("collection", &ns));
 
-        let file_path = dir
-            .path()
-            .join("ben/crm/versions/0.0.1-dev/collection/account.yaml");
+        let file_path = dir.path().join(format!("{ns}.yaml"));
         assert!(!file_path.exists());
     }
 
@@ -608,8 +500,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = test_registry(dir.path());
 
-        let vars = collection_vars("ben", "crm", "0.0.1-dev", "missing");
-        let result = registry.delete_instance("collection", "ben/crm.missing", &vars);
+        let result = registry.delete_instance("collection", &collection_ns("ben", "crm", "0.0.1-dev", "missing"));
         assert!(result.is_err());
     }
 
@@ -623,17 +514,13 @@ mod tests {
         fields.insert("collection".to_string(), "account".to_string());
         fields.insert("type".to_string(), "string".to_string());
 
-        let vars = field_vars("ben", "crm", "0.0.1-dev", "account", "company");
-        registry
-            .create_instance("field", "ben/crm.account/company", &vars, fields)
-            .unwrap();
+        let ns = field_ns("ben", "crm", "0.0.1-dev", "account", "company");
+        registry.create_instance("field", &ns, fields).unwrap();
 
-        let result = registry.get_instance("field", "ben/crm.account/company");
+        let result = registry.get_instance("field", &ns);
         assert!(result.is_some());
 
-        let file_path = dir
-            .path()
-            .join("ben/crm/versions/0.0.1-dev/field/account/company.yaml");
+        let file_path = dir.path().join(format!("{ns}.yaml"));
         assert!(file_path.exists());
     }
 
@@ -645,35 +532,28 @@ mod tests {
         // Create fields for account
         let mut f1 = HashMap::new();
         f1.insert("name".to_string(), "company".to_string());
-        let v1 = field_vars("ben", "crm", "0.0.1-dev", "account", "company");
-        registry
-            .create_instance("field", "ben/crm.account/company", &v1, f1)
-            .unwrap();
+        let ns1 = field_ns("ben", "crm", "0.0.1-dev", "account", "company");
+        registry.create_instance("field", &ns1, f1).unwrap();
 
         let mut f2 = HashMap::new();
         f2.insert("name".to_string(), "active".to_string());
-        let v2 = field_vars("ben", "crm", "0.0.1-dev", "account", "active");
-        registry
-            .create_instance("field", "ben/crm.account/active", &v2, f2)
-            .unwrap();
+        let ns2 = field_ns("ben", "crm", "0.0.1-dev", "account", "active");
+        registry.create_instance("field", &ns2, f2).unwrap();
 
         // Create a field for a different collection
         let mut f3 = HashMap::new();
         f3.insert("name".to_string(), "first_name".to_string());
-        let v3 = field_vars("ben", "crm", "0.0.1-dev", "contact", "first_name");
-        registry
-            .create_instance("field", "ben/crm.contact/first_name", &v3, f3)
-            .unwrap();
+        let ns3 = field_ns("ben", "crm", "0.0.1-dev", "contact", "first_name");
+        registry.create_instance("field", &ns3, f3).unwrap();
 
         // Delete all account fields
-        let deleted = registry
-            .delete_instances_by_prefix("field", "ben/crm.account/", "0.0.1-dev")
-            .unwrap();
+        let account_prefix = format!("ben/crm/versions/0.0.1-dev/field/account/");
+        let deleted = registry.delete_instances_by_prefix("field", &account_prefix).unwrap();
         assert_eq!(deleted.len(), 2);
 
         // Contact field should still exist
-        assert!(registry.has_instance("field", "ben/crm.contact/first_name"));
-        assert!(!registry.has_instance("field", "ben/crm.account/company"));
+        assert!(registry.has_instance("field", &ns3));
+        assert!(!registry.has_instance("field", &ns1));
     }
 
     #[test]
@@ -685,11 +565,10 @@ mod tests {
         fields.insert("site_id".to_string(), "studio".to_string());
         fields.insert("name".to_string(), "Loco Studio".to_string());
 
-        let vars = config_vars("loco", "studio");
         let ns = "loco/studio/sites/studio";
 
         // Create
-        registry.create_instance("site", ns, &vars.iter().chain(std::iter::once((&"site_id".to_string(), &"studio".to_string()))).map(|(k,v)| (k.clone(), v.clone())).collect(), fields).unwrap();
+        registry.create_instance("site", ns, fields).unwrap();
         assert!(registry.has_instance("site", ns));
         assert!(!registry.has_instance("site", "loco/studio/sites/other"));
 
@@ -709,20 +588,16 @@ mod tests {
         // Update
         let mut updates = HashMap::new();
         updates.insert("name".to_string(), "Studio Updated".to_string());
-        let site_vars: HashMap<String, String> = [
-            ("namespace".to_string(), "loco/studio".to_string()),
-            ("site_id".to_string(), "studio".to_string()),
-        ].into();
-        let updated = registry.update_instance("site", ns, &site_vars, updates).unwrap();
+        let updated = registry.update_instance("site", ns, updates).unwrap();
         assert_eq!(updated.get("name").unwrap(), "Studio Updated");
         assert_eq!(updated.get("site_id").unwrap(), "studio"); // preserved
 
         // Verify on disk
-        let file_path = dir.path().join("loco/studio/sites/studio.yaml");
+        let file_path = dir.path().join(format!("{ns}.yaml"));
         assert!(file_path.exists());
 
         // Delete
-        registry.delete_instance("site", ns, &site_vars).unwrap();
+        registry.delete_instance("site", ns).unwrap();
         assert!(!registry.has_instance("site", ns));
         assert!(!file_path.exists());
     }
@@ -735,13 +610,9 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), "test".to_string());
 
-        let vars: HashMap<String, String> = [
-            ("namespace".to_string(), "loco/studio".to_string()),
-            ("site_id".to_string(), "test".to_string()),
-        ].into();
-
-        registry.create_instance("site", "loco/studio/sites/test", &vars, fields.clone()).unwrap();
-        assert!(registry.create_instance("site", "loco/studio/sites/test", &vars, fields).is_err());
+        let ns = "loco/studio/sites/test";
+        registry.create_instance("site", ns, fields.clone()).unwrap();
+        assert!(registry.create_instance("site", ns, fields).is_err());
     }
 
     /// Regression test: list fields written via `create_instance` (or `update_instance`) must
@@ -766,14 +637,8 @@ mod tests {
 
         let registry = SchemaRegistry {
             instances: RwLock::new(HashMap::new()),
-            type_defs: vec![manifest_type.clone()],
             instances_dir: dir.path().to_path_buf(),
         };
-
-        let vars: HashMap<String, String> = [
-            ("project".to_string(), "ben/crm".to_string()),
-            ("version".to_string(), "0.0.1-dev".to_string()),
-        ].into();
 
         // The registry API stores list fields as JSON-encoded strings.
         let mut fields = HashMap::new();
@@ -782,12 +647,9 @@ mod tests {
             r#"["loco/core@0.0.1-dev","alice/billing@0.1.0"]"#.to_string(),
         );
 
-        // The namespace used at create-time; derive_namespace will produce "ben/crm.manifest"
-        // from the file path on reload, so we use that same key for consistency.
-        let ns = "ben/crm.manifest";
-        registry
-            .create_instance("manifest", ns, &vars, fields)
-            .unwrap();
+        // Namespace IS the raw file path (minus .yaml)
+        let ns = "ben/crm/versions/0.0.1-dev/manifest";
+        registry.create_instance("manifest", ns, fields).unwrap();
 
         // The YAML file must have a proper sequence, not the raw JSON string.
         let yaml_path = dir.path().join("ben/crm/versions/0.0.1-dev/manifest.yaml");

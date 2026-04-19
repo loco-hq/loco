@@ -112,7 +112,7 @@ pub fn scan_all(
 
         for type_def in type_defs {
             if let Some(vars) = extract_template_vars(&rel, &type_def.file_path_template) {
-                let namespace_str = derive_namespace(&type_def.file_path_template, &vars, &rel);
+                let namespace_str = rel.strip_suffix(".yaml").unwrap_or(&rel).to_string();
                 let yaml = std::fs::read_to_string(file_path)?;
                 let instance = parse_instance(&yaml, type_def, &namespace_str, &vars)?;
                 instances.push(instance);
@@ -123,40 +123,6 @@ pub fn scan_all(
 
     instances.sort_by(|a, b| a.namespace.cmp(&b.namespace));
     Ok(instances)
-}
-
-/// Derive instance namespace/key from extracted template variables.
-/// For versioned types (template contains `${version}`): `{project}.{item_key}`
-///   where item_key is the relative path after the version segment, minus `.yaml`.
-/// For unversioned types: the relative path minus `.yaml`.
-fn derive_namespace(
-    template: &str,
-    vars: &HashMap<String, String>,
-    rel_path: &str,
-) -> String {
-    let ns = vars
-        .get("project")
-        .or_else(|| vars.get("namespace"))
-        .cloned()
-        .unwrap_or_default();
-    if template.contains("${version}") {
-        // Versioned: build item_key from path segments after versions/{version}/
-        // e.g., "ben/crm/versions/0.0.1-dev/field/account/company.yaml" → "account/company"
-        // The item_key is everything after the type folder minus .yaml
-        let version = vars.get("version").cloned().unwrap_or_default();
-        let version_prefix = format!("{ns}/versions/{version}/");
-        let after_version = rel_path.strip_prefix(&version_prefix).unwrap_or(rel_path);
-        // Strip the type folder (first segment) and .yaml extension
-        let item_key = if let Some((_type_folder, rest)) = after_version.split_once('/') {
-            rest.strip_suffix(".yaml").unwrap_or(rest)
-        } else {
-            after_version.strip_suffix(".yaml").unwrap_or(after_version)
-        };
-        format!("{ns}.{item_key}")
-    } else {
-        // Unversioned: use relative path minus .yaml
-        rel_path.strip_suffix(".yaml").unwrap_or(rel_path).to_string()
-    }
 }
 
 /// Fill in a filePathTemplate with the given variable values.
@@ -293,9 +259,9 @@ label_plural: "Opportunities"
         vars.insert("namespace".to_string(), "ben/crm".to_string());
         vars.insert("version".to_string(), "0.0.1-dev".to_string());
         vars.insert("name".to_string(), "opportunity".to_string());
-        let inst = parse_instance(yaml, &td, "ben/crm.opportunity", &vars).unwrap();
+        let inst = parse_instance(yaml, &td, "ben/crm/versions/0.0.1-dev/collection/opportunity", &vars).unwrap();
         assert_eq!(inst.type_name, "Collection");
-        assert_eq!(inst.namespace, "ben/crm.opportunity");
+        assert_eq!(inst.namespace, "ben/crm/versions/0.0.1-dev/collection/opportunity");
         // 5 declared properties: namespace, version, name (template vars) + label, label_plural
         assert_eq!(inst.values.len(), 5);
         assert!(inst.values.iter().any(|v| v == &("name".to_string(), FieldValue::String("opportunity".to_string()))));
@@ -310,7 +276,7 @@ name: "opportunity"
 label: "Opportunity"
 "#;
         let td = collection_type_def();
-        let inst = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new()).unwrap();
+        let inst = parse_instance(yaml, &td, "ns", &HashMap::new()).unwrap();
         assert!(inst.values.iter().any(|v|
             v == &("label_plural".to_string(), FieldValue::String(String::new()))));
     }
@@ -324,7 +290,7 @@ label: "Opportunity"
 label_plural: "Opportunities"
 "#;
         let td = collection_type_def();
-        let inst = parse_instance(yaml, &td, "ben/crm.opportunity", &HashMap::new()).unwrap();
+        let inst = parse_instance(yaml, &td, "ns", &HashMap::new()).unwrap();
         assert!(inst.values.iter().any(|v|
             v == &("name".to_string(), FieldValue::String(String::new()))));
     }
@@ -416,8 +382,8 @@ label_plural: "Opportunities"
         let td = collection_type_def();
         let instances = scan_all(base, &[td]).unwrap();
         assert_eq!(instances.len(), 2);
-        assert_eq!(instances[0].namespace, "ben/crm.contact");
-        assert_eq!(instances[1].namespace, "ben/crm.opportunity");
+        assert_eq!(instances[0].namespace, "ben/crm/versions/0.0.1-dev/collection/contact");
+        assert_eq!(instances[1].namespace, "ben/crm/versions/0.0.1-dev/collection/opportunity");
     }
 
     #[test]
@@ -445,8 +411,8 @@ label_plural: "Opportunities"
         let td = field_type_def();
         let instances = scan_all(base, &[td]).unwrap();
         assert_eq!(instances.len(), 2);
-        assert_eq!(instances[0].namespace, "ben/crm.account/company");
-        assert_eq!(instances[1].namespace, "ben/crm.contact/first_name");
+        assert_eq!(instances[0].namespace, "ben/crm/versions/0.0.1-dev/field/account/company");
+        assert_eq!(instances[1].namespace, "ben/crm/versions/0.0.1-dev/field/contact/first_name");
     }
 
     #[test]
@@ -519,7 +485,7 @@ label_plural: "Opportunities"
         let project_inst = instances.iter().find(|i| i.type_name == "Project").unwrap();
         assert_eq!(project_inst.namespace, "ben/crm/project");
         let collection_inst = instances.iter().find(|i| i.type_name == "Collection").unwrap();
-        assert_eq!(collection_inst.namespace, "ben/crm.account");
+        assert_eq!(collection_inst.namespace, "ben/crm/versions/0.0.1-dev/collection/account");
     }
 
     #[test]
@@ -606,35 +572,4 @@ label_plural: "Opportunities"
         );
     }
 
-    #[test]
-    fn test_derive_namespace_versioned() {
-        let template = "${namespace}/versions/${version}/collection/${name}.yaml";
-        let mut vars = HashMap::new();
-        vars.insert("namespace".to_string(), "ben/crm".to_string());
-        vars.insert("version".to_string(), "0.0.1-dev".to_string());
-        vars.insert("name".to_string(), "account".to_string());
-        let rel_path = "ben/crm/versions/0.0.1-dev/collection/account.yaml";
-        assert_eq!(derive_namespace(template, &vars, rel_path), "ben/crm.account");
-    }
-
-    #[test]
-    fn test_derive_namespace_versioned_nested() {
-        let template = "${namespace}/versions/${version}/field/${collection}/${name}.yaml";
-        let mut vars = HashMap::new();
-        vars.insert("namespace".to_string(), "ben/crm".to_string());
-        vars.insert("version".to_string(), "0.0.1-dev".to_string());
-        vars.insert("collection".to_string(), "account".to_string());
-        vars.insert("name".to_string(), "company".to_string());
-        let rel_path = "ben/crm/versions/0.0.1-dev/field/account/company.yaml";
-        assert_eq!(derive_namespace(template, &vars, rel_path), "ben/crm.account/company");
-    }
-
-    #[test]
-    fn test_derive_namespace_unversioned() {
-        let template = "${namespace}/project.yaml";
-        let mut vars = HashMap::new();
-        vars.insert("namespace".to_string(), "ben/crm".to_string());
-        let rel_path = "ben/crm/project.yaml";
-        assert_eq!(derive_namespace(template, &vars, rel_path), "ben/crm/project");
-    }
 }
