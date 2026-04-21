@@ -23,7 +23,7 @@ Thumbs.db
 *.db
 
 # Auth session/user data (local dev)
-/auth/
+/loco-apps/auth/
 
 # My personal notes
 NOTES.md
