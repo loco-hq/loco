@@ -801,7 +801,11 @@ async fn handle_config_create(
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
     let template_vars = template_vars_from_config_id(&id);
-    let result = match schema_create(&type_name, &id, body.fields) {
+    let mut fields = body.fields;
+    for (k, v) in &template_vars {
+        fields.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    let result = match schema_create(&type_name, &id, fields) {
         Ok(r) => r,
         Err(e) => return schema_error_to_response(e),
     };

@@ -22,9 +22,9 @@ export default function Home() {
 
   const handleCreate = async (e) => {
     e.preventDefault();
-    if (!newName.trim()) return;
+    if (!newName.trim() || !user) return;
     const slug = newName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const username = user?.username || 'me';
+    const username = user.username;
     try {
       await createProject(newName.trim(), `${username}/${slug}`);
       setNewName('');
@@ -71,7 +71,7 @@ export default function Home() {
             </div>
           </form>
         ) : (
-          <button className="card card-add" onClick={() => setCreating(true)}>
+          <button className="card card-add" onClick={() => setCreating(true)} disabled={!user}>
             <span className="card-add-plus">+</span>
             <span className="card-add-label">New Project</span>
           </button>
