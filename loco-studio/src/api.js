@@ -31,7 +31,8 @@ export async function request(path, options = {}) {
 export async function login(username) {
   const data = await request('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ username, site_id: 'studio' }),
+    headers: { 'X-Project-Id': 'loco/studio', 'X-Site-Id': 'studio' },
+    body: JSON.stringify({ username }),
   });
   setSession(data.token);
   return data;
