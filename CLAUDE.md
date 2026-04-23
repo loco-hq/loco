@@ -16,8 +16,7 @@ cargo run -p loco-apps        # Run the web server on :3000
 ```
 loco/
 ├── loco-gen/crates/
-│   ├── loco-gen-schema/         # YAML parsing, instance scanning, Rust codegen
-│   ├── loco-gen-runtime/        # Minimal runtime (TypedCache, Value) — zero deps
+│   ├── loco-gen-schema/         # YAML parsing, SchemaRegistry, Rust codegen
 │   └── loco-gen-codegen-build/  # build.rs API — calls schema to emit code
 ├── loco-lake/crates/loco-lake/  # DataAdapter trait + InMemoryAdapter (CRUD)
 └── loco-apps/                   # Axum web server consuming generated types
@@ -26,21 +25,23 @@ loco/
 ### Dependency flow
 
 Build-time: `loco-apps/build.rs` → `loco-gen-codegen-build` → `loco-gen-schema`
-Runtime: `loco-apps` → `loco-gen-runtime` + `loco-lake`
+Runtime: `loco-apps` → `loco-gen-schema` + `loco-lake`
 
 ## How Codegen Works
 
-1. `build.rs` calls `loco_gen_codegen_build::generate("schemas/types", "schemas/instances")`
+1. `build.rs` calls `loco_gen_codegen_build::generate("schemas/types")`
 2. Type definitions (`schemas/types/*.yaml`) are parsed into `TypeDef` structs
-3. All instance YAML files under `schemas/instances/` are matched against each type's `filePathTemplate` to determine their type and extract template variables
-4. Rust code is generated to `$OUT_DIR/loco_generated.rs` — structs, constructors, accessors, cache methods, and baked-in instance loaders
-5. `main.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`
+3. Rust code is generated to `$OUT_DIR/loco_generated.rs` — per-type structs with constructors and accessors, plus a `SchemaStore` with load/list/get/create/update/delete methods over a `SchemaRegistry`
+4. `main.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`
+
+Instances are **not** scanned at build time. At server startup, `SchemaStore::load("schemas/instances")` walks the instances directory, matches each YAML file against its type's `filePathTemplate`, and populates the registry in memory.
 
 ### Namespace convention
 
-Instance namespace depends on whether the type's template includes `${version}`:
-- Versioned types (collection, field): `{project}.{item_key}` — e.g., `ben/crm.account`
-- Unversioned types (project, dataset, site): relative path minus `.yaml` — e.g., `ben/crm/project`, `ben/crm/datasets/acme`
+An instance's namespace IS its path relative to `schemas/instances/` with `.yaml` stripped. For example:
+- `schemas/instances/ben/crm/project.yaml` → `ben/crm/project`
+- `schemas/instances/ben/crm/datasets/acme.yaml` → `ben/crm/datasets/acme`
+- `schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
 
 ## Schema Files
 
@@ -83,7 +84,7 @@ Every `${var}` in a `filePathTemplate` becomes an implicit `String` field on the
 - **Rust keyword escaping**: Codegen emits `r#type` (etc.) for property names that are Rust keywords. See `rust_ident()` in `codegen.rs`.
 - **Error types**: Each crate has its own error enum — `loco_gen_schema::Error`, `loco_lake::Error`.
 - **Tests**: All unit tests are co-located with their module (`#[cfg(test)] mod tests`). Filesystem tests use `tempfile`.
-- **Thread safety**: Both `TypedCache` and `InMemoryAdapter` use `RwLock<HashMap<...>>`.
+- **Thread safety**: Both `SchemaRegistry` and `InMemoryAdapter` use `RwLock<HashMap<...>>`.
 
 ## Frontend Apps
 

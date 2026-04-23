@@ -8,7 +8,7 @@ In your crate's `build.rs`:
 
 ```rust
 fn main() {
-    loco_gen_codegen_build::generate("schemas/types", "schemas/instances");
+    loco_gen_codegen_build::generate("schemas/types");
 }
 ```
 
@@ -22,10 +22,9 @@ include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"));
 
 1. Reads all `.yaml` files from the types directory
 2. Parses each into a `TypeDef` via `loco-gen-schema`
-3. Recursively scans the instances directory, validating each instance against its type
-4. Generates Rust source code (structs, constructors, accessors, instance loaders)
-5. Writes the output to `$OUT_DIR/loco_generated.rs`
-6. Emits `cargo:rerun-if-changed` directives so Cargo rebuilds when schemas change
+3. Generates Rust source code (structs, constructors, accessors)
+4. Writes the output to `$OUT_DIR/loco_generated.rs`
+5. Emits `cargo:rerun-if-changed` directives so Cargo rebuilds when schemas change
 
 ## Dependencies
 
