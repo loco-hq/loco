@@ -33,7 +33,7 @@ pub fn parse_dependency(dep: &str) -> Result<(&str, &str, &str), ManifestError> 
 }
 
 fn find_manifest(schema: &SchemaStore, project: &str, version: &str) -> Option<Manifest> {
-    schema.list_all_manifests()
+    schema.manifests().list_all()
         .into_iter()
         .find(|(_, m)| m.project() == project && m.version() == version)
         .map(|(_, m)| m)
@@ -84,7 +84,7 @@ pub fn resolve_dependency_tree(schema: &SchemaStore, root: &str) -> Result<Vec<(
 /// Walk every Manifest in the registry and verify that each declared
 /// dependency is itself present as a Manifest. Intended for startup.
 pub fn validate_manifests(schema: &SchemaStore) -> Result<(), ManifestError> {
-    let all = schema.list_all_manifests();
+    let all = schema.manifests().list_all();
     let available: HashSet<String> = all
         .iter()
         .filter_map(|(_, m)| manifest_dep_key(m))

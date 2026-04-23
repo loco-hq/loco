@@ -28,7 +28,7 @@ pub struct AppState {
 pub struct SiteId(pub String);
 
 fn lookup_site_in_project(schema: &SchemaStore, project: &str, site_name: &str) -> Option<Site> {
-    schema.list_all_sites()
+    schema.sites().list_all()
         .into_iter()
         .find(|(_, site)| site.project() == project && site.name() == site_name)
         .map(|(_, site)| site)
@@ -157,7 +157,7 @@ fn collection_key(user: &str, project: &str, name: &str) -> String {
 }
 
 fn validate_collection(schema: &SchemaStore, user: &str, project: &str, name: &str) -> Result<(), Box<Response>> {
-    let found = schema.list_collections(&format!("{user}/{project}/"))
+    let found = schema.collections().list(&format!("{user}/{project}/"))
         .into_iter()
         .any(|(_, c)| c.name() == name);
     if found {
@@ -172,7 +172,7 @@ fn validate_collection(schema: &SchemaStore, user: &str, project: &str, name: &s
 
 fn validate_project(schema: &SchemaStore, user: &str, project: &str) -> Result<(), Box<Response>> {
     let config_id = format!("{user}/{project}/project");
-    if schema.has_project(&config_id) {
+    if schema.projects().has(&config_id) {
         Ok(())
     } else {
         Err(Box::new(error_response(
@@ -448,7 +448,7 @@ async fn handle_schema_create_collection(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/collections/{}", body.name);
 
-    match state.schema.create_collection(&namespace_key, fields) {
+    match state.schema.collections().create(&namespace_key, fields) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -464,7 +464,7 @@ async fn handle_schema_list_collections(
     if let Err(resp) = validate_project(&state.schema, &user, &project) {
         return *resp;
     }
-    let entries = state.schema.list_collections(&format!("{user}/{project}/"));
+    let entries = state.schema.collections().list(&format!("{user}/{project}/"));
     ApiResponse::success(entries).into_response()
 }
 
@@ -479,7 +479,7 @@ async fn handle_schema_get_collection(
         return *resp;
     }
     let namespace = format!("{user}/{project}/versions/{version}/collections/{name}");
-    match state.schema.get_collection(&namespace) {
+    match state.schema.collections().get(&namespace) {
         Some(c) => ApiResponse::success(c).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("collection not found: {name}")),
     }
@@ -510,7 +510,7 @@ async fn handle_schema_update_collection(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/collections/{name}");
 
-    match state.schema.update_collection(&namespace_key, fields) {
+    match state.schema.collections().update(&namespace_key, fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -532,11 +532,11 @@ async fn handle_schema_delete_collection(
 
     // First delete all fields belonging to this collection
     let field_prefix = format!("{user}/{project}/versions/{version}/fields/{name}/");
-    let _ = state.schema.delete_fields_by_prefix(&field_prefix);
+    let _ = state.schema.fields().delete_by_prefix(&field_prefix);
 
     let namespace_key = format!("{user}/{project}/versions/{version}/collections/{name}");
 
-    match state.schema.delete_collection(&namespace_key) {
+    match state.schema.collections().delete(&namespace_key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -564,7 +564,7 @@ async fn handle_schema_create_field(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{}", body.name);
 
-    match state.schema.create_field(&namespace_key, fields) {
+    match state.schema.fields().create(&namespace_key, fields) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -581,7 +581,7 @@ async fn handle_schema_list_fields(
         return *resp;
     }
     let prefix = format!("{user}/{project}/versions/{version}/fields/{collection}/");
-    let entries = state.schema.list_fields(&prefix);
+    let entries = state.schema.fields().list(&prefix);
     ApiResponse::success(entries).into_response()
 }
 
@@ -607,7 +607,7 @@ async fn handle_schema_update_field(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{name}");
 
-    match state.schema.update_field(&namespace_key, fields) {
+    match state.schema.fields().update(&namespace_key, fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -629,7 +629,7 @@ async fn handle_schema_delete_field(
 
     let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{name}");
 
-    match state.schema.delete_field(&namespace_key) {
+    match state.schema.fields().delete(&namespace_key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -697,8 +697,8 @@ async fn handle_schema_introspect(
     // For each namespace, gather collections and their fields
     let mut result: Vec<NamespaceCollections> = Vec::new();
     for (user, project) in &ns_pairs {
-        let collections = state.schema.list_collections(&format!("{user}/{project}/"));
-        let all_fields = state.schema.list_fields(&format!("{user}/{project}/"));
+        let collections = state.schema.collections().list(&format!("{user}/{project}/"));
+        let all_fields = state.schema.fields().list(&format!("{user}/{project}/"));
 
         let mut coll_with_fields: Vec<CollectionWithFields> = Vec::new();
         for (col_ns, col) in &collections {
@@ -810,14 +810,14 @@ async fn handle_config_create(
             dataset_fields.insert("label".to_string(), format!("{label} Dev"));
             dataset_fields.insert("description".to_string(), "Default development dataset".to_string());
             let dataset_config_id = format!("{project_path}/datasets/dev");
-            let _ = state.schema.create_dataset(&dataset_config_id, dataset_fields);
+            let _ = state.schema.datasets().create(&dataset_config_id, dataset_fields);
 
             let mut site_fields = HashMap::new();
             site_fields.insert("label".to_string(), format!("{label} Dev"));
             site_fields.insert("version".to_string(), "0.0.1-dev".to_string());
             site_fields.insert("dataset".to_string(), "dev".to_string());
             let site_config_id = format!("{project_path}/sites/dev");
-            let _ = state.schema.create_site(&site_config_id, site_fields);
+            let _ = state.schema.sites().create(&site_config_id, site_fields);
         }
     }
 
@@ -863,7 +863,7 @@ async fn handle_config_delete(
         let project_path = prefix.trim_end_matches('/');
 
         // Delete child datasets (which cascades to lake data)
-        let datasets = state.schema.list_all_datasets();
+        let datasets = state.schema.datasets().list_all();
         for (ds_id, _) in &datasets {
             if ds_id.starts_with(prefix) {
                 let ds_vars = template_vars_from_config_id(&ds_id);
@@ -871,15 +871,15 @@ async fn handle_config_delete(
                     let qualified = format!("{project_path}/{dataset_name}");
                     let _ = state.adapter.delete_dataset(&qualified);
                 }
-                let _ = state.schema.delete_dataset(&ds_id);
+                let _ = state.schema.datasets().delete(&ds_id);
             }
         }
 
         // Delete child sites
-        let sites = state.schema.list_all_sites();
+        let sites = state.schema.sites().list_all();
         for (site_id, _) in &sites {
             if site_id.starts_with(prefix) {
-                let _ = state.schema.delete_site(&site_id);
+                let _ = state.schema.sites().delete(&site_id);
             }
         }
     }
@@ -1112,19 +1112,19 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
 
     crate::manifest::validate_manifests(&schema).expect("manifest validation failed");
 
-    let all_collections = schema.list_all_collections();
+    let all_collections = schema.collections().list_all();
     println!("Loaded {} collection(s):", all_collections.len());
     for (ns, _) in &all_collections {
         println!("  - {ns}");
     }
 
-    let all_fields = schema.list_all_fields();
+    let all_fields = schema.fields().list_all();
     println!("Loaded {} field(s):", all_fields.len());
     for (ns, _) in &all_fields {
         println!("  - {ns}");
     }
 
-    let all_sites = schema.list_all_sites();
+    let all_sites = schema.sites().list_all();
     println!("Loaded {} site(s):", all_sites.len());
     for (id, _) in &all_sites {
         println!("  - {id}");

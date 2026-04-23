@@ -235,30 +235,33 @@ fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     let name = &type_def.name;
     let snake = to_snake_case(name);
     let plural = format!("{snake}s");
+    let store = format!("{name}Store");
     let registry_key = name.to_lowercase();
     let err = "loco_gen_schema::error::Error";
     let map = "std::collections::HashMap<String, String>";
 
-    out.push_str("impl SchemaStore {\n");
+    out.push_str(&format!(
+        "pub struct {store}<'a> {{\n    registry: &'a loco_gen_schema::registry::SchemaRegistry,\n}}\n\n"
+    ));
+
+    out.push_str(&format!("impl<'a> {store}<'a> {{\n"));
 
     out.push_str(&format!(
-        "    pub fn get_{snake}(&self, key: &str) -> Option<{name}> {{\n"
+        "    pub fn get(&self, key: &str) -> Option<{name}> {{\n"
     ));
     out.push_str(&format!(
         "        self.registry.get_instance(\"{registry_key}\", key).map(|f| {name}::from_map(&f))\n"
     ));
     out.push_str("    }\n\n");
 
-    out.push_str(&format!(
-        "    pub fn has_{snake}(&self, key: &str) -> bool {{\n"
-    ));
+    out.push_str("    pub fn has(&self, key: &str) -> bool {\n");
     out.push_str(&format!(
         "        self.registry.has_instance(\"{registry_key}\", key)\n"
     ));
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "    pub fn list_{plural}(&self, prefix: &str) -> Vec<(String, {name})> {{\n"
+        "    pub fn list(&self, prefix: &str) -> Vec<(String, {name})> {{\n"
     ));
     out.push_str(&format!(
         "        self.registry.list_instances(\"{registry_key}\", prefix).into_iter().map(|(k, v)| (k, {name}::from_map(&v))).collect()\n"
@@ -266,7 +269,7 @@ fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "    pub fn list_all_{plural}(&self) -> Vec<(String, {name})> {{\n"
+        "    pub fn list_all(&self) -> Vec<(String, {name})> {{\n"
     ));
     out.push_str(&format!(
         "        self.registry.list_all_instances(\"{registry_key}\").into_iter().map(|(k, v)| (k, {name}::from_map(&v))).collect()\n"
@@ -274,7 +277,7 @@ fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "    pub fn create_{snake}(&self, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
+        "    pub fn create(&self, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
     ));
     out.push_str(&format!(
         "        self.registry.create_instance(\"{registry_key}\", key, fields)\n"
@@ -282,7 +285,7 @@ fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "    pub fn update_{snake}(&self, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
+        "    pub fn update(&self, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
     ));
     out.push_str(&format!(
         "        self.registry.update_instance(\"{registry_key}\", key, fields)\n"
@@ -290,7 +293,7 @@ fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "    pub fn delete_{snake}(&self, key: &str) -> Result<(), {err}> {{\n"
+        "    pub fn delete(&self, key: &str) -> Result<(), {err}> {{\n"
     ));
     out.push_str(&format!(
         "        self.registry.delete_instance(\"{registry_key}\", key)\n"
@@ -298,13 +301,23 @@ fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "    pub fn delete_{plural}_by_prefix(&self, prefix: &str) -> Result<Vec<String>, {err}> {{\n"
+        "    pub fn delete_by_prefix(&self, prefix: &str) -> Result<Vec<String>, {err}> {{\n"
     ));
     out.push_str(&format!(
         "        self.registry.delete_instances_by_prefix(\"{registry_key}\", prefix)\n"
     ));
     out.push_str("    }\n");
 
+    out.push_str("}\n\n");
+
+    out.push_str("impl SchemaStore {\n");
+    out.push_str(&format!(
+        "    pub fn {plural}(&self) -> {store}<'_> {{\n"
+    ));
+    out.push_str(&format!(
+        "        {store} {{ registry: &self.registry }}\n"
+    ));
+    out.push_str("    }\n");
     out.push_str("}\n");
 }
 
@@ -528,18 +541,24 @@ mod tests {
     #[test]
     fn test_generates_store_methods() {
         let code = generate(&sample_type_def());
-        // Methods on SchemaStore — `&self` receiver, no global
-        assert!(code.contains("impl SchemaStore {"));
-        assert!(code.contains("pub fn get_collection(&self, key: &str)"));
-        assert!(code.contains("pub fn has_collection(&self, key: &str)"));
-        assert!(code.contains("pub fn list_collections(&self, prefix: &str)"));
-        assert!(code.contains("pub fn list_all_collections(&self)"));
-        assert!(code.contains("pub fn create_collection(&self, key: &str,"));
-        assert!(code.contains("pub fn update_collection(&self, key: &str,"));
-        assert!(code.contains("pub fn delete_collection(&self, key: &str)"));
-        assert!(code.contains("pub fn delete_collections_by_prefix(&self, prefix: &str)"));
+        // Per-type store wrapper borrows the registry
+        assert!(code.contains("pub struct CollectionStore<'a> {"));
+        assert!(code.contains("registry: &'a loco_gen_schema::registry::SchemaRegistry,"));
+        assert!(code.contains("impl<'a> CollectionStore<'a> {"));
+        assert!(code.contains("pub fn get(&self, key: &str) -> Option<Collection>"));
+        assert!(code.contains("pub fn has(&self, key: &str) -> bool"));
+        assert!(code.contains("pub fn list(&self, prefix: &str)"));
+        assert!(code.contains("pub fn list_all(&self)"));
+        assert!(code.contains("pub fn create(&self, key: &str,"));
+        assert!(code.contains("pub fn update(&self, key: &str,"));
+        assert!(code.contains("pub fn delete(&self, key: &str)"));
+        assert!(code.contains("pub fn delete_by_prefix(&self, prefix: &str)"));
         assert!(code.contains(r#"self.registry.get_instance("collection", key)"#));
         assert!(code.contains(r#"self.registry.list_all_instances("collection")"#));
+        // Accessor on SchemaStore
+        assert!(code.contains("impl SchemaStore {"));
+        assert!(code.contains("pub fn collections(&self) -> CollectionStore<'_>"));
+        assert!(code.contains("CollectionStore { registry: &self.registry }"));
     }
 
     #[test]
