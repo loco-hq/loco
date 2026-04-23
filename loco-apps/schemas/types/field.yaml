@@ -1,5 +1,5 @@
 description: "A field belonging to a collection"
-filePathTemplate: "${project}/versions/${version}/fields/${collection}/${name}.yaml"
+pathTemplate: "${project}/versions/${version}/fields/${collection}/${name}"
 properties:
   project:
     type: slug

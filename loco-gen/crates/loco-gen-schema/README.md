@@ -15,7 +15,7 @@ Type files live in `schemas/types/` and define a type's properties and on-disk l
 ```yaml
 # schemas/types/collection.yaml
 description: "A named collection of items"
-filePathTemplate: "${project}/versions/${version}/collections/${name}.yaml"
+pathTemplate: "${project}/versions/${version}/collections/${name}"
 properties:
   project:
     type: slug
@@ -47,11 +47,11 @@ properties:
 ### Property flags
 
 - `createOnly: true` — field is immutable after creation.
-- Every `${var}` in `filePathTemplate` **must** be declared as a property with `type: slug` and `createOnly: true`. Parse fails otherwise.
+- Every `${var}` in `pathTemplate` **must** be declared as a property with `type: slug` and `createOnly: true`. Parse fails otherwise.
 
 ## Instance Files
 
-Instances live under `schemas/instances/` at paths matching their type's `filePathTemplate`:
+Instances live under `schemas/instances/` at paths matching their type's `pathTemplate`, with `.yaml` appended:
 
 ```yaml
 # schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml
@@ -133,7 +133,7 @@ Rust keyword escaping is handled automatically (e.g. `type` → `r#type`).
 
 ## Key Types
 
-- `TypeDef` — parsed type definition (name, description, `file_path_template`, properties)
+- `TypeDef` — parsed type definition (name, description, `path_template`, properties)
 - `Property` — name, `FieldType`, `create_only` flag
 - `FieldType` — `String`, `Integer`, `Float`, `Boolean`, `Slug { segments }`, `List(Box<FieldType>)`
 - `FieldValue` — matching value variant used by `Instance`

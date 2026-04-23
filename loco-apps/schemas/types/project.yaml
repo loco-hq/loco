@@ -1,5 +1,5 @@
 description: "A project defining a schema namespace"
-filePathTemplate: "${project}/project.yaml"
+pathTemplate: "${project}/project"
 properties:
   project:
     type: slug

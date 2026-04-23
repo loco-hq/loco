@@ -30,11 +30,11 @@ impl fmt::Display for Error {
             ),
             Error::TemplateVarNotCreateOnly { type_name, var } => write!(
                 f,
-                "type '{type_name}' property '{var}' is used in filePathTemplate and must have createOnly: true"
+                "type '{type_name}' property '{var}' is used in pathTemplate and must have createOnly: true"
             ),
             Error::TemplateVarNotSlug { type_name, var } => write!(
                 f,
-                "type '{type_name}' property '{var}' is used in filePathTemplate and must have type: slug"
+                "type '{type_name}' property '{var}' is used in pathTemplate and must have type: slug"
             ),
         }
     }

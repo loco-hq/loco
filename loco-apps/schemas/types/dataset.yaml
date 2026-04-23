@@ -1,5 +1,5 @@
 description: "A dataset that partitions data in the lake"
-filePathTemplate: "${project}/datasets/${name}.yaml"
+pathTemplate: "${project}/datasets/${name}"
 properties:
   project:
     type: slug

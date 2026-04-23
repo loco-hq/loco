@@ -13,7 +13,7 @@ use crate::types::{FieldType, Property, TypeDef};
 struct TypeDefRaw {
     #[serde(default)]
     description: String,
-    file_path_template: String,
+    path_template: String,
     properties: IndexMap<String, PropertyRaw>,
 }
 
@@ -54,7 +54,7 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
     let type_def = TypeDef {
         name: to_pascal_case(type_name),
         description: raw.description,
-        file_path_template: raw.file_path_template,
+        path_template: raw.path_template,
         properties,
     };
 
@@ -111,7 +111,7 @@ mod tests {
     const SAMPLE_YAML: &str = r#"
 version: 1
 description: "A named collection of items"
-filePathTemplate: "${namespace}/versions/${version}/collection/${name}.yaml"
+pathTemplate: "${namespace}/versions/${version}/collection/${name}"
 properties:
   namespace:
     type: slug
@@ -171,7 +171,7 @@ properties:
     fn test_template_var_must_be_declared() {
         let yaml = r#"
 version: 1
-filePathTemplate: "${project}/${name}.yaml"
+pathTemplate: "${project}/${name}"
 properties:
   name:
     type: slug
@@ -186,7 +186,7 @@ properties:
     fn test_template_var_must_be_create_only() {
         let yaml = r#"
 version: 1
-filePathTemplate: "${project}/${name}.yaml"
+pathTemplate: "${project}/${name}"
 properties:
   project:
     type: slug
@@ -203,7 +203,7 @@ properties:
     fn test_template_var_must_be_slug() {
         let yaml = r#"
 version: 1
-filePathTemplate: "${project}/${name}.yaml"
+pathTemplate: "${project}/${name}"
 properties:
   project:
     type: integer
@@ -221,7 +221,7 @@ properties:
     fn test_parse_slug_field() {
         let yaml = r#"
 version: 1
-filePathTemplate: "${project}/${name}.yaml"
+pathTemplate: "${project}/${name}"
 properties:
   project:
     type: slug
@@ -241,7 +241,7 @@ properties:
     fn test_parse_list_field() {
         let yaml = r#"
 version: 1
-filePathTemplate: "${project}/versions/${version}/manifest.yaml"
+pathTemplate: "${project}/versions/${version}/manifest"
 properties:
   project:
     type: slug
@@ -267,7 +267,7 @@ properties:
     fn test_list_requires_items() {
         let yaml = r#"
 version: 1
-filePathTemplate: "${project}/${name}.yaml"
+pathTemplate: "${project}/${name}"
 properties:
   project:
     type: slug
@@ -286,7 +286,7 @@ properties:
     fn test_list_of_list_rejected() {
         let yaml = r#"
 version: 1
-filePathTemplate: "${project}/${name}.yaml"
+pathTemplate: "${project}/${name}"
 properties:
   project:
     type: slug
@@ -306,7 +306,7 @@ properties:
     fn test_invalid_field_type() {
         let yaml = r#"
 version: 1
-filePathTemplate: "${namespace}/${name}.yaml"
+pathTemplate: "${namespace}/${name}"
 properties:
   namespace:
     type: slug

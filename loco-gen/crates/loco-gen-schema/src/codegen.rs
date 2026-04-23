@@ -50,11 +50,115 @@ pub fn generate(type_def: &TypeDef) -> String {
         generate_accessor(&mut out, field_name, field_type);
     }
     generate_from_map(&mut out, type_def, &fields);
+    generate_to_path(&mut out, type_def);
+    generate_from_path(&mut out, type_def);
     out.push_str("}\n\n");
 
     generate_store_methods(&mut out, type_def);
 
     out
+}
+
+/// Template tokens: either a literal path segment or a `${var}` with a known slug segment count.
+enum TplToken<'a> {
+    Lit(&'a str),
+    Var { name: &'a str, segments: u32 },
+}
+
+fn tokenize_template<'a>(type_def: &'a TypeDef) -> Vec<TplToken<'a>> {
+    type_def
+        .path_template
+        .split('/')
+        .map(|seg| {
+            if let Some(name) = seg.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
+                let segments = type_def
+                    .properties
+                    .iter()
+                    .find_map(|p| match (&p.name, &p.field_type) {
+                        (n, FieldType::Slug { segments }) if n == name => Some(*segments),
+                        _ => None,
+                    })
+                    .expect("template var must be a declared slug property");
+                TplToken::Var { name, segments }
+            } else {
+                TplToken::Lit(seg)
+            }
+        })
+        .collect()
+}
+
+fn generate_to_path(out: &mut String, type_def: &TypeDef) {
+    let tokens = tokenize_template(type_def);
+    let vars = type_def.template_vars();
+    let var_index: std::collections::HashMap<&str, usize> = vars
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_str(), i))
+        .collect();
+
+    let params: Vec<String> = vars
+        .iter()
+        .map(|v| format!("{}: &str", rust_ident(v)))
+        .collect();
+    out.push_str(&format!(
+        "    pub fn to_path({}) -> String {{\n",
+        params.join(", ")
+    ));
+
+    let fmt_parts: Vec<String> = tokens
+        .iter()
+        .map(|t| match t {
+            TplToken::Var { name, .. } => format!("{{{}}}", var_index[*name]),
+            TplToken::Lit(s) => (*s).to_string(),
+        })
+        .collect();
+    let fmt_str = fmt_parts.join("/");
+    let args: Vec<String> = vars.iter().map(|v| rust_ident(v)).collect();
+    out.push_str(&format!(
+        "        format!(\"{fmt_str}\", {})\n",
+        args.join(", ")
+    ));
+    out.push_str("    }\n\n");
+}
+
+fn generate_from_path(out: &mut String, type_def: &TypeDef) {
+    let tokens = tokenize_template(type_def);
+    out.push_str(
+        "    pub fn from_path(path: &str) -> Option<std::collections::HashMap<String, String>> {\n",
+    );
+    out.push_str("        let segs: Vec<&str> = path.split('/').collect();\n");
+    out.push_str("        let mut i = 0usize;\n");
+    out.push_str("        let mut vars = std::collections::HashMap::new();\n");
+
+    for tok in &tokens {
+        match tok {
+            TplToken::Var { name, segments } => {
+                out.push_str(&format!(
+                    "        if i + {segments} > segs.len() {{ return None; }}\n"
+                ));
+                if *segments == 1 {
+                    out.push_str(&format!(
+                        "        vars.insert(\"{name}\".to_string(), segs[i].to_string());\n"
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "        vars.insert(\"{name}\".to_string(), segs[i..i+{segments}].join(\"/\"));\n"
+                    ));
+                }
+                out.push_str(&format!("        i += {segments};\n"));
+            }
+            TplToken::Lit(s) => {
+                out.push_str(&format!(
+                    "        if segs.get(i) != Some(&\"{s}\") {{ return None; }}\n"
+                ));
+                out.push_str("        i += 1;\n");
+            }
+        }
+    }
+
+    out.push_str("        if i != segs.len() { return None; }\n");
+    out.push_str("        Some(vars)\n");
+    out.push_str("    }\n\n");
 }
 
 fn generate_new(out: &mut String, type_def: &TypeDef, fields: &[(String, FieldType)]) {
@@ -238,7 +342,7 @@ fn property_literal(p: &Property) -> String {
 fn type_def_literal(td: &TypeDef) -> String {
     let name = esc(&td.name);
     let desc = esc(&td.description);
-    let tmpl = esc(&td.file_path_template);
+    let tmpl = esc(&td.path_template);
     let props_joined = td.properties.iter()
         .map(|p| format!("                {},", property_literal(p)))
         .collect::<Vec<_>>()
@@ -247,7 +351,7 @@ fn type_def_literal(td: &TypeDef) -> String {
     s.push_str("        loco_gen_schema::types::TypeDef {\n");
     s.push_str(&format!("            name: \"{name}\".to_string(),\n"));
     s.push_str(&format!("            description: \"{desc}\".to_string(),\n"));
-    s.push_str(&format!("            file_path_template: \"{tmpl}\".to_string(),\n"));
+    s.push_str(&format!("            path_template: \"{tmpl}\".to_string(),\n"));
     s.push_str("            properties: vec![\n");
     s.push_str(&props_joined);
     s.push('\n');
@@ -338,7 +442,7 @@ mod tests {
         TypeDef {
             name: "Collection".to_string(),
             description: "A named collection".to_string(),
-            file_path_template: "${namespace}/versions/${version}/collection/${name}.yaml"
+            path_template: "${namespace}/versions/${version}/collection/${name}"
                 .to_string(),
             properties: vec![
                 Property {
@@ -444,7 +548,7 @@ mod tests {
         let td = TypeDef {
             name: "Site".to_string(),
             description: "A site".to_string(),
-            file_path_template: "${project}/sites/${name}.yaml".to_string(),
+            path_template: "${project}/sites/${name}".to_string(),
             properties: vec![
                 Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "name".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
@@ -465,7 +569,7 @@ mod tests {
         let td = TypeDef {
             name: "Manifest".to_string(),
             description: "".to_string(),
-            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            path_template: "${project}/versions/${version}/manifest".to_string(),
             properties: vec![
                 Property {
                     name: "project".to_string(),
@@ -495,5 +599,51 @@ mod tests {
         assert_eq!(to_snake_case("Collection"), "collection");
         assert_eq!(to_snake_case("MyType"), "my_type");
         assert_eq!(to_snake_case("DataSet"), "data_set");
+    }
+
+    #[test]
+    fn test_generates_to_path() {
+        let code = generate(&sample_type_def());
+        assert!(code.contains("pub fn to_path(namespace: &str, version: &str, name: &str) -> String"));
+        assert!(code.contains(r#"format!("{0}/versions/{1}/collection/{2}", namespace, version, name)"#));
+    }
+
+    #[test]
+    fn test_generates_from_path() {
+        let code = generate(&sample_type_def());
+        assert!(code.contains(
+            "pub fn from_path(path: &str) -> Option<std::collections::HashMap<String, String>>"
+        ));
+        // multi-segment slug joins
+        assert!(code.contains("segs[i..i+2].join(\"/\")"));
+        // literal segments are checked by exact match
+        assert!(code.contains(r#"if segs.get(i) != Some(&"versions")"#));
+        assert!(code.contains(r#"if segs.get(i) != Some(&"collection")"#));
+    }
+
+    #[test]
+    fn test_to_path_and_from_path_roundtrip_via_eval() {
+        // Sanity-check the emitted format string actually produces what we expect.
+        // (We can't exec generated Rust from a test, so we just verify the emitted
+        // format string is correct for a known shape.)
+        let code = generate(&sample_type_def());
+        assert!(code.contains(r#"format!("{0}/versions/{1}/collection/{2}""#));
+    }
+
+    #[test]
+    fn test_rust_keyword_path_var() {
+        // Template vars may collide with Rust keywords — ensure we escape them.
+        let td = TypeDef {
+            name: "Thing".to_string(),
+            description: "".to_string(),
+            path_template: "${type}/items/${name}".to_string(),
+            properties: vec![
+                Property { name: "type".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
+                Property { name: "name".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
+            ],
+        };
+        let code = generate(&td);
+        assert!(code.contains("pub fn to_path(r#type: &str, name: &str) -> String"));
+        assert!(code.contains(r#"format!("{0}/items/{1}", r#type, name)"#));
     }
 }

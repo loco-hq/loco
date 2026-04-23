@@ -1,5 +1,5 @@
 description: "A named collection of items"
-filePathTemplate: "${project}/versions/${version}/collections/${name}.yaml"
+pathTemplate: "${project}/versions/${version}/collections/${name}"
 properties:
   project:
     type: slug

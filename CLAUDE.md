@@ -34,29 +34,29 @@ Runtime: `loco-apps` → `loco-gen-schema` + `loco-lake`
 3. Rust code is generated to `$OUT_DIR/loco_generated.rs` — per-type structs with constructors and accessors, plus a `SchemaStore` with load/list/get/create/update/delete methods over a `SchemaRegistry`
 4. `main.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`
 
-Instances are **not** scanned at build time. At server startup, `SchemaStore::load("schemas/instances")` walks the instances directory, matches each YAML file against its type's `filePathTemplate`, and populates the registry in memory.
+Instances are **not** scanned at build time. At server startup, `SchemaStore::load("schemas/instances")` walks the instances directory, matches each YAML file against its type's `pathTemplate`, and populates the registry in memory.
 
 ### Namespace convention
 
-An instance's namespace IS its path relative to `schemas/instances/` with `.yaml` stripped. For example:
+An instance's namespace IS its path relative to `schemas/instances/` with `.yaml` stripped — it matches the type's `pathTemplate` with values filled in. For example:
 - `schemas/instances/ben/crm/project.yaml` → `ben/crm/project`
 - `schemas/instances/ben/crm/datasets/acme.yaml` → `ben/crm/datasets/acme`
 - `schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
 
 ## Schema Files
 
-Type definitions live in `schemas/types/`. Supported field types: `string`, `integer`, `float`, `boolean`, and `list` (a `list` requires an `items:` sub-key naming a scalar type — nested lists are rejected at parse time). Every type has a required `filePathTemplate` that controls where instance files live under `schemas/instances/` and how template variables are extracted from file paths.
+Type definitions live in `schemas/types/`. Supported field types: `string`, `integer`, `float`, `boolean`, and `list` (a `list` requires an `items:` sub-key naming a scalar type — nested lists are rejected at parse time). Every type has a required `pathTemplate` that controls where instance files live under `schemas/instances/` and how template variables are extracted from file paths. The template is purely logical — it never contains `.yaml`; the storage layer appends that extension when writing to disk.
 
-### filePathTemplate examples
+### pathTemplate examples
 
 | Type | Template |
 |------|----------|
-| project | `${project}/project.yaml` |
-| dataset | `${project}/datasets/${name}.yaml` |
-| site | `${project}/sites/${name}.yaml` |
-| manifest | `${project}/versions/${version}/manifest.yaml` |
-| collection | `${project}/versions/${version}/collections/${name}.yaml` |
-| field | `${project}/versions/${version}/fields/${collection}/${name}.yaml` |
+| project | `${project}/project` |
+| dataset | `${project}/datasets/${name}` |
+| site | `${project}/sites/${name}` |
+| manifest | `${project}/versions/${version}/manifest` |
+| collection | `${project}/versions/${version}/collections/${name}` |
+| field | `${project}/versions/${version}/fields/${collection}/${name}` |
 
 `${project}` is a multi-segment variable (e.g., `ben/crm`). Instance files all live under `schemas/instances/`. Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `versions`).
 
@@ -66,10 +66,10 @@ Each versioned project must include a `manifest.yaml` declaring its dependencies
 
 ## Naming Conventions
 
-These conventions apply to property names in type definitions and variable names in `filePathTemplate`s.
+These conventions apply to property names in type definitions and variable names in `pathTemplate`s.
 
 - **`id`** — opaque identifier (uuid/number) with no semantic meaning. Immutable once set. *(Reserved — not currently used anywhere in the codebase.)*
-- **`name`** — semantic slug identifier: `[a-z_]` only, lowercase, immutable. Used as path-segment identifiers in `filePathTemplate`s. When the template has `${name}`, the struct field is populated implicitly from the path — don't declare `name` as a property.
+- **`name`** — semantic slug identifier: `[a-z_]` only, lowercase, immutable. Used as path-segment identifiers in `pathTemplate`s. When the template has `${name}`, the struct field is populated implicitly from the path — don't declare `name` as a property.
 - **`label`** — human-readable display string. Any characters, short, mutable.
 - **`description`** — free-form text. Any characters, longer, mutable.
 - **`project`** — fully-qualified project reference (e.g. `ben/crm`). Used for direct "belongs-to" links and in path templates via `${project}`. Preferred in user-facing contexts.
@@ -77,7 +77,7 @@ These conventions apply to property names in type definitions and variable names
 
 ### Template variables must be declared
 
-Every `${var}` in a `filePathTemplate` **must** be declared as a property with `type: slug` and `createOnly: true`. Parse fails otherwise (`TemplateVarNotDeclared` / `TemplateVarNotSlug` / `TemplateVarNotCreateOnly`). At instance-load time the value is extracted from the file path, so instance YAML bodies should not repeat these fields.
+Every `${var}` in a `pathTemplate` **must** be declared as a property with `type: slug` and `createOnly: true`. Parse fails otherwise (`TemplateVarNotDeclared` / `TemplateVarNotSlug` / `TemplateVarNotCreateOnly`). At instance-load time the value is extracted from the file path, so instance YAML bodies should not repeat these fields.
 
 ## Key Patterns
 

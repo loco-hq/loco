@@ -1,5 +1,5 @@
 description: "A site configuration that maps to a namespace and dataset"
-filePathTemplate: "${project}/sites/${name}.yaml"
+pathTemplate: "${project}/sites/${name}"
 properties:
   project:
     type: slug

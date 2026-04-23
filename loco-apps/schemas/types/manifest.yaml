@@ -1,5 +1,5 @@
 description: "A versioned project manifest declaring dependencies"
-filePathTemplate: "${project}/versions/${version}/manifest.yaml"
+pathTemplate: "${project}/versions/${version}/manifest"
 properties:
   project:
     type: slug

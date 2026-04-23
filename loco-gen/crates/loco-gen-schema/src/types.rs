@@ -45,15 +45,15 @@ pub struct Property {
 pub struct TypeDef {
     pub name: String,
     pub description: String,
-    pub file_path_template: String,
+    pub path_template: String,
     pub properties: Vec<Property>,
 }
 
 impl TypeDef {
-    /// Extract `${var}` names from `file_path_template` in order of first appearance.
+    /// Extract `${var}` names from `path_template` in order of first appearance.
     pub fn template_vars(&self) -> Vec<String> {
         let mut result = Vec::new();
-        let mut rest = self.file_path_template.as_str();
+        let mut rest = self.path_template.as_str();
         while let Some(start) = rest.find("${") {
             let after = &rest[start + 2..];
             if let Some(end) = after.find('}') {

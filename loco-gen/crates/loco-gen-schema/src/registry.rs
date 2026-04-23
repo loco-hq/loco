@@ -627,7 +627,7 @@ mod tests {
         let manifest_type = TypeDef {
             name: "manifest".to_string(),
             description: "".to_string(),
-            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            path_template: "${project}/versions/${version}/manifest".to_string(),
             properties: vec![
                 Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },

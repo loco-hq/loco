@@ -89,7 +89,7 @@ fn collect_yaml_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, Error> {
 }
 
 /// Walk `instances_dir` recursively, matching every YAML file against the
-/// provided type definitions using their `filePathTemplate`. Returns the
+/// provided type definitions using their `pathTemplate`. Returns the
 /// resulting instances, sorted by namespace for deterministic output.
 ///
 /// Files that don't match any type template are silently ignored.
@@ -109,12 +109,12 @@ pub fn scan_all(
             .unwrap_or(file_path)
             .to_string_lossy()
             .to_string();
+        let rel_no_ext = rel.strip_suffix(".yaml").unwrap_or(&rel);
 
         for type_def in type_defs {
-            if let Some(vars) = extract_template_vars(&rel, &type_def.file_path_template) {
-                let namespace_str = rel.strip_suffix(".yaml").unwrap_or(&rel).to_string();
+            if let Some(vars) = extract_template_vars(rel_no_ext, &type_def.path_template) {
                 let yaml = std::fs::read_to_string(file_path)?;
-                let instance = parse_instance(&yaml, type_def, &namespace_str, &vars)?;
+                let instance = parse_instance(&yaml, type_def, rel_no_ext, &vars)?;
                 instances.push(instance);
                 break;
             }
@@ -125,22 +125,12 @@ pub fn scan_all(
     Ok(instances)
 }
 
-/// Fill in a filePathTemplate with the given variable values.
-/// E.g., `fill_template("${namespace}/project.yaml", {"namespace": "ben/crm"})` → `"ben/crm/project.yaml"`.
-pub fn fill_template(template: &str, vars: &HashMap<String, String>) -> String {
-    let mut result = template.to_string();
-    for (key, value) in vars {
-        result = result.replace(&format!("${{{key}}}"), value);
-    }
-    result
-}
-
-/// Extract variable bindings from a relative path matched against a filePathTemplate.
-/// Template segments are either literal (e.g., "sites") or variable (e.g., "${namespace}").
-/// Variables can match one or more path segments (e.g., `${namespace}` matches `ben/crm`).
+/// Extract variable bindings from a path matched against a pathTemplate.
+/// Template segments are either literal (e.g., "sites") or a pure `${var}` reference.
+/// A `${var}` can span one or more `/`-separated path segments.
 /// Returns `None` if the path does not match the template.
-pub fn extract_template_vars(rel_path: &str, template: &str) -> Option<HashMap<String, String>> {
-    let path_parts: Vec<&str> = rel_path.split('/').collect();
+pub fn extract_template_vars(path: &str, template: &str) -> Option<HashMap<String, String>> {
+    let path_parts: Vec<&str> = path.split('/').collect();
     let tmpl_parts: Vec<&str> = template.split('/').collect();
     let mut vars = HashMap::new();
     if extract_segments(&path_parts, &tmpl_parts, &mut vars) {
@@ -171,24 +161,6 @@ fn extract_segments(
             }
         }
         false
-    } else if let Some((var_expr, suffix)) = parse_var_with_suffix(t) {
-        // Variable with literal suffix (e.g., "${name}.yaml")
-        if path.is_empty() {
-            return false;
-        }
-        let seg = path[0];
-        if let Some(captured) = seg.strip_suffix(suffix) {
-            if captured.is_empty() {
-                return false;
-            }
-            let mut branch = vars.clone();
-            branch.insert(var_expr.to_string(), captured.to_string());
-            if extract_segments(&path[1..], &tmpl[1..], &mut branch) {
-                *vars = branch;
-                return true;
-            }
-        }
-        false
     } else {
         // Literal: must match exactly
         if path.is_empty() || path[0] != t {
@@ -196,22 +168,6 @@ fn extract_segments(
         }
         extract_segments(&path[1..], &tmpl[1..], vars)
     }
-}
-
-/// Parse a template segment like "${name}.yaml" into ("name", ".yaml").
-/// Returns None if the segment doesn't contain a variable-with-suffix pattern.
-fn parse_var_with_suffix(segment: &str) -> Option<(&str, &str)> {
-    let start = segment.find("${")?;
-    let end = segment.find('}')?;
-    if start != 0 {
-        return None;
-    }
-    let var_name = &segment[start + 2..end];
-    let suffix = &segment[end + 1..];
-    if suffix.is_empty() {
-        return None; // Pure variable, handled elsewhere
-    }
-    Some((var_name, suffix))
 }
 
 #[cfg(test)]
@@ -223,7 +179,7 @@ mod tests {
         TypeDef {
             name: "Collection".to_string(),
             description: "A named collection of items".to_string(),
-            file_path_template: "${namespace}/versions/${version}/collection/${name}.yaml".to_string(),
+            path_template: "${namespace}/versions/${version}/collection/${name}".to_string(),
             properties: vec![
                 Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
@@ -238,7 +194,7 @@ mod tests {
         TypeDef {
             name: "Field".to_string(),
             description: "A field belonging to a collection".to_string(),
-            file_path_template: "${namespace}/versions/${version}/field/${collection}/${name}.yaml".to_string(),
+            path_template: "${namespace}/versions/${version}/field/${collection}/${name}".to_string(),
             properties: vec![
                 Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
@@ -300,7 +256,7 @@ label_plural: "Opportunities"
         let td = TypeDef {
             name: "Manifest".to_string(),
             description: "".to_string(),
-            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            path_template: "${project}/versions/${version}/manifest".to_string(),
             properties: vec![
                 Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
@@ -324,7 +280,7 @@ label_plural: "Opportunities"
         let td = TypeDef {
             name: "Manifest".to_string(),
             description: "".to_string(),
-            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            path_template: "${project}/versions/${version}/manifest".to_string(),
             properties: vec![
                 Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
@@ -341,7 +297,7 @@ label_plural: "Opportunities"
         let td = TypeDef {
             name: "Manifest".to_string(),
             description: "".to_string(),
-            file_path_template: "${project}/versions/${version}/manifest.yaml".to_string(),
+            path_template: "${project}/versions/${version}/manifest".to_string(),
             properties: vec![
                 Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "version".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
@@ -423,7 +379,7 @@ label_plural: "Opportunities"
         let project_def = TypeDef {
             name: "Project".to_string(),
             description: "A project".to_string(),
-            file_path_template: "${namespace}/project.yaml".to_string(),
+            path_template: "${namespace}/project".to_string(),
             properties: vec![
                 Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "name".to_string(), field_type: FieldType::String, create_only: false },
@@ -453,7 +409,7 @@ label_plural: "Opportunities"
         let project_def = TypeDef {
             name: "Project".to_string(),
             description: "A project".to_string(),
-            file_path_template: "${namespace}/project.yaml".to_string(),
+            path_template: "${namespace}/project".to_string(),
             properties: vec![
                 Property { name: "namespace".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
                 Property { name: "name".to_string(), field_type: FieldType::String, create_only: false },
@@ -504,8 +460,8 @@ label_plural: "Opportunities"
     #[test]
     fn test_extract_template_vars_simple() {
         let vars = extract_template_vars(
-            "ben/crm/project.yaml",
-            "${namespace}/project.yaml",
+            "ben/crm/project",
+            "${namespace}/project",
         ).unwrap();
         assert_eq!(vars.get("namespace").unwrap(), "ben/crm");
     }
@@ -513,8 +469,8 @@ label_plural: "Opportunities"
     #[test]
     fn test_extract_template_vars_versioned() {
         let vars = extract_template_vars(
-            "ben/crm/versions/0.0.1-dev/collection/account.yaml",
-            "${namespace}/versions/${version}/collection/${name}.yaml",
+            "ben/crm/versions/0.0.1-dev/collection/account",
+            "${namespace}/versions/${version}/collection/${name}",
         ).unwrap();
         assert_eq!(vars.get("namespace").unwrap(), "ben/crm");
         assert_eq!(vars.get("version").unwrap(), "0.0.1-dev");
@@ -524,8 +480,8 @@ label_plural: "Opportunities"
     #[test]
     fn test_extract_template_vars_nested() {
         let vars = extract_template_vars(
-            "ben/crm/versions/0.0.1-dev/field/account/company.yaml",
-            "${namespace}/versions/${version}/field/${collection}/${name}.yaml",
+            "ben/crm/versions/0.0.1-dev/field/account/company",
+            "${namespace}/versions/${version}/field/${collection}/${name}",
         ).unwrap();
         assert_eq!(vars.get("namespace").unwrap(), "ben/crm");
         assert_eq!(vars.get("version").unwrap(), "0.0.1-dev");
@@ -536,8 +492,8 @@ label_plural: "Opportunities"
     #[test]
     fn test_extract_template_vars_datasets() {
         let vars = extract_template_vars(
-            "ben/crm/datasets/acme.yaml",
-            "${namespace}/datasets/${dataset_id}.yaml",
+            "ben/crm/datasets/acme",
+            "${namespace}/datasets/${dataset_id}",
         ).unwrap();
         assert_eq!(vars.get("namespace").unwrap(), "ben/crm");
         assert_eq!(vars.get("dataset_id").unwrap(), "acme");
@@ -546,30 +502,16 @@ label_plural: "Opportunities"
     #[test]
     fn test_extract_template_vars_no_match() {
         assert!(extract_template_vars(
-            "ben/crm/other/thing.yaml",
-            "${namespace}/project.yaml",
+            "ben/crm/other/thing",
+            "${namespace}/project",
         ).is_none());
     }
 
     #[test]
     fn test_extract_template_vars_literal_mismatch() {
         assert!(extract_template_vars(
-            "ben/crm/sites/acme.yaml",
-            "${namespace}/datasets/${dataset_id}.yaml",
+            "ben/crm/sites/acme",
+            "${namespace}/datasets/${dataset_id}",
         ).is_none());
     }
-
-    #[test]
-    fn test_fill_template() {
-        let mut vars = HashMap::new();
-        vars.insert("namespace".to_string(), "ben/crm".to_string());
-        assert_eq!(fill_template("${namespace}/project.yaml", &vars), "ben/crm/project.yaml");
-
-        vars.insert("dataset_id".to_string(), "acme".to_string());
-        assert_eq!(
-            fill_template("${namespace}/datasets/${dataset_id}.yaml", &vars),
-            "ben/crm/datasets/acme.yaml"
-        );
-    }
-
 }
