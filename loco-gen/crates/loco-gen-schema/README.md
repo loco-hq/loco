@@ -1,101 +1,145 @@
 # loco-gen-schema
 
-YAML schema parsing, instance validation, and Rust code generation.
+YAML schema parsing, instance loading, and Rust code generation.
 
 ## What It Does
 
 1. Parses YAML type definitions into `TypeDef` structs
-2. Scans and validates instance files against their type definitions
-3. Generates Rust source code — structs, constructors, accessors, and instance loaders
+2. Generates Rust source code — per-type structs with constructors and accessors, plus a `SchemaStore` with typed CRUD methods over a `SchemaRegistry`
+3. At runtime, loads instance YAML files from disk, validates them against their type definitions, and serves CRUD operations from a thread-safe in-memory registry
 
 ## Type Definitions
 
-Type files live in `schemas/types/` and define a type's properties:
+Type files live in `schemas/types/` and define a type's properties and on-disk layout:
 
 ```yaml
 # schemas/types/collection.yaml
-version: 1
 description: "A named collection of items"
+filePathTemplate: "${project}/versions/${version}/collections/${name}.yaml"
 properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
   name:
-    type: string
+    type: slug
+    createOnly: true
   label:
     type: string
   label_plural:
     type: string
 ```
 
-Supported field types: `string`, `integer`, `float`, `boolean`.
+### Supported field types
 
-Optional `filePathTemplate` controls how nested instances are organized on disk:
+| Type | Notes |
+|------|-------|
+| `string` | |
+| `integer` | `i64` |
+| `float` | `f64` |
+| `boolean` | |
+| `slug` | Path-safe identifier `[a-z0-9_.-]+`. Optional `segments:` (default 1) controls how many `/`-separated parts are allowed. |
+| `list` | Requires `items:` naming a scalar type. Nested lists are rejected. |
 
-```yaml
-filePathTemplate: "${collection}/${name}"
-```
+### Property flags
+
+- `createOnly: true` — field is immutable after creation.
+- Every `${var}` in `filePathTemplate` **must** be declared as a property with `type: slug` and `createOnly: true`. Parse fails otherwise.
 
 ## Instance Files
 
-Instances live under `schemas/instances/{user}/{project}/{type}/` and are validated against their type definition at scan time. The type folder name is matched case-insensitively to a TypeDef.
+Instances live under `schemas/instances/` at paths matching their type's `filePathTemplate`:
 
 ```yaml
-# schemas/instances/ben/crm/collection/account.yaml
-name: "account"
+# schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml
 label: "Account"
 label_plural: "Accounts"
 ```
 
-### Namespace Convention
+Template-variable fields (`project`, `version`, `name` above) are extracted from the file path — don't repeat them in the YAML body.
 
-- Flat types: `{user}/{project}.{key}` (e.g., `ben/crm.account`)
-- Nested types (with `filePathTemplate`): `{user}/{project}.{subdir}/{key}` (e.g., `ben/crm.account/company`)
+### Namespace
+
+An instance's namespace IS its path relative to `instances_dir` with `.yaml` stripped:
+
+- `ben/crm/project.yaml` → `ben/crm/project`
+- `ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
 
 ## Public API
 
 ### Parsing
 
 ```rust
-// Parse a schema from a YAML string
-let schema = parser::parse_schema(yaml_str)?;
-
-// Parse from file
-let schema = parser::parse_schema_file(path)?;
+let type_def = parser::parse_schema(yaml_str, "collection")?;
+let type_def = parser::parse_schema_file(path)?;
 ```
 
-### Instance Scanning
+### Instance scanning (low-level)
 
 ```rust
-// Scan all instances, validating against type definitions
-let instances = instance::scan_instances(instances_dir, &type_defs)?;
+let instances = instance::scan_all(instances_dir, &type_defs)?;
 ```
 
-### Code Generation
+Most consumers won't call this directly — it's wrapped by `SchemaRegistry::load`.
+
+### Registry (runtime)
+
+`SchemaRegistry` is the thread-safe in-memory store, backed by `RwLock<HashMap<...>>`. The generated `SchemaStore` wraps it; you rarely construct one directly.
 
 ```rust
-// Generate Rust code for all types with their instances
-let code = codegen::generate_all(&type_defs, &instances)?;
+let registry = registry::SchemaRegistry::load(instances_dir, &type_defs)?;
+registry.list_all_instances("collection");
+registry.get_instance("collection", "ben/crm/versions/0.0.1/collections/account");
+registry.create_instance("collection", key, fields)?;
+registry.update_instance("collection", key, fields)?;
+registry.delete_instance("collection", key)?;
+registry.delete_instances_by_prefix("field", prefix)?;
 ```
 
-### Generated Code Per Type
+Mutating calls write the instance YAML back to disk.
 
-For a type named `Collection`, the codegen emits:
+### Code generation
 
-- `struct Collection { ... }` with `#[derive(Debug, Clone, PartialEq)]`
-- `Collection::new(name, label, label_plural)` — constructor
-- `.name()`, `.label()`, `.label_plural()` — accessor methods
-- `Collection::from_cache(cache, key)` — reconstruct from `TypedCache`
-- `.to_cache(cache, key)` — store into `TypedCache`
-- `Collection::load_instance(namespace)` — load a single baked-in instance
-- `Collection::load_all_instances()` — load all instances as `Vec<(&str, Self)>`
+```rust
+let code = codegen::generate_all(&type_defs);
+```
 
-Rust keyword escaping is handled automatically (e.g., `type` becomes `r#type`).
+## Generated Code
+
+For each `TypeDef` named e.g. `Collection`, codegen emits:
+
+- `pub struct Collection { ... }` deriving `Debug, Clone, PartialEq, serde::Serialize`
+- `Collection::new(...)` — constructor taking all fields in declaration order
+- Field accessors returning `&str` / `i64` / `f64` / `bool` / `&[T]`
+
+Plus, on a single shared `SchemaStore`:
+
+- `SchemaStore::load(instances_dir) -> Result<Self, Error>` — scan and load all instances
+- Generic methods keyed by type name: `list_all`, `list`, `get`, `create`, `update`, `delete`
+- Typed per-type methods (shown here for `Collection`):
+  - `get_collection(key) -> Option<Collection>`
+  - `has_collection(key) -> bool`
+  - `list_collections(prefix) -> Vec<(String, Collection)>`
+  - `list_all_collections() -> Vec<(String, Collection)>`
+  - `create_collection(key, fields) -> Result<..>`
+  - `update_collection(key, fields) -> Result<..>`
+  - `delete_collection(key) -> Result<()>`
+  - `delete_collections_by_prefix(prefix) -> Result<Vec<String>>`
+
+Rust keyword escaping is handled automatically (e.g. `type` → `r#type`).
 
 ## Key Types
 
-- `TypeDef` — parsed type definition with name, description, properties
-- `Property` — name + `FieldType` pair
-- `FieldType` — String, Integer, Float, Boolean
-- `Instance` — validated instance with type name, namespace, and field values
-- `Schema` — version + TypeDef wrapper
+- `TypeDef` — parsed type definition (name, description, `file_path_template`, properties)
+- `Property` — name, `FieldType`, `create_only` flag
+- `FieldType` — `String`, `Integer`, `Float`, `Boolean`, `Slug { segments }`, `List(Box<FieldType>)`
+- `FieldValue` — matching value variant used by `Instance`
+- `Instance` — validated instance (type_name, namespace, values)
+- `SchemaRegistry` — runtime instance store (thread-safe, on-disk backed)
+- `Error` — crate error type
 
 ## Tests
 

@@ -75,9 +75,9 @@ These conventions apply to property names in type definitions and variable names
 - **`project`** — fully-qualified project reference (e.g. `ben/crm`). Used for direct "belongs-to" links and in path templates via `${project}`. Preferred in user-facing contexts.
 - **`namespace`** — external scope reference, for pulling inherited metadata from another project (e.g. app-store dependency). Reserved for cross-project references; do not use as a synonym for `project`.
 
-### Implicit fields from template variables
+### Template variables must be declared
 
-Every `${var}` in a `filePathTemplate` becomes an implicit `String` field on the generated struct. A declared property whose name collides with a template variable is a parse-time error — the template is the source of truth for those values.
+Every `${var}` in a `filePathTemplate` **must** be declared as a property with `type: slug` and `createOnly: true`. Parse fails otherwise (`TemplateVarNotDeclared` / `TemplateVarNotSlug` / `TemplateVarNotCreateOnly`). At instance-load time the value is extracted from the file path, so instance YAML bodies should not repeat these fields.
 
 ## Key Patterns
 
