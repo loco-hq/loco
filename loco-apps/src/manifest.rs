@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::Manifest;
+use crate::{Manifest, SchemaStore};
 
 #[derive(Debug)]
 pub enum ManifestError {
@@ -32,8 +32,8 @@ pub fn parse_dependency(dep: &str) -> Result<(&str, &str, &str), ManifestError> 
     Ok((user, project, version))
 }
 
-fn find_manifest(project: &str, version: &str) -> Option<Manifest> {
-    crate::list_all_manifests()
+fn find_manifest(schema: &SchemaStore, project: &str, version: &str) -> Option<Manifest> {
+    schema.list_all_manifests()
         .into_iter()
         .find(|(_, m)| m.project() == project && m.version() == version)
         .map(|(_, m)| m)
@@ -51,7 +51,7 @@ fn manifest_dep_key(manifest: &Manifest) -> Option<String> {
 /// Given a root dependency string like `ben/cars@0.0.1-dev`, walk the full
 /// transitive dependency graph via Manifest instances. Returns every
 /// `(user, project)` reachable from the root, root first.
-pub fn resolve_dependency_tree(root: &str) -> Result<Vec<(String, String)>, ManifestError> {
+pub fn resolve_dependency_tree(schema: &SchemaStore, root: &str) -> Result<Vec<(String, String)>, ManifestError> {
     let (root_user, root_project, root_version) = parse_dependency(root)?;
 
     let mut visited: HashSet<(String, String)> = HashSet::new();
@@ -70,7 +70,7 @@ pub fn resolve_dependency_tree(root: &str) -> Result<Vec<(String, String)>, Mani
         result.push((user.clone(), project.clone()));
 
         let project_str = format!("{user}/{project}");
-        if let Some(manifest) = find_manifest(&project_str, &version) {
+        if let Some(manifest) = find_manifest(schema, &project_str, &version) {
             for dep in manifest.dependencies() {
                 let (du, dp, dv) = parse_dependency(dep)?;
                 queue.push_back((du.to_string(), dp.to_string(), dv.to_string()));
@@ -83,8 +83,8 @@ pub fn resolve_dependency_tree(root: &str) -> Result<Vec<(String, String)>, Mani
 
 /// Walk every Manifest in the registry and verify that each declared
 /// dependency is itself present as a Manifest. Intended for startup.
-pub fn validate_manifests() -> Result<(), ManifestError> {
-    let all = crate::list_all_manifests();
+pub fn validate_manifests(schema: &SchemaStore) -> Result<(), ManifestError> {
+    let all = schema.list_all_manifests();
     let available: HashSet<String> = all
         .iter()
         .filter_map(|(_, m)| manifest_dep_key(m))

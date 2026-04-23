@@ -1,8 +1,9 @@
 use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::Once;
 
-static SUITE_LOCK: Mutex<()> = Mutex::new(());
+// `std::env::set_var` is not thread-safe; guard it so parallel suites set it exactly once.
+static ADAPTER_ENV_ONCE: Once = Once::new();
 
 /// Copy a directory tree recursively.
 fn copy_dir_all(src: &Path, dst: &Path) {
@@ -37,8 +38,6 @@ fn crate_dir() -> &'static Path {
 /// - `schemas/instances/`, `auth/` come from the suite's `fixtures/` folder
 ///   if present, otherwise empty dirs are created
 fn run_suite(suite_dir: &Path) {
-    let _guard = SUITE_LOCK.lock().unwrap();
-
     // 1. Build server root in a tempdir
     let tmp = tempfile::TempDir::new().unwrap();
 
@@ -58,8 +57,10 @@ fn run_suite(suite_dir: &Path) {
         }
     }
 
-    // 2. Use in-memory adapter (no SQLite needed for tests)
-    unsafe { std::env::set_var("LOCO_ADAPTER", "memory") };
+    // 2. Use in-memory adapter (no SQLite needed for tests). Set once across all suites.
+    ADAPTER_ENV_ONCE.call_once(|| {
+        unsafe { std::env::set_var("LOCO_ADAPTER", "memory") };
+    });
 
     // 3. Build the app rooted at the tempdir
     let app = loco_apps::server::build_app_with_root(tmp.path());

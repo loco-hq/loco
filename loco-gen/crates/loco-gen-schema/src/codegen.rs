@@ -52,7 +52,7 @@ pub fn generate(type_def: &TypeDef) -> String {
     generate_from_map(&mut out, type_def, &fields);
     out.push_str("}\n\n");
 
-    generate_registry_fns(&mut out, type_def);
+    generate_store_methods(&mut out, type_def);
 
     out
 }
@@ -127,7 +127,7 @@ fn generate_from_map(out: &mut String, type_def: &TypeDef, fields: &[(String, Fi
     out.push_str("    }\n");
 }
 
-fn generate_registry_fns(out: &mut String, type_def: &TypeDef) {
+fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     let name = &type_def.name;
     let snake = to_snake_case(name);
     let plural = format!("{snake}s");
@@ -135,68 +135,72 @@ fn generate_registry_fns(out: &mut String, type_def: &TypeDef) {
     let err = "loco_gen_schema::error::Error";
     let map = "std::collections::HashMap<String, String>";
 
-    out.push_str(&format!(
-        "pub fn get_{snake}(key: &str) -> Option<{name}> {{\n"
-    ));
-    out.push_str(&format!(
-        "    with_schema(|r| r.get_instance(\"{registry_key}\", key).map(|f| {name}::from_map(&f)))\n"
-    ));
-    out.push_str("}\n\n");
+    out.push_str("impl SchemaStore {\n");
 
     out.push_str(&format!(
-        "pub fn has_{snake}(key: &str) -> bool {{\n"
+        "    pub fn get_{snake}(&self, key: &str) -> Option<{name}> {{\n"
     ));
     out.push_str(&format!(
-        "    with_schema(|r| r.has_instance(\"{registry_key}\", key))\n"
+        "        self.registry.get_instance(\"{registry_key}\", key).map(|f| {name}::from_map(&f))\n"
     ));
-    out.push_str("}\n\n");
+    out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "pub fn list_{plural}(prefix: &str) -> Vec<(String, {name})> {{\n"
+        "    pub fn has_{snake}(&self, key: &str) -> bool {{\n"
     ));
     out.push_str(&format!(
-        "    with_schema(|r| r.list_instances(\"{registry_key}\", prefix).into_iter().map(|(k, v)| (k, {name}::from_map(&v))).collect())\n"
+        "        self.registry.has_instance(\"{registry_key}\", key)\n"
     ));
-    out.push_str("}\n\n");
+    out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "pub fn list_all_{plural}() -> Vec<(String, {name})> {{\n"
+        "    pub fn list_{plural}(&self, prefix: &str) -> Vec<(String, {name})> {{\n"
     ));
     out.push_str(&format!(
-        "    with_schema(|r| r.list_all_instances(\"{registry_key}\").into_iter().map(|(k, v)| (k, {name}::from_map(&v))).collect())\n"
+        "        self.registry.list_instances(\"{registry_key}\", prefix).into_iter().map(|(k, v)| (k, {name}::from_map(&v))).collect()\n"
     ));
-    out.push_str("}\n\n");
+    out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "pub fn create_{snake}(key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
+        "    pub fn list_all_{plural}(&self) -> Vec<(String, {name})> {{\n"
     ));
     out.push_str(&format!(
-        "    with_schema(|r| r.create_instance(\"{registry_key}\", key, fields))\n"
+        "        self.registry.list_all_instances(\"{registry_key}\").into_iter().map(|(k, v)| (k, {name}::from_map(&v))).collect()\n"
     ));
-    out.push_str("}\n\n");
+    out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "pub fn update_{snake}(key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
+        "    pub fn create_{snake}(&self, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
     ));
     out.push_str(&format!(
-        "    with_schema(|r| r.update_instance(\"{registry_key}\", key, fields))\n"
+        "        self.registry.create_instance(\"{registry_key}\", key, fields)\n"
     ));
-    out.push_str("}\n\n");
+    out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "pub fn delete_{snake}(key: &str) -> Result<(), {err}> {{\n"
+        "    pub fn update_{snake}(&self, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
     ));
     out.push_str(&format!(
-        "    with_schema(|r| r.delete_instance(\"{registry_key}\", key))\n"
+        "        self.registry.update_instance(\"{registry_key}\", key, fields)\n"
     ));
-    out.push_str("}\n\n");
+    out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "pub fn delete_{plural}_by_prefix(prefix: &str) -> Result<Vec<String>, {err}> {{\n"
+        "    pub fn delete_{snake}(&self, key: &str) -> Result<(), {err}> {{\n"
     ));
     out.push_str(&format!(
-        "    with_schema(|r| r.delete_instances_by_prefix(\"{registry_key}\", prefix))\n"
+        "        self.registry.delete_instance(\"{registry_key}\", key)\n"
     ));
+    out.push_str("    }\n\n");
+
+    out.push_str(&format!(
+        "    pub fn delete_{plural}_by_prefix(&self, prefix: &str) -> Result<Vec<String>, {err}> {{\n"
+    ));
+    out.push_str(&format!(
+        "        self.registry.delete_instances_by_prefix(\"{registry_key}\", prefix)\n"
+    ));
+    out.push_str("    }\n");
+
     out.push_str("}\n");
 }
 
@@ -258,41 +262,56 @@ fn generate_preamble(type_defs: &[TypeDef]) -> String {
         .map(type_def_literal)
         .collect::<Vec<_>>()
         .join(",\n");
+    let map = "std::collections::HashMap<String, String>";
+    let err = "loco_gen_schema::error::Error";
 
     let mut out = String::new();
-    out.push_str("static SCHEMA: std::sync::RwLock<Option<loco_gen_schema::registry::SchemaRegistry>> = std::sync::RwLock::new(None);\n\n");
-    out.push_str("fn with_schema<F, T>(f: F) -> T where F: FnOnce(&loco_gen_schema::registry::SchemaRegistry) -> T {\n");
-    out.push_str("    let guard = SCHEMA.read().unwrap();\n");
-    out.push_str("    f(guard.as_ref().expect(\"schema not initialized: call init_schema before using schema functions\"))\n");
+    out.push_str("pub struct SchemaStore {\n");
+    out.push_str("    registry: loco_gen_schema::registry::SchemaRegistry,\n");
     out.push_str("}\n\n");
-    out.push_str("pub fn init_schema(instances_dir: &std::path::Path) -> Result<(), loco_gen_schema::error::Error> {\n");
-    out.push_str("    let registry = loco_gen_schema::registry::SchemaRegistry::load(instances_dir, &schema_type_defs())?;\n");
-    out.push_str("    *SCHEMA.write().unwrap() = Some(registry);\n");
-    out.push_str("    Ok(())\n");
+    out.push_str("impl SchemaStore {\n");
+    out.push_str(&format!(
+        "    pub fn load(instances_dir: &std::path::Path) -> Result<Self, {err}> {{\n"
+    ));
+    out.push_str("        let registry = loco_gen_schema::registry::SchemaRegistry::load(instances_dir, &schema_type_defs())?;\n");
+    out.push_str("        Ok(SchemaStore { registry })\n");
+    out.push_str("    }\n\n");
+    out.push_str(&format!(
+        "    pub fn list_all(&self, type_name: &str) -> Vec<(String, {map})> {{\n"
+    ));
+    out.push_str("        self.registry.list_all_instances(type_name)\n");
+    out.push_str("    }\n\n");
+    out.push_str(&format!(
+        "    pub fn list(&self, type_name: &str, prefix: &str) -> Vec<(String, {map})> {{\n"
+    ));
+    out.push_str("        self.registry.list_instances(type_name, prefix)\n");
+    out.push_str("    }\n\n");
+    out.push_str(&format!(
+        "    pub fn get(&self, type_name: &str, key: &str) -> Option<{map}> {{\n"
+    ));
+    out.push_str("        self.registry.get_instance(type_name, key)\n");
+    out.push_str("    }\n\n");
+    out.push_str(&format!(
+        "    pub fn create(&self, type_name: &str, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
+    ));
+    out.push_str("        self.registry.create_instance(type_name, key, fields)\n");
+    out.push_str("    }\n\n");
+    out.push_str(&format!(
+        "    pub fn update(&self, type_name: &str, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
+    ));
+    out.push_str("        self.registry.update_instance(type_name, key, fields)\n");
+    out.push_str("    }\n\n");
+    out.push_str(&format!(
+        "    pub fn delete(&self, type_name: &str, key: &str) -> Result<(), {err}> {{\n"
+    ));
+    out.push_str("        self.registry.delete_instance(type_name, key)\n");
+    out.push_str("    }\n");
     out.push_str("}\n\n");
     out.push_str("fn schema_type_defs() -> Vec<loco_gen_schema::types::TypeDef> {\n");
     out.push_str("    vec![\n");
     out.push_str(&type_def_literals);
     out.push_str(",\n");
     out.push_str("    ]\n");
-    out.push_str("}\n\n");
-    out.push_str("pub fn schema_list_all(type_name: &str) -> Vec<(String, std::collections::HashMap<String, String>)> {\n");
-    out.push_str("    with_schema(|r| r.list_all_instances(type_name))\n");
-    out.push_str("}\n\n");
-    out.push_str("pub fn schema_list(type_name: &str, prefix: &str) -> Vec<(String, std::collections::HashMap<String, String>)> {\n");
-    out.push_str("    with_schema(|r| r.list_instances(type_name, prefix))\n");
-    out.push_str("}\n\n");
-    out.push_str("pub fn schema_get(type_name: &str, key: &str) -> Option<std::collections::HashMap<String, String>> {\n");
-    out.push_str("    with_schema(|r| r.get_instance(type_name, key))\n");
-    out.push_str("}\n\n");
-    out.push_str("pub fn schema_create(type_name: &str, key: &str, fields: std::collections::HashMap<String, String>) -> Result<std::collections::HashMap<String, String>, loco_gen_schema::error::Error> {\n");
-    out.push_str("    with_schema(|r| r.create_instance(type_name, key, fields))\n");
-    out.push_str("}\n\n");
-    out.push_str("pub fn schema_update(type_name: &str, key: &str, fields: std::collections::HashMap<String, String>) -> Result<std::collections::HashMap<String, String>, loco_gen_schema::error::Error> {\n");
-    out.push_str("    with_schema(|r| r.update_instance(type_name, key, fields))\n");
-    out.push_str("}\n\n");
-    out.push_str("pub fn schema_delete(type_name: &str, key: &str) -> Result<(), loco_gen_schema::error::Error> {\n");
-    out.push_str("    with_schema(|r| r.delete_instance(type_name, key))\n");
     out.push_str("}\n");
     out
 }
@@ -403,19 +422,20 @@ mod tests {
     }
 
     #[test]
-    fn test_generates_registry_fns() {
+    fn test_generates_store_methods() {
         let code = generate(&sample_type_def());
-        // No registry parameter — functions are argument-free (key/prefix only)
-        assert!(code.contains("pub fn get_collection(key: &str)"));
-        assert!(code.contains("pub fn has_collection(key: &str)"));
-        assert!(code.contains("pub fn list_collections(prefix: &str)"));
-        assert!(code.contains("pub fn list_all_collections()"));
-        assert!(code.contains("pub fn create_collection(key: &str,"));
-        assert!(code.contains("pub fn update_collection(key: &str,"));
-        assert!(code.contains("pub fn delete_collection(key: &str)"));
-        assert!(code.contains("pub fn delete_collections_by_prefix(prefix: &str)"));
-        assert!(code.contains(r#"get_instance("collection", key)"#));
-        assert!(code.contains(r#"list_all_instances("collection")"#));
+        // Methods on SchemaStore — `&self` receiver, no global
+        assert!(code.contains("impl SchemaStore {"));
+        assert!(code.contains("pub fn get_collection(&self, key: &str)"));
+        assert!(code.contains("pub fn has_collection(&self, key: &str)"));
+        assert!(code.contains("pub fn list_collections(&self, prefix: &str)"));
+        assert!(code.contains("pub fn list_all_collections(&self)"));
+        assert!(code.contains("pub fn create_collection(&self, key: &str,"));
+        assert!(code.contains("pub fn update_collection(&self, key: &str,"));
+        assert!(code.contains("pub fn delete_collection(&self, key: &str)"));
+        assert!(code.contains("pub fn delete_collections_by_prefix(&self, prefix: &str)"));
+        assert!(code.contains(r#"self.registry.get_instance("collection", key)"#));
+        assert!(code.contains(r#"self.registry.list_all_instances("collection")"#));
     }
 
     #[test]
@@ -431,10 +451,12 @@ mod tests {
             ],
         };
         let code = generate_all(&[td]);
-        assert!(code.contains("static SCHEMA:"));
-        assert!(code.contains("pub fn init_schema("));
+        assert!(code.contains("pub struct SchemaStore {"));
+        assert!(code.contains("pub fn load(instances_dir: &std::path::Path)"));
         assert!(code.contains("fn schema_type_defs()"));
-        assert!(code.contains("fn with_schema<F, T>"));
+        assert!(!code.contains("static SCHEMA"));
+        assert!(!code.contains("init_schema"));
+        assert!(!code.contains("with_schema"));
         assert!(code.contains("\"Site\".to_string()"));
     }
 
