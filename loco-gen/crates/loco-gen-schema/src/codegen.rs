@@ -379,7 +379,6 @@ fn generate_preamble(type_defs: &[TypeDef]) -> String {
         .map(type_def_literal)
         .collect::<Vec<_>>()
         .join(",\n");
-    let map = "std::collections::HashMap<String, String>";
     let err = "loco_gen_schema::error::Error";
 
     let mut out = String::new();
@@ -392,36 +391,6 @@ fn generate_preamble(type_defs: &[TypeDef]) -> String {
     ));
     out.push_str("        let registry = loco_gen_schema::registry::SchemaRegistry::load(instances_dir, &schema_type_defs())?;\n");
     out.push_str("        Ok(SchemaStore { registry })\n");
-    out.push_str("    }\n\n");
-    out.push_str(&format!(
-        "    pub fn list_all(&self, type_name: &str) -> Vec<(String, {map})> {{\n"
-    ));
-    out.push_str("        self.registry.list_all_instances(type_name)\n");
-    out.push_str("    }\n\n");
-    out.push_str(&format!(
-        "    pub fn list(&self, type_name: &str, prefix: &str) -> Vec<(String, {map})> {{\n"
-    ));
-    out.push_str("        self.registry.list_instances(type_name, prefix)\n");
-    out.push_str("    }\n\n");
-    out.push_str(&format!(
-        "    pub fn get(&self, type_name: &str, key: &str) -> Option<{map}> {{\n"
-    ));
-    out.push_str("        self.registry.get_instance(type_name, key)\n");
-    out.push_str("    }\n\n");
-    out.push_str(&format!(
-        "    pub fn create(&self, type_name: &str, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
-    ));
-    out.push_str("        self.registry.create_instance(type_name, key, fields)\n");
-    out.push_str("    }\n\n");
-    out.push_str(&format!(
-        "    pub fn update(&self, type_name: &str, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
-    ));
-    out.push_str("        self.registry.update_instance(type_name, key, fields)\n");
-    out.push_str("    }\n\n");
-    out.push_str(&format!(
-        "    pub fn delete(&self, type_name: &str, key: &str) -> Result<(), {err}> {{\n"
-    ));
-    out.push_str("        self.registry.delete_instance(type_name, key)\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
     out.push_str("fn schema_type_defs() -> Vec<loco_gen_schema::types::TypeDef> {\n");
@@ -581,6 +550,15 @@ mod tests {
         assert!(!code.contains("init_schema"));
         assert!(!code.contains("with_schema"));
         assert!(code.contains("\"Site\".to_string()"));
+
+        // Generic, type_name-keyed methods on SchemaStore must NOT be generated —
+        // callers must dispatch to the per-type stores (e.g. `schema.sites()`) explicitly.
+        assert!(!code.contains("pub fn list_all(&self, type_name:"));
+        assert!(!code.contains("pub fn list(&self, type_name:"));
+        assert!(!code.contains("pub fn get(&self, type_name:"));
+        assert!(!code.contains("pub fn create(&self, type_name:"));
+        assert!(!code.contains("pub fn update(&self, type_name:"));
+        assert!(!code.contains("pub fn delete(&self, type_name:"));
     }
 
     #[test]

@@ -254,8 +254,16 @@ pub async fn meta_list(
     if let Err(resp) = authorize_user(&auth_user.0.user, &user) {
         return resp;
     }
-    let entries = state.schema.list(&type_name, &format!("{user}/{project}/"));
-    ApiResponse::success(entries).into_response()
+    let prefix = format!("{user}/{project}/");
+    match type_name.as_str() {
+        "project" => ApiResponse::success(state.schema.projects().list(&prefix)).into_response(),
+        "dataset" => ApiResponse::success(state.schema.datasets().list(&prefix)).into_response(),
+        "site" => ApiResponse::success(state.schema.sites().list(&prefix)).into_response(),
+        "collection" => ApiResponse::success(state.schema.collections().list(&prefix)).into_response(),
+        "field" => ApiResponse::success(state.schema.fields().list(&prefix)).into_response(),
+        "manifest" => ApiResponse::success(state.schema.manifests().list(&prefix)).into_response(),
+        _ => error_response(StatusCode::BAD_REQUEST, &format!("unknown type: {type_name}")),
+    }
 }
 
 // --- Schema introspection ---

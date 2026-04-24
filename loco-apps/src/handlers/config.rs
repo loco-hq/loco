@@ -19,6 +19,10 @@ pub struct CreateConfigRequest {
     fields: HashMap<String, String>,
 }
 
+fn unknown_type(type_name: &str) -> Response {
+    error_response(StatusCode::BAD_REQUEST, &format!("unknown type: {type_name}"))
+}
+
 pub async fn list(
     auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
@@ -27,22 +31,36 @@ pub async fn list(
     if let Err(resp) = require_config_site(&auth_user.0.user) {
         return resp;
     }
-    let username = &auth_user.0.user.username;
-    let entries = state.schema.list_all(&type_name);
-    let filtered: Vec<_> = entries
-        .into_iter()
-        .filter(|(id, _)| id.starts_with(&format!("{username}/")))
-        .collect();
-    ApiResponse::success(filtered).into_response()
+    let prefix = format!("{}/", auth_user.0.user.username);
+    match type_name.as_str() {
+        "project" => ApiResponse::success(state.schema.projects().list(&prefix)).into_response(),
+        "dataset" => ApiResponse::success(state.schema.datasets().list(&prefix)).into_response(),
+        "site" => ApiResponse::success(state.schema.sites().list(&prefix)).into_response(),
+        _ => unknown_type(&type_name),
+    }
 }
 
 pub async fn get(ctx: ConfigAuth, State(state): State<Arc<AppState>>) -> Response {
-    match state.schema.get(&ctx.type_name, &ctx.id) {
-        Some(fields) => ApiResponse::success(fields).into_response(),
-        None => error_response(
+    let not_found = || {
+        error_response(
             StatusCode::NOT_FOUND,
             &format!("{} not found: {}", ctx.type_name, ctx.id),
-        ),
+        )
+    };
+    match ctx.type_name.as_str() {
+        "project" => match state.schema.projects().get(&ctx.id) {
+            Some(v) => ApiResponse::success(v).into_response(),
+            None => not_found(),
+        },
+        "dataset" => match state.schema.datasets().get(&ctx.id) {
+            Some(v) => ApiResponse::success(v).into_response(),
+            None => not_found(),
+        },
+        "site" => match state.schema.sites().get(&ctx.id) {
+            Some(v) => ApiResponse::success(v).into_response(),
+            None => not_found(),
+        },
+        _ => unknown_type(&ctx.type_name),
     }
 }
 
@@ -55,7 +73,7 @@ pub async fn create(
         "project" => Project::from_path(&ctx.id),
         "dataset" => Dataset::from_path(&ctx.id),
         "site" => Site::from_path(&ctx.id),
-        _ => None,
+        _ => return unknown_type(&ctx.type_name),
     }
     .unwrap_or_default();
 
@@ -63,7 +81,13 @@ pub async fn create(
     for (k, v) in &template_vars {
         fields.entry(k.clone()).or_insert_with(|| v.clone());
     }
-    let result = match state.schema.create(&ctx.type_name, &ctx.id, fields) {
+    let result = match ctx.type_name.as_str() {
+        "project" => state.schema.projects().create(&ctx.id, fields),
+        "dataset" => state.schema.datasets().create(&ctx.id, fields),
+        "site" => state.schema.sites().create(&ctx.id, fields),
+        _ => return unknown_type(&ctx.type_name),
+    };
+    let result = match result {
         Ok(r) => r,
         Err(e) => return schema_error_to_response(e),
     };
@@ -107,8 +131,14 @@ pub async fn update(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateConfigRequest>,
 ) -> Response {
-    match state.schema.update(&ctx.type_name, &ctx.id, body.fields) {
-        Ok(result) => ApiResponse::success(result).into_response(),
+    let result = match ctx.type_name.as_str() {
+        "project" => state.schema.projects().update(&ctx.id, body.fields),
+        "dataset" => state.schema.datasets().update(&ctx.id, body.fields),
+        "site" => state.schema.sites().update(&ctx.id, body.fields),
+        _ => return unknown_type(&ctx.type_name),
+    };
+    match result {
+        Ok(r) => ApiResponse::success(r).into_response(),
         Err(e) => schema_error_to_response(e),
     }
 }
@@ -160,7 +190,13 @@ pub async fn delete(ctx: ConfigAuth, State(state): State<Arc<AppState>>) -> Resp
         }
     }
 
-    match state.schema.delete(&ctx.type_name, &ctx.id) {
+    let result = match ctx.type_name.as_str() {
+        "project" => state.schema.projects().delete(&ctx.id),
+        "dataset" => state.schema.datasets().delete(&ctx.id),
+        "site" => state.schema.sites().delete(&ctx.id),
+        _ => return unknown_type(&ctx.type_name),
+    };
+    match result {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
