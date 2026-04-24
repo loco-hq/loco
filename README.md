@@ -76,7 +76,6 @@ All data endpoints require a tenant ID.
 | GET | `/{user}/{project}/collection/{name}/list` | List all records |
 | GET | `/{user}/{project}/collection/{name}/get/{id}` | Get a record by ID |
 | DELETE | `/{user}/{project}/collection/{name}/delete/{id}` | Delete a record |
-| GET | `/meta/{user}/{project}/{type_name}/list` | List type metadata |
 
 ### Response Format
 

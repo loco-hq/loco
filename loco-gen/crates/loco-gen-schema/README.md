@@ -118,16 +118,18 @@ For each `TypeDef` named e.g. `Collection`, codegen emits:
 Plus, on a single shared `SchemaStore`:
 
 - `SchemaStore::load(instances_dir) -> Result<Self, Error>` — scan and load all instances
-- Generic methods keyed by type name: `list_all`, `list`, `get`, `create`, `update`, `delete`
-- Typed per-type methods (shown here for `Collection`):
-  - `get_collection(key) -> Option<Collection>`
-  - `has_collection(key) -> bool`
-  - `list_collections(prefix) -> Vec<(String, Collection)>`
-  - `list_all_collections() -> Vec<(String, Collection)>`
-  - `create_collection(key, fields) -> Result<..>`
-  - `update_collection(key, fields) -> Result<..>`
-  - `delete_collection(key) -> Result<()>`
-  - `delete_collections_by_prefix(prefix) -> Result<Vec<String>>`
+- One per-type accessor returning a borrowed sub-store, e.g. `schema.collections() -> CollectionStore<'_>`
+
+Each per-type store (shown here for `CollectionStore`) exposes typed CRUD over its own type only:
+
+- `get(key) -> Option<Collection>`
+- `has(key) -> bool`
+- `list(prefix) -> Vec<(String, Collection)>`
+- `list_all() -> Vec<(String, Collection)>`
+- `create(key, fields) -> Result<..>`
+- `update(key, fields) -> Result<..>`
+- `delete(key) -> Result<()>`
+- `delete_by_prefix(prefix) -> Result<Vec<String>>`
 
 Rust keyword escaping is handled automatically (e.g. `type` → `r#type`).
 
