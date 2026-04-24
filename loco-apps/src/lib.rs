@@ -1,6 +1,11 @@
+// Handlers use `Result<_, axum::response::Response>` pervasively; boxing every Response is noise.
+#![allow(clippy::result_large_err)]
+
 include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"));
 
 pub mod auth;
+pub mod handlers;
+pub mod http;
 pub mod manifest;
 pub mod server;
 
