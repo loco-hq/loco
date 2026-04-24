@@ -547,8 +547,8 @@ mod tests {
         registry.create_instance("field", &ns3, f3).unwrap();
 
         // Delete all account fields
-        let account_prefix = format!("ben/crm/versions/0.0.1-dev/field/account/");
-        let deleted = registry.delete_instances_by_prefix("field", &account_prefix).unwrap();
+        let account_prefix = "ben/crm/versions/0.0.1-dev/field/account/";
+        let deleted = registry.delete_instances_by_prefix("field", account_prefix).unwrap();
         assert_eq!(deleted.len(), 2);
 
         // Contact field should still exist
