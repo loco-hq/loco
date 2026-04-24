@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use axum::routing::{delete, get, post, put};
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
 
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter};
 
@@ -47,24 +46,6 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
 
     crate::manifest::validate_manifests(&schema).expect("manifest validation failed");
 
-    let all_collections = schema.collections().list_all();
-    println!("Loaded {} collection(s):", all_collections.len());
-    for (ns, _) in &all_collections {
-        println!("  - {ns}");
-    }
-
-    let all_fields = schema.fields().list_all();
-    println!("Loaded {} field(s):", all_fields.len());
-    for (ns, _) in &all_fields {
-        println!("  - {ns}");
-    }
-
-    let all_sites = schema.sites().list_all();
-    println!("Loaded {} site(s):", all_sites.len());
-    for (id, _) in &all_sites {
-        println!("  - {id}");
-    }
-
     let adapter = build_adapter();
 
     let auth_adapter: Box<dyn AuthAdapter> = Box::new(LocalAuthAdapter::new(&root.join("auth")));
@@ -76,11 +57,6 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
         auth: auth_adapter,
         schema,
     });
-
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
 
     Router::new()
         // Data endpoints
@@ -157,6 +133,5 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
         .route("/auth/api-keys", post(handlers::auth::create_api_key))
         .route("/auth/api-keys/list", get(handlers::auth::list_api_keys))
         .route("/auth/api-keys/{id}", delete(handlers::auth::revoke_api_key))
-        .layer(cors)
         .with_state(state)
 }
