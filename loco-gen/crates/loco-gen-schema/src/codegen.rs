@@ -50,10 +50,12 @@ pub fn generate(type_def: &TypeDef) -> String {
         generate_accessor(&mut out, field_name, field_type);
     }
     generate_from_map(&mut out, type_def, &fields);
+    generate_to_map(&mut out, &fields);
     generate_to_path(&mut out, type_def);
     generate_from_path(&mut out, type_def);
     out.push_str("}\n\n");
 
+    generate_update_struct(&mut out, type_def);
     generate_store_methods(&mut out, type_def);
 
     out
@@ -231,14 +233,131 @@ fn generate_from_map(out: &mut String, type_def: &TypeDef, fields: &[(String, Fi
     out.push_str("    }\n");
 }
 
+fn to_map_insert_expr(field_name: &str, field_type: &FieldType, owner: &str) -> String {
+    let ident = rust_ident(field_name);
+    let access = format!("{owner}.{ident}");
+    match field_type {
+        FieldType::String | FieldType::Slug { .. } => format!(
+            "m.insert(\"{field_name}\".to_string(), {access}.clone());"
+        ),
+        FieldType::Integer | FieldType::Float | FieldType::Boolean => format!(
+            "m.insert(\"{field_name}\".to_string(), {access}.to_string());"
+        ),
+        FieldType::List(_) => format!(
+            "m.insert(\"{field_name}\".to_string(), serde_json::to_string(&{access}).unwrap_or_default());"
+        ),
+    }
+}
+
+fn generate_to_map(out: &mut String, fields: &[(String, FieldType)]) {
+    out.push_str(
+        "    pub fn to_map(&self) -> std::collections::HashMap<String, String> {\n",
+    );
+    out.push_str("        let mut m = std::collections::HashMap::new();\n");
+    for (field_name, field_type) in fields {
+        out.push_str(&format!(
+            "        {}\n",
+            to_map_insert_expr(field_name, field_type, "self")
+        ));
+    }
+    out.push_str("        m\n");
+    out.push_str("    }\n\n");
+}
+
+fn mutable_fields(type_def: &TypeDef) -> Vec<(String, FieldType)> {
+    type_def
+        .properties
+        .iter()
+        .filter(|p| !p.create_only)
+        .map(|p| (p.name.clone(), p.field_type.clone()))
+        .collect()
+}
+
+fn generate_update_struct(out: &mut String, type_def: &TypeDef) {
+    let name = &type_def.name;
+    let update_name = format!("{name}Update");
+    let fields = mutable_fields(type_def);
+
+    out.push_str("#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]\n");
+    out.push_str(&format!("pub struct {update_name} {{\n"));
+    for (field_name, field_type) in &fields {
+        out.push_str("    #[serde(default)]\n");
+        out.push_str(&format!(
+            "    pub {}: Option<{}>,\n",
+            rust_ident(field_name),
+            field_type.rust_type()
+        ));
+    }
+    out.push_str("}\n\n");
+
+    out.push_str(&format!("impl {update_name} {{\n"));
+
+    // from_map: pull each field as Option from a HashMap<String,String>.
+    out.push_str(
+        "    pub fn from_map(fields: &std::collections::HashMap<String, String>) -> Self {\n",
+    );
+    out.push_str(&format!("        {update_name} {{\n"));
+    for (field_name, field_type) in &fields {
+        let ident = rust_ident(field_name);
+        let expr = match field_type {
+            FieldType::String | FieldType::Slug { .. } => {
+                format!("fields.get(\"{field_name}\").cloned()")
+            }
+            FieldType::Integer | FieldType::Float | FieldType::Boolean => {
+                format!("fields.get(\"{field_name}\").and_then(|v| v.parse().ok())")
+            }
+            FieldType::List(_) => {
+                format!("fields.get(\"{field_name}\").and_then(|v| serde_json::from_str(v).ok())")
+            }
+        };
+        out.push_str(&format!("            {ident}: {expr},\n"));
+    }
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    // to_map: only insert fields that are Some.
+    out.push_str(
+        "    pub fn to_map(&self) -> std::collections::HashMap<String, String> {\n",
+    );
+    out.push_str("        let mut m = std::collections::HashMap::new();\n");
+    for (field_name, field_type) in &fields {
+        let ident = rust_ident(field_name);
+        let insert = match field_type {
+            FieldType::String | FieldType::Slug { .. } => format!(
+                "m.insert(\"{field_name}\".to_string(), v.clone());"
+            ),
+            FieldType::Integer | FieldType::Float | FieldType::Boolean => format!(
+                "m.insert(\"{field_name}\".to_string(), v.to_string());"
+            ),
+            FieldType::List(_) => format!(
+                "m.insert(\"{field_name}\".to_string(), serde_json::to_string(v).unwrap_or_default());"
+            ),
+        };
+        out.push_str(&format!(
+            "        if let Some(v) = &self.{ident} {{ {insert} }}\n"
+        ));
+    }
+    out.push_str("        m\n");
+    out.push_str("    }\n");
+
+    out.push_str("}\n\n");
+}
+
 fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     let name = &type_def.name;
     let snake = to_snake_case(name);
     let plural = format!("{snake}s");
     let store = format!("{name}Store");
     let registry_key = name.to_lowercase();
+    let update_name = format!("{name}Update");
     let err = "loco_gen_schema::error::Error";
-    let map = "std::collections::HashMap<String, String>";
+
+    let vars = type_def.template_vars();
+    let to_path_args: Vec<String> = vars
+        .iter()
+        .map(|v| format!("&value.{}", rust_ident(v)))
+        .collect();
+    let to_path_call = format!("{name}::to_path({})", to_path_args.join(", "));
 
     out.push_str(&format!(
         "pub struct {store}<'a> {{\n    registry: &'a loco_gen_schema::registry::SchemaRegistry,\n}}\n\n"
@@ -277,19 +396,22 @@ fn generate_store_methods(out: &mut String, type_def: &TypeDef) {
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "    pub fn create(&self, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
+        "    pub fn create(&self, value: {name}) -> Result<{name}, {err}> {{\n"
     ));
+    out.push_str(&format!("        let key = {to_path_call};\n"));
     out.push_str(&format!(
-        "        self.registry.create_instance(\"{registry_key}\", key, fields)\n"
+        "        let map = self.registry.create_instance(\"{registry_key}\", &key, value.to_map())?;\n"
     ));
+    out.push_str(&format!("        Ok({name}::from_map(&map))\n"));
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
-        "    pub fn update(&self, key: &str, fields: {map}) -> Result<{map}, {err}> {{\n"
+        "    pub fn update(&self, key: &str, patch: {update_name}) -> Result<{name}, {err}> {{\n"
     ));
     out.push_str(&format!(
-        "        self.registry.update_instance(\"{registry_key}\", key, fields)\n"
+        "        let map = self.registry.update_instance(\"{registry_key}\", key, patch.to_map())?;\n"
     ));
+    out.push_str(&format!("        Ok({name}::from_map(&map))\n"));
     out.push_str("    }\n\n");
 
     out.push_str(&format!(
@@ -518,8 +640,15 @@ mod tests {
         assert!(code.contains("pub fn has(&self, key: &str) -> bool"));
         assert!(code.contains("pub fn list(&self, prefix: &str)"));
         assert!(code.contains("pub fn list_all(&self)"));
-        assert!(code.contains("pub fn create(&self, key: &str,"));
-        assert!(code.contains("pub fn update(&self, key: &str,"));
+        // create takes the full struct and derives the key via to_path
+        assert!(code.contains("pub fn create(&self, value: Collection) -> Result<Collection,"));
+        assert!(code.contains(
+            "let key = Collection::to_path(&value.namespace, &value.version, &value.name);"
+        ));
+        // update takes a key + partial update struct and returns the fresh typed value
+        assert!(code.contains(
+            "pub fn update(&self, key: &str, patch: CollectionUpdate) -> Result<Collection,"
+        ));
         assert!(code.contains("pub fn delete(&self, key: &str)"));
         assert!(code.contains("pub fn delete_by_prefix(&self, prefix: &str)"));
         assert!(code.contains(r#"self.registry.get_instance("collection", key)"#));
@@ -528,6 +657,37 @@ mod tests {
         assert!(code.contains("impl SchemaStore {"));
         assert!(code.contains("pub fn collections(&self) -> CollectionStore<'_>"));
         assert!(code.contains("CollectionStore { registry: &self.registry }"));
+    }
+
+    #[test]
+    fn test_generates_to_map() {
+        let code = generate(&sample_type_def());
+        assert!(code.contains("pub fn to_map(&self) -> std::collections::HashMap<String, String>"));
+        assert!(code.contains(r#"m.insert("name".to_string(), self.name.clone());"#));
+        assert!(code.contains(r#"m.insert("item_count".to_string(), self.item_count.to_string());"#));
+        assert!(code.contains(r#"m.insert("is_active".to_string(), self.is_active.to_string());"#));
+    }
+
+    #[test]
+    fn test_generates_update_struct() {
+        let code = generate(&sample_type_def());
+        // The update struct excludes createOnly fields and wraps the rest in Option.
+        assert!(code.contains("pub struct CollectionUpdate {"));
+        assert!(code.contains("pub item_count: Option<i64>,"));
+        assert!(code.contains("pub average_rating: Option<f64>,"));
+        assert!(code.contains("pub is_active: Option<bool>,"));
+        // createOnly template vars must NOT appear in the update struct.
+        assert!(!code.contains("pub namespace: Option"));
+        assert!(!code.contains("pub version: Option"));
+        assert!(!code.contains("pub name: Option"));
+
+        // to_map only inserts when Some
+        assert!(code.contains(
+            r#"if let Some(v) = &self.item_count { m.insert("item_count".to_string(), v.to_string()); }"#
+        ));
+        // from_map lifts fields out of a HashMap<String,String>
+        assert!(code.contains("pub fn from_map(fields: &std::collections::HashMap<String, String>) -> Self"));
+        assert!(code.contains(r#"fields.get("item_count").and_then(|v| v.parse().ok())"#));
     }
 
     #[test]
@@ -559,6 +719,9 @@ mod tests {
         assert!(!code.contains("pub fn create(&self, type_name:"));
         assert!(!code.contains("pub fn update(&self, type_name:"));
         assert!(!code.contains("pub fn delete(&self, type_name:"));
+
+        // Update struct is emitted for every type.
+        assert!(code.contains("pub struct SiteUpdate {"));
     }
 
     #[test]

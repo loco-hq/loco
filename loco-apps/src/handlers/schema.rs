@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -13,7 +12,7 @@ use crate::http::extract::SchemaAuth;
 use crate::http::paths::lookup_site_in_project;
 use crate::http::response::{ApiResponse, error_response, schema_error_to_response};
 use crate::server::AppState;
-use crate::{Collection, Field};
+use crate::{Collection, CollectionUpdate, Field, FieldUpdate};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{get, post};
@@ -52,23 +51,9 @@ pub struct CreateCollectionRequest {
 }
 
 #[derive(Deserialize)]
-pub struct UpdateCollectionRequest {
-    #[serde(default)]
-    label: Option<String>,
-    #[serde(default)]
-    label_plural: Option<String>,
-}
-
-#[derive(Deserialize)]
 pub struct CreateFieldRequest {
     name: String,
     r#type: String,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateFieldRequest {
-    #[serde(default)]
-    r#type: Option<String>,
 }
 
 pub async fn create_collection(
@@ -80,18 +65,15 @@ pub async fn create_collection(
         return resp;
     }
 
-    let mut fields = HashMap::new();
-    fields.insert("name".to_string(), body.name.clone());
-    fields.insert("label".to_string(), body.label);
-    fields.insert("label_plural".to_string(), body.label_plural);
-
-    let namespace_key = Collection::to_path(
-        &format!("{}/{}", ctx.user, ctx.project),
-        &ctx.version,
-        &body.name,
+    let value = Collection::new(
+        format!("{}/{}", ctx.user, ctx.project),
+        ctx.version.clone(),
+        body.name,
+        body.label,
+        body.label_plural,
     );
 
-    match state.schema.collections().create(&namespace_key, fields) {
+    match state.schema.collections().create(value) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -125,18 +107,10 @@ pub async fn update_collection(
     ctx: SchemaAuth,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
-    Json(body): Json<UpdateCollectionRequest>,
+    Json(patch): Json<CollectionUpdate>,
 ) -> Response {
     if let Err(resp) = ctx.require_draft() {
         return resp;
-    }
-
-    let mut fields = HashMap::new();
-    if let Some(label) = body.label {
-        fields.insert("label".to_string(), label);
-    }
-    if let Some(label_plural) = body.label_plural {
-        fields.insert("label_plural".to_string(), label_plural);
     }
 
     let namespace_key = Collection::to_path(
@@ -145,7 +119,7 @@ pub async fn update_collection(
         &name,
     );
 
-    match state.schema.collections().update(&namespace_key, fields) {
+    match state.schema.collections().update(&namespace_key, patch) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -189,19 +163,15 @@ pub async fn create_field(
         return resp;
     }
 
-    let mut fields = HashMap::new();
-    fields.insert("name".to_string(), body.name.clone());
-    fields.insert("collection".to_string(), collection.clone());
-    fields.insert("type".to_string(), body.r#type);
-
-    let namespace_key = Field::to_path(
-        &format!("{}/{}", ctx.user, ctx.project),
-        &ctx.version,
-        &collection,
-        &body.name,
+    let value = Field::new(
+        format!("{}/{}", ctx.user, ctx.project),
+        ctx.version.clone(),
+        collection,
+        body.name,
+        body.r#type,
     );
 
-    match state.schema.fields().create(&namespace_key, fields) {
+    match state.schema.fields().create(value) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -224,15 +194,10 @@ pub async fn update_field(
     ctx: SchemaAuth,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
-    Json(body): Json<UpdateFieldRequest>,
+    Json(patch): Json<FieldUpdate>,
 ) -> Response {
     if let Err(resp) = ctx.require_draft() {
         return resp;
-    }
-
-    let mut fields = HashMap::new();
-    if let Some(r#type) = body.r#type {
-        fields.insert("type".to_string(), r#type);
     }
 
     let namespace_key = Field::to_path(
@@ -242,7 +207,7 @@ pub async fn update_field(
         &name,
     );
 
-    match state.schema.fields().update(&namespace_key, fields) {
+    match state.schema.fields().update(&namespace_key, patch) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }

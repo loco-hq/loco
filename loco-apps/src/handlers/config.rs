@@ -12,7 +12,7 @@ use crate::http::authz::require_config_site;
 use crate::http::extract::ConfigAuth;
 use crate::http::response::{ApiResponse, error_response, schema_error_to_response};
 use crate::server::AppState;
-use crate::{Dataset, Project, Site};
+use crate::{Dataset, DatasetUpdate, Project, ProjectUpdate, Site, SiteUpdate};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{delete as route_delete, get as route_get, post, put};
@@ -92,9 +92,21 @@ pub async fn create(
         fields.entry(k.clone()).or_insert_with(|| v.clone());
     }
     let result = match ctx.type_name.as_str() {
-        "project" => state.schema.projects().create(&ctx.id, fields),
-        "dataset" => state.schema.datasets().create(&ctx.id, fields),
-        "site" => state.schema.sites().create(&ctx.id, fields),
+        "project" => state
+            .schema
+            .projects()
+            .create(Project::from_map(&fields))
+            .map(|v| v.to_map()),
+        "dataset" => state
+            .schema
+            .datasets()
+            .create(Dataset::from_map(&fields))
+            .map(|v| v.to_map()),
+        "site" => state
+            .schema
+            .sites()
+            .create(Site::from_map(&fields))
+            .map(|v| v.to_map()),
         _ => return unknown_type(&ctx.type_name),
     };
     let result = match result {
@@ -111,25 +123,20 @@ pub async fn create(
                 .cloned()
                 .unwrap_or_else(|| project_slug.to_string());
 
-            let mut dataset_fields = HashMap::new();
-            dataset_fields.insert("label".to_string(), format!("{label} Dev"));
-            dataset_fields.insert(
-                "description".to_string(),
+            let _ = state.schema.datasets().create(Dataset::new(
+                project_path.clone(),
+                "dev".to_string(),
+                format!("{label} Dev"),
                 "Default development dataset".to_string(),
-            );
-            let _ = state
-                .schema
-                .datasets()
-                .create(&Dataset::to_path(project_path, "dev"), dataset_fields);
+            ));
 
-            let mut site_fields = HashMap::new();
-            site_fields.insert("label".to_string(), format!("{label} Dev"));
-            site_fields.insert("version".to_string(), "0.0.1-dev".to_string());
-            site_fields.insert("dataset".to_string(), "dev".to_string());
-            let _ = state
-                .schema
-                .sites()
-                .create(&Site::to_path(project_path, "dev"), site_fields);
+            let _ = state.schema.sites().create(Site::new(
+                project_path.clone(),
+                "dev".to_string(),
+                format!("{label} Dev"),
+                "0.0.1-dev".to_string(),
+                "dev".to_string(),
+            ));
         }
     }
 
@@ -142,9 +149,21 @@ pub async fn update(
     Json(body): Json<CreateConfigRequest>,
 ) -> Response {
     let result = match ctx.type_name.as_str() {
-        "project" => state.schema.projects().update(&ctx.id, body.fields),
-        "dataset" => state.schema.datasets().update(&ctx.id, body.fields),
-        "site" => state.schema.sites().update(&ctx.id, body.fields),
+        "project" => state
+            .schema
+            .projects()
+            .update(&ctx.id, ProjectUpdate::from_map(&body.fields))
+            .map(|v| v.to_map()),
+        "dataset" => state
+            .schema
+            .datasets()
+            .update(&ctx.id, DatasetUpdate::from_map(&body.fields))
+            .map(|v| v.to_map()),
+        "site" => state
+            .schema
+            .sites()
+            .update(&ctx.id, SiteUpdate::from_map(&body.fields))
+            .map(|v| v.to_map()),
         _ => return unknown_type(&ctx.type_name),
     };
     match result {
