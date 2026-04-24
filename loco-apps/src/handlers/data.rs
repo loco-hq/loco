@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Json, Router};
 use serde::Deserialize;
 
 use loco_lake::{Record, Value};
@@ -12,6 +12,16 @@ use loco_lake::{Record, Value};
 use crate::http::extract::DataScope;
 use crate::http::response::{ApiResponse, error_response, lake_error_to_response};
 use crate::server::AppState;
+
+pub fn router() -> Router<Arc<AppState>> {
+    use axum::routing::{delete as route_delete, get as route_get, post, put};
+    Router::new()
+        .route("/{name}/add", post(add))
+        .route("/{name}/list", route_get(list))
+        .route("/{name}/get/{id}", route_get(get))
+        .route("/{name}/update/{id}", put(update))
+        .route("/{name}/delete/{id}", route_delete(delete))
+}
 
 #[derive(Deserialize)]
 pub struct AddRecordRequest {

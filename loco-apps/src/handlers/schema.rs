@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::AuthenticatedUser;
@@ -14,6 +14,35 @@ use crate::http::paths::lookup_site_in_project;
 use crate::http::response::{ApiResponse, error_response, schema_error_to_response};
 use crate::server::AppState;
 use crate::{Collection, Field};
+
+pub fn router() -> Router<Arc<AppState>> {
+    use axum::routing::{get, post};
+    Router::new()
+        .route("/{user}/{project}/{version}/collection", post(create_collection))
+        .route(
+            "/{user}/{project}/{version}/collection/list",
+            get(list_collections),
+        )
+        .route(
+            "/{user}/{project}/{version}/collection/{name}",
+            get(get_collection)
+                .put(update_collection)
+                .delete(delete_collection),
+        )
+        .route(
+            "/{user}/{project}/{version}/field/{collection}",
+            post(create_field),
+        )
+        .route(
+            "/{user}/{project}/{version}/field/{collection}/list",
+            get(list_fields),
+        )
+        .route(
+            "/{user}/{project}/{version}/field/{collection}/{name}",
+            axum::routing::put(update_field).delete(delete_field),
+        )
+        .route("/collections", get(introspect))
+}
 
 #[derive(Deserialize)]
 pub struct CreateCollectionRequest {

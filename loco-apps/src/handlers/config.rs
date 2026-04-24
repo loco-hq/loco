@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::auth::AuthenticatedUser;
@@ -13,6 +13,16 @@ use crate::http::extract::ConfigAuth;
 use crate::http::response::{ApiResponse, error_response, schema_error_to_response};
 use crate::server::AppState;
 use crate::{Dataset, Project, Site};
+
+pub fn router() -> Router<Arc<AppState>> {
+    use axum::routing::{delete as route_delete, get as route_get, post, put};
+    Router::new()
+        .route("/{type_name}/list", route_get(list))
+        .route("/get/{*path}", route_get(get))
+        .route("/create/{*path}", post(create))
+        .route("/update/{*path}", put(update))
+        .route("/delete/{*path}", route_delete(delete))
+}
 
 #[derive(Deserialize)]
 pub struct CreateConfigRequest {

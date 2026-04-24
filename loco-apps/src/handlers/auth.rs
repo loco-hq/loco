@@ -3,7 +3,8 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::routing::{delete, get, post, put};
+use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::auth::{
@@ -13,6 +14,19 @@ use crate::auth::{
 use crate::http::paths::lookup_site_in_project;
 use crate::http::response::{ApiResponse, error_response};
 use crate::server::AppState;
+
+pub fn router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/login", post(login))
+        .route("/logout", post(logout))
+        .route("/me", get(me))
+        .route("/users", post(create_user))
+        .route("/users/list", get(list_users))
+        .route("/users/{id}", put(update_user).delete(delete_user))
+        .route("/api-keys", post(create_api_key))
+        .route("/api-keys/list", get(list_api_keys))
+        .route("/api-keys/{id}", delete(revoke_api_key))
+}
 
 #[derive(Deserialize)]
 pub struct LoginRequest {

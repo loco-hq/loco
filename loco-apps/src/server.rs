@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use axum::routing::{delete, get, post, put};
 use axum::Router;
 
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter};
@@ -59,59 +58,9 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
     });
 
     Router::new()
-        // Data endpoints — project comes from X-Project-Id header
-        .route("/data/{name}/add", post(handlers::data::add))
-        .route("/data/{name}/list", get(handlers::data::list))
-        .route("/data/{name}/get/{id}", get(handlers::data::get))
-        .route("/data/{name}/update/{id}", put(handlers::data::update))
-        .route("/data/{name}/delete/{id}", delete(handlers::data::delete))
-        // Schema CRUD endpoints
-        .route(
-            "/schema/{user}/{project}/{version}/collection",
-            post(handlers::schema::create_collection),
-        )
-        .route(
-            "/schema/{user}/{project}/{version}/collection/list",
-            get(handlers::schema::list_collections),
-        )
-        .route(
-            "/schema/{user}/{project}/{version}/collection/{name}",
-            get(handlers::schema::get_collection)
-                .put(handlers::schema::update_collection)
-                .delete(handlers::schema::delete_collection),
-        )
-        .route(
-            "/schema/{user}/{project}/{version}/field/{collection}",
-            post(handlers::schema::create_field),
-        )
-        .route(
-            "/schema/{user}/{project}/{version}/field/{collection}/list",
-            get(handlers::schema::list_fields),
-        )
-        .route(
-            "/schema/{user}/{project}/{version}/field/{collection}/{name}",
-            put(handlers::schema::update_field).delete(handlers::schema::delete_field),
-        )
-        // Schema introspection
-        .route("/schema/collections", get(handlers::schema::introspect))
-        // Config CRUD endpoints (global-scope types)
-        .route("/config/{type_name}/list", get(handlers::config::list))
-        .route("/config/get/{*path}", get(handlers::config::get))
-        .route("/config/create/{*path}", post(handlers::config::create))
-        .route("/config/update/{*path}", put(handlers::config::update))
-        .route("/config/delete/{*path}", delete(handlers::config::delete))
-        // Auth endpoints
-        .route("/auth/login", post(handlers::auth::login))
-        .route("/auth/logout", post(handlers::auth::logout))
-        .route("/auth/me", get(handlers::auth::me))
-        .route("/auth/users", post(handlers::auth::create_user))
-        .route("/auth/users/list", get(handlers::auth::list_users))
-        .route(
-            "/auth/users/{id}",
-            put(handlers::auth::update_user).delete(handlers::auth::delete_user),
-        )
-        .route("/auth/api-keys", post(handlers::auth::create_api_key))
-        .route("/auth/api-keys/list", get(handlers::auth::list_api_keys))
-        .route("/auth/api-keys/{id}", delete(handlers::auth::revoke_api_key))
+        .nest("/data", handlers::data::router())
+        .nest("/schema", handlers::schema::router())
+        .nest("/config", handlers::config::router())
+        .nest("/auth", handlers::auth::router())
         .with_state(state)
 }
