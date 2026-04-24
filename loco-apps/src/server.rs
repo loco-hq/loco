@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::{Collection, Field, SchemaStore, Site};
+use crate::{Collection, Dataset, Field, Project, SchemaStore, Site};
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter, Record, Value};
 
 use crate::auth::{
@@ -28,10 +28,7 @@ pub struct AppState {
 pub struct SiteId(pub String);
 
 fn lookup_site_in_project(schema: &SchemaStore, project: &str, site_name: &str) -> Option<Site> {
-    schema.sites().list_all()
-        .into_iter()
-        .find(|(_, site)| site.project() == project && site.name() == site_name)
-        .map(|(_, site)| site)
+    schema.sites().get(&Site::to_path(project, site_name))
 }
 
 fn resolve_dataset_id(schema: &SchemaStore, project: &str, site_name: &str) -> Result<String, String> {
@@ -40,24 +37,6 @@ fn resolve_dataset_id(schema: &SchemaStore, project: &str, site_name: &str) -> R
     let dataset_field = site.dataset();
     let dataset = if dataset_field.is_empty() { site_name } else { dataset_field };
     Ok(format!("{project}/{dataset}"))
-}
-
-/// Build template_vars from a config ID for disk path resolution.
-/// - "ben/crm/project" -> {project: "ben/crm"}
-/// - "ben/crm/datasets/acme" -> {project: "ben/crm", name: "acme"}
-/// - "ben/crm/sites/dev" -> {project: "ben/crm", name: "dev"}
-fn template_vars_from_config_id(id: &str) -> HashMap<String, String> {
-    let mut vars = HashMap::new();
-    if let Some(pos) = id.find("/datasets/") {
-        vars.insert("project".to_string(), id[..pos].to_string());
-        vars.insert("name".to_string(), id[pos + "/datasets/".len()..].to_string());
-    } else if let Some(pos) = id.find("/sites/") {
-        vars.insert("project".to_string(), id[..pos].to_string());
-        vars.insert("name".to_string(), id[pos + "/sites/".len()..].to_string());
-    } else if let Some(pos) = id.find("/project") {
-        vars.insert("project".to_string(), id[..pos].to_string());
-    }
-    vars
 }
 
 
@@ -171,7 +150,7 @@ fn validate_collection(schema: &SchemaStore, user: &str, project: &str, name: &s
 }
 
 fn validate_project(schema: &SchemaStore, user: &str, project: &str) -> Result<(), Box<Response>> {
-    let config_id = format!("{user}/{project}/project");
+    let config_id = Project::to_path(&format!("{user}/{project}"));
     if schema.projects().has(&config_id) {
         Ok(())
     } else {
@@ -446,7 +425,7 @@ async fn handle_schema_create_collection(
     fields.insert("label".to_string(), body.label);
     fields.insert("label_plural".to_string(), body.label_plural);
 
-    let namespace_key = format!("{user}/{project}/versions/{version}/collections/{}", body.name);
+    let namespace_key = Collection::to_path(&format!("{user}/{project}"), &version, &body.name);
 
     match state.schema.collections().create(&namespace_key, fields) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
@@ -478,7 +457,7 @@ async fn handle_schema_get_collection(
     if let Err(resp) = validate_project(&state.schema, &user, &project) {
         return *resp;
     }
-    let namespace = format!("{user}/{project}/versions/{version}/collections/{name}");
+    let namespace = Collection::to_path(&format!("{user}/{project}"), &version, &name);
     match state.schema.collections().get(&namespace) {
         Some(c) => ApiResponse::success(c).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("collection not found: {name}")),
@@ -508,7 +487,7 @@ async fn handle_schema_update_collection(
         fields.insert("label_plural".to_string(), label_plural);
     }
 
-    let namespace_key = format!("{user}/{project}/versions/{version}/collections/{name}");
+    let namespace_key = Collection::to_path(&format!("{user}/{project}"), &version, &name);
 
     match state.schema.collections().update(&namespace_key, fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
@@ -534,7 +513,7 @@ async fn handle_schema_delete_collection(
     let field_prefix = format!("{user}/{project}/versions/{version}/fields/{name}/");
     let _ = state.schema.fields().delete_by_prefix(&field_prefix);
 
-    let namespace_key = format!("{user}/{project}/versions/{version}/collections/{name}");
+    let namespace_key = Collection::to_path(&format!("{user}/{project}"), &version, &name);
 
     match state.schema.collections().delete(&namespace_key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
@@ -562,7 +541,7 @@ async fn handle_schema_create_field(
     fields.insert("collection".to_string(), collection.clone());
     fields.insert("type".to_string(), body.r#type);
 
-    let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{}", body.name);
+    let namespace_key = Field::to_path(&format!("{user}/{project}"), &version, &collection, &body.name);
 
     match state.schema.fields().create(&namespace_key, fields) {
         Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
@@ -605,7 +584,7 @@ async fn handle_schema_update_field(
         fields.insert("type".to_string(), r#type);
     }
 
-    let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{name}");
+    let namespace_key = Field::to_path(&format!("{user}/{project}"), &version, &collection, &name);
 
     match state.schema.fields().update(&namespace_key, fields) {
         Ok(result) => ApiResponse::success(result).into_response(),
@@ -627,7 +606,7 @@ async fn handle_schema_delete_field(
         return resp;
     }
 
-    let namespace_key = format!("{user}/{project}/versions/{version}/fields/{collection}/{name}");
+    let namespace_key = Field::to_path(&format!("{user}/{project}"), &version, &collection, &name);
 
     match state.schema.fields().delete(&namespace_key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
@@ -790,7 +769,13 @@ async fn handle_config_create(
     if let Some(path_user) = user_from_config_id(&id) {
         if let Err(resp) = authorize_user(&auth_user.0.user, path_user) { return resp; }
     }
-    let template_vars = template_vars_from_config_id(&id);
+    let template_vars = match type_name.as_str() {
+        "project" => Project::from_path(&id),
+        "dataset" => Dataset::from_path(&id),
+        "site" => Site::from_path(&id),
+        _ => None,
+    }
+    .unwrap_or_default();
     let mut fields = body.fields;
     for (k, v) in &template_vars {
         fields.entry(k.clone()).or_insert_with(|| v.clone());
@@ -809,15 +794,13 @@ async fn handle_config_create(
             let mut dataset_fields = HashMap::new();
             dataset_fields.insert("label".to_string(), format!("{label} Dev"));
             dataset_fields.insert("description".to_string(), "Default development dataset".to_string());
-            let dataset_config_id = format!("{project_path}/datasets/dev");
-            let _ = state.schema.datasets().create(&dataset_config_id, dataset_fields);
+            let _ = state.schema.datasets().create(&Dataset::to_path(project_path, "dev"), dataset_fields);
 
             let mut site_fields = HashMap::new();
             site_fields.insert("label".to_string(), format!("{label} Dev"));
             site_fields.insert("version".to_string(), "0.0.1-dev".to_string());
             site_fields.insert("dataset".to_string(), "dev".to_string());
-            let site_config_id = format!("{project_path}/sites/dev");
-            let _ = state.schema.sites().create(&site_config_id, site_fields);
+            let _ = state.schema.sites().create(&Site::to_path(project_path, "dev"), site_fields);
         }
     }
 
@@ -858,35 +841,34 @@ async fn handle_config_delete(
 
     // Cascade: when deleting a project, delete all its child sites and datasets
     if type_name == "project" {
-        // Project ID is like "ben/crm/project" -> prefix is "ben/crm/"
-        let prefix = id.trim_end_matches("project");
-        let project_path = prefix.trim_end_matches('/');
+        if let Some(project_path) = Project::from_path(&id).and_then(|v| v.get("project").cloned()) {
+            let prefix = format!("{project_path}/");
 
-        // Delete child datasets (which cascades to lake data)
-        let datasets = state.schema.datasets().list_all();
-        for (ds_id, _) in &datasets {
-            if ds_id.starts_with(prefix) {
-                let ds_vars = template_vars_from_config_id(&ds_id);
-                if let Some(dataset_name) = ds_vars.get("name") {
-                    let qualified = format!("{project_path}/{dataset_name}");
-                    let _ = state.adapter.delete_dataset(&qualified);
+            // Delete child datasets (which cascades to lake data)
+            let datasets = state.schema.datasets().list_all();
+            for (ds_id, _) in &datasets {
+                if ds_id.starts_with(&prefix) {
+                    if let Some(dataset_name) = Dataset::from_path(&ds_id).and_then(|v| v.get("name").cloned()) {
+                        let qualified = format!("{project_path}/{dataset_name}");
+                        let _ = state.adapter.delete_dataset(&qualified);
+                    }
+                    let _ = state.schema.datasets().delete(&ds_id);
                 }
-                let _ = state.schema.datasets().delete(&ds_id);
             }
-        }
 
-        // Delete child sites
-        let sites = state.schema.sites().list_all();
-        for (site_id, _) in &sites {
-            if site_id.starts_with(prefix) {
-                let _ = state.schema.sites().delete(&site_id);
+            // Delete child sites
+            let sites = state.schema.sites().list_all();
+            for (site_id, _) in &sites {
+                if site_id.starts_with(&prefix) {
+                    let _ = state.schema.sites().delete(&site_id);
+                }
             }
         }
     }
 
     // Cascade: when deleting a dataset, purge all its records from the lake
     if type_name == "dataset" {
-        let ds_vars = template_vars_from_config_id(&id);
+        let ds_vars = Dataset::from_path(&id).unwrap_or_default();
         if let (Some(project_path), Some(dataset_name)) = (ds_vars.get("project"), ds_vars.get("name")) {
             let qualified = format!("{project_path}/{dataset_name}");
             if let Err(e) = state.adapter.delete_dataset(&qualified) {
