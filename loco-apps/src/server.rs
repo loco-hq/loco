@@ -65,11 +65,6 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
         .route("/data/{name}/get/{id}", get(handlers::data::get))
         .route("/data/{name}/update/{id}", put(handlers::data::update))
         .route("/data/{name}/delete/{id}", delete(handlers::data::delete))
-        // Meta endpoint
-        .route(
-            "/meta/{user}/{project}/{type_name}/list",
-            get(handlers::schema::meta_list),
-        )
         // Schema CRUD endpoints
         .route(
             "/schema/{user}/{project}/{version}/collection",

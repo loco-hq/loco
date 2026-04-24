@@ -55,10 +55,6 @@ export async function listFields(user, project, version, collection) {
   return request(`/schema/${user}/${project}/${version}/field/${collection}/list`);
 }
 
-export async function listAllMeta(user, project, typeName) {
-  return request(`/meta/${user}/${project}/${typeName}/list`);
-}
-
 export async function getSiteCollections(siteId) {
   return request(`/schema/collections?site=${encodeURIComponent(siteId)}`);
 }
