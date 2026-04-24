@@ -59,27 +59,12 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
     });
 
     Router::new()
-        // Data endpoints
-        .route(
-            "/{user}/{project}/collection/{name}/add",
-            post(handlers::data::add),
-        )
-        .route(
-            "/{user}/{project}/collection/{name}/list",
-            get(handlers::data::list),
-        )
-        .route(
-            "/{user}/{project}/collection/{name}/get/{id}",
-            get(handlers::data::get),
-        )
-        .route(
-            "/{user}/{project}/collection/{name}/update/{id}",
-            put(handlers::data::update),
-        )
-        .route(
-            "/{user}/{project}/collection/{name}/delete/{id}",
-            delete(handlers::data::delete),
-        )
+        // Data endpoints — project comes from X-Project-Id header
+        .route("/data/{name}/add", post(handlers::data::add))
+        .route("/data/{name}/list", get(handlers::data::list))
+        .route("/data/{name}/get/{id}", get(handlers::data::get))
+        .route("/data/{name}/update/{id}", put(handlers::data::update))
+        .route("/data/{name}/delete/{id}", delete(handlers::data::delete))
         // Meta endpoint
         .route(
             "/meta/{user}/{project}/{type_name}/list",

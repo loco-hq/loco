@@ -116,26 +116,33 @@ export async function deleteField(user, project, version, collection, name) {
 
 // --- Records (cards in a deck) ---
 
+function dataHeaders(user, project, siteId) {
+  return { 'X-Project-Id': `${user}/${project}`, 'X-Site-Id': siteId };
+}
+
 export async function listRecords(user, project, collection, siteId) {
-  return request(`/${user}/${project}/collection/${collection}/list?site=${encodeURIComponent(siteId)}`);
+  return request(`/data/${collection}/list`, { headers: dataHeaders(user, project, siteId) });
 }
 
 export async function addRecord(user, project, collection, siteId, fields) {
-  return request(`/${user}/${project}/collection/${collection}/add?site=${encodeURIComponent(siteId)}`, {
+  return request(`/data/${collection}/add`, {
     method: 'POST',
+    headers: dataHeaders(user, project, siteId),
     body: JSON.stringify({ fields }),
   });
 }
 
 export async function updateRecord(user, project, collection, siteId, id, fields) {
-  return request(`/${user}/${project}/collection/${collection}/update/${id}?site=${encodeURIComponent(siteId)}`, {
+  return request(`/data/${collection}/update/${id}`, {
     method: 'PUT',
+    headers: dataHeaders(user, project, siteId),
     body: JSON.stringify({ fields }),
   });
 }
 
 export async function deleteRecord(user, project, collection, siteId, id) {
-  return request(`/${user}/${project}/collection/${collection}/delete/${id}?site=${encodeURIComponent(siteId)}`, {
+  return request(`/data/${collection}/delete/${id}`, {
     method: 'DELETE',
+    headers: dataHeaders(user, project, siteId),
   });
 }

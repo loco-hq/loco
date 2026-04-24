@@ -50,22 +50,27 @@ Adding or modifying schema files requires a rebuild (`cargo build`) since codege
 
 ## API Endpoints
 
-All data endpoints require a tenant ID.
+Data endpoints take the qualified project from `X-Project-Id` and the site from `X-Site-Id`
+(or `?site=` query param as a fallback).
 
 ```bash
 # Insert a record
-curl -X POST 'http://localhost:3000/ben/crm/collection/account/add?tenant=acme' \
+curl -X POST 'http://localhost:3000/data/account/add' \
+  -H "X-Project-Id: ben/crm" -H "X-Site-Id: dev" \
   -H "Content-Type: application/json" \
   -d '{"fields": {"company": "Acme Corp", "active": true}, "owner": "alice"}'
 
 # List records
-curl 'http://localhost:3000/ben/crm/collection/account/list?tenant=acme'
+curl 'http://localhost:3000/data/account/list' \
+  -H "X-Project-Id: ben/crm" -H "X-Site-Id: dev"
 
 # Get a record
-curl 'http://localhost:3000/ben/crm/collection/account/get/{id}?tenant=acme'
+curl 'http://localhost:3000/data/account/get/{id}' \
+  -H "X-Project-Id: ben/crm" -H "X-Site-Id: dev"
 
 # Delete a record
-curl -X DELETE 'http://localhost:3000/ben/crm/collection/account/delete/{id}?tenant=acme'
+curl -X DELETE 'http://localhost:3000/data/account/delete/{id}' \
+  -H "X-Project-Id: ben/crm" -H "X-Site-Id: dev"
 
 # List type metadata
 curl 'http://localhost:3000/meta/ben/crm/collection/list'

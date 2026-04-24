@@ -54,7 +54,7 @@ pub async fn list(scope: DataScope, State(state): State<Arc<AppState>>) -> Respo
 pub async fn get(
     scope: DataScope,
     State(state): State<Arc<AppState>>,
-    Path((_, _, _, id)): Path<(String, String, String, String)>,
+    Path((_, id)): Path<(String, String)>,
 ) -> Response {
     match state.adapter.get(&scope.dataset_id, &scope.collection_key, &id) {
         Ok(Some(record)) => ApiResponse::success(record).into_response(),
@@ -66,7 +66,7 @@ pub async fn get(
 pub async fn delete(
     scope: DataScope,
     State(state): State<Arc<AppState>>,
-    Path((_, _, _, id)): Path<(String, String, String, String)>,
+    Path((_, id)): Path<(String, String)>,
 ) -> Response {
     match state.adapter.delete(&scope.dataset_id, &scope.collection_key, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
@@ -77,7 +77,7 @@ pub async fn delete(
 pub async fn update(
     scope: DataScope,
     State(state): State<Arc<AppState>>,
-    Path((_, _, _, id)): Path<(String, String, String, String)>,
+    Path((_, id)): Path<(String, String)>,
     Json(body): Json<AddRecordRequest>,
 ) -> Response {
     let existing = match state.adapter.get(&scope.dataset_id, &scope.collection_key, &id) {

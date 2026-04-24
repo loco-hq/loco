@@ -153,10 +153,11 @@ impl FromRequestParts<Arc<AppState>> for ConfigAuth {
     }
 }
 
-/// Resolved record-level context for `/{user}/{project}/collection/{name}/...` routes.
+/// Resolved record-level context for `/data/{name}/...` routes.
 ///
-/// Runs: `validate_collection` → `resolve_dataset_id` (via [`SiteId`]). Supplies the computed
-/// `collection_key` and `dataset_id` the lake adapter needs.
+/// Reads the qualified project from the `X-Project-Id` header (e.g. `alice/testapp`) and
+/// the site from [`SiteId`], then runs `validate_collection` → `resolve_dataset_id`.
+/// Supplies the computed `collection_key` and `dataset_id` the lake adapter needs.
 pub struct DataScope {
     pub collection_key: String,
     pub dataset_id: String,
@@ -170,20 +171,37 @@ impl FromRequestParts<Arc<AppState>> for DataScope {
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         let params = path_params(parts, state).await?;
-        let user = params.get("user").cloned().unwrap_or_default();
-        let project = params.get("project").cloned().unwrap_or_default();
         let name = params.get("name").cloned().unwrap_or_default();
+
+        let project_id = parts
+            .headers
+            .get("x-project-id")
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
+            .ok_or_else(|| {
+                error_response(
+                    StatusCode::BAD_REQUEST,
+                    "missing project: use X-Project-Id header",
+                )
+            })?;
 
         let SiteId(site_id) = SiteId::from_request_parts(parts, state).await?;
 
-        validate_collection(&state.schema, &user, &project, &name)?;
+        let (user, project) = project_id.split_once('/').ok_or_else(|| {
+            error_response(
+                StatusCode::BAD_REQUEST,
+                "X-Project-Id must be in the form 'user/project'",
+            )
+        })?;
 
-        let namespace = format!("{user}/{project}");
-        let dataset_id = resolve_dataset_id(&state.schema, &namespace, &site_id)
+        validate_collection(&state.schema, user, project, &name)?;
+
+        let dataset_id = resolve_dataset_id(&state.schema, &project_id, &site_id)
             .map_err(|msg| error_response(StatusCode::BAD_REQUEST, &msg))?;
 
         Ok(DataScope {
-            collection_key: collection_key(&user, &project, &name),
+            collection_key: collection_key(user, project, &name),
             dataset_id,
         })
     }

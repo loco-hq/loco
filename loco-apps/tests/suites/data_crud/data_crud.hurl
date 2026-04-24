@@ -5,7 +5,8 @@
 # Tests: add records, list, get by id, update, delete
 
 # 1. Verify the fixture collection loaded — list should work (empty)
-GET http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/list
+GET http://127.0.0.1:{{port}}/data/tasks/list
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 HTTP 200
 [Asserts]
@@ -13,7 +14,8 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 0
 
 # 2. Add a record
-POST http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/add
+POST http://127.0.0.1:{{port}}/data/tasks/add
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 Content-Type: application/json
 {
@@ -34,7 +36,8 @@ jsonpath "$.data.fields.done" == false
 record1_id: jsonpath "$.data.id"
 
 # 3. Add a second record
-POST http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/add
+POST http://127.0.0.1:{{port}}/data/tasks/add
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 Content-Type: application/json
 {
@@ -51,7 +54,8 @@ jsonpath "$.data.fields.title" == "Ship feature"
 record2_id: jsonpath "$.data.id"
 
 # 4. List records — should have 2
-GET http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/list
+GET http://127.0.0.1:{{port}}/data/tasks/list
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 HTTP 200
 [Asserts]
@@ -59,7 +63,8 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 2
 
 # 5. Get the first record by ID
-GET http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/get/{{record1_id}}
+GET http://127.0.0.1:{{port}}/data/tasks/get/{{record1_id}}
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 HTTP 200
 [Asserts]
@@ -68,7 +73,8 @@ jsonpath "$.data.id" == {{record1_id}}
 jsonpath "$.data.fields.title" == "Write tests"
 
 # 6. Update the first record
-PUT http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/update/{{record1_id}}
+PUT http://127.0.0.1:{{port}}/data/tasks/update/{{record1_id}}
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 Content-Type: application/json
 {
@@ -83,7 +89,8 @@ jsonpath "$.data.fields.done" == true
 jsonpath "$.data.fields.title" == "Write tests"
 
 # 7. Get the updated record — verify fields merged
-GET http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/get/{{record1_id}}
+GET http://127.0.0.1:{{port}}/data/tasks/get/{{record1_id}}
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 HTTP 200
 [Asserts]
@@ -92,14 +99,16 @@ jsonpath "$.data.fields.done" == true
 jsonpath "$.data.fields.title" == "Write tests"
 
 # 8. Delete the second record
-DELETE http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/delete/{{record2_id}}
+DELETE http://127.0.0.1:{{port}}/data/tasks/delete/{{record2_id}}
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 
 # 9. List records — should have 1
-GET http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/list
+GET http://127.0.0.1:{{port}}/data/tasks/list
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 HTTP 200
 [Asserts]
@@ -107,7 +116,8 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 1
 
 # 10. Get deleted record — should 404
-GET http://127.0.0.1:{{port}}/testuser/testapp/collection/tasks/get/{{record2_id}}
+GET http://127.0.0.1:{{port}}/data/tasks/get/{{record2_id}}
+X-Project-Id: testuser/testapp
 X-Site-Id: dev
 HTTP 404
 [Asserts]
