@@ -22,16 +22,14 @@ The server starts on `http://localhost:3000`.
 ```
 loco/
 ├── loco-gen/crates/
-│   ├── loco-gen-schema/           # YAML parsing, instance scanning, Rust codegen
-│   ├── loco-gen-runtime/          # Minimal runtime (TypedCache, Value) — zero deps
-│   └── loco-gen-codegen-build/    # build.rs API — calls schema to emit code
+│   └── loco-gen-schema/           # YAML parsing, instance scanning, Rust codegen, build.rs helper
 ├── loco-lake/crates/loco-lake/    # DataAdapter trait + adapters (in-memory, SQLite)
 └── loco-apps/                     # Axum web server consuming generated types
 ```
 
 ### Dependency Flow
 
-**Build time:** `loco-apps/build.rs` → `loco-gen-codegen-build` → `loco-gen-schema`
+**Build time:** `loco-apps/build.rs` → `loco_gen_schema::build::generate`
 
 **Runtime:** `loco-apps` → `loco-gen-runtime` + `loco-lake`
 

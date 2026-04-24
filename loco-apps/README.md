@@ -78,7 +78,7 @@ curl 'http://localhost:3000/meta/ben/crm/collection/list'
 
 ## How It Boots
 
-1. `build.rs` generates Rust code from `schemas/` via `loco-gen-codegen-build`
+1. `build.rs` generates Rust code from `schemas/` via `loco_gen_schema::build::generate`
 2. `main.rs` includes the generated code and calls `server::build_app()`
 3. `build_app()` loads tenants from `tenants/*.yaml`
 4. Generated `Collection::load_all_instances()` and `Field::load_all_instances()` provide metadata

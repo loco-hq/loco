@@ -23,7 +23,7 @@ pub fn generate(types_dir: &str) {
         if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
             println!("cargo:rerun-if-changed={}", path.display());
 
-            let type_def = loco_gen_schema::parser::parse_schema_file(&path)
+            let type_def = crate::parser::parse_schema_file(&path)
                 .unwrap_or_else(|e| panic!("failed to parse {}: {}", path.display(), e));
 
             type_defs.push(type_def);
@@ -32,7 +32,7 @@ pub fn generate(types_dir: &str) {
 
     type_defs.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let code = loco_gen_schema::codegen::generate_all(&type_defs);
+    let code = crate::codegen::generate_all(&type_defs);
     std::fs::write(&out_path, code)
         .unwrap_or_else(|e| panic!("failed to write {}: {}", out_path.display(), e));
 }

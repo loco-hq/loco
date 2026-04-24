@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "loco-gen/crates/loco-gen-schema",
-    "loco-gen/crates/loco-gen-codegen-build",
     "loco-lake/crates/loco-lake",
     "loco-apps",
 ]

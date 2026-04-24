@@ -15,21 +15,19 @@ cargo run -p loco-apps        # Run the web server on :3000
 
 ```
 loco/
-├── loco-gen/crates/
-│   ├── loco-gen-schema/         # YAML parsing, SchemaRegistry, Rust codegen
-│   └── loco-gen-codegen-build/  # build.rs API — calls schema to emit code
-├── loco-lake/crates/loco-lake/  # DataAdapter trait + InMemoryAdapter (CRUD)
-└── loco-apps/                   # Axum web server consuming generated types
+├── loco-gen/crates/loco-gen-schema/  # YAML parsing, SchemaRegistry, Rust codegen, build.rs helper
+├── loco-lake/crates/loco-lake/       # DataAdapter trait + InMemoryAdapter (CRUD)
+└── loco-apps/                        # Axum web server consuming generated types
 ```
 
 ### Dependency flow
 
-Build-time: `loco-apps/build.rs` → `loco-gen-codegen-build` → `loco-gen-schema`
+Build-time: `loco-apps/build.rs` → `loco_gen_schema::build::generate`
 Runtime: `loco-apps` → `loco-gen-schema` + `loco-lake`
 
 ## How Codegen Works
 
-1. `build.rs` calls `loco_gen_codegen_build::generate("schemas/types")`
+1. `build.rs` calls `loco_gen_schema::build::generate("schemas/types")`
 2. Type definitions (`schemas/types/*.yaml`) are parsed into `TypeDef` structs
 3. Rust code is generated to `$OUT_DIR/loco_generated.rs` — per-type structs with constructors and accessors, plus a `SchemaStore` with load/list/get/create/update/delete methods over a `SchemaRegistry`
 4. `main.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`

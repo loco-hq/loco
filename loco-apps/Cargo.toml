@@ -22,4 +22,4 @@ serde_yaml = "0.9"
 tempfile = "3"
 
 [build-dependencies]
-loco-gen-codegen-build = { path = "../loco-gen/crates/loco-gen-codegen-build" }
+loco-gen-schema = { path = "../loco-gen/crates/loco-gen-schema" }

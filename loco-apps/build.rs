@@ -1,3 +1,3 @@
 fn main() {
-    loco_gen_codegen_build::generate("schemas/types");
+    loco_gen_schema::build::generate("schemas/types");
 }

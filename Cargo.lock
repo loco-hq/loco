@@ -429,7 +429,6 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
- "loco-gen-codegen-build",
  "loco-gen-schema",
  "loco-lake",
  "serde",
@@ -438,13 +437,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
-]
-
-[[package]]
-name = "loco-gen-codegen-build"
-version = "0.1.0"
-dependencies = [
- "loco-gen-schema",
 ]
 
 [[package]]
