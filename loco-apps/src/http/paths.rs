@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use crate::{SchemaStore, Site};
 
 pub fn lookup_site_in_project(
     schema: &SchemaStore,
     project: &str,
     site_name: &str,
-) -> Option<Site> {
+) -> Option<Arc<Site>> {
     schema.sites().get(&Site::to_path(project, site_name))
 }
 

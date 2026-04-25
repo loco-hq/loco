@@ -431,6 +431,7 @@ dependencies = [
  "chrono",
  "loco-gen-schema",
  "loco-lake",
+ "loco-schema-runtime",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -457,6 +458,16 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "loco-schema-runtime"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,4 +1,5 @@
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
 use crate::{Manifest, SchemaStore};
 
@@ -32,7 +33,7 @@ pub fn parse_dependency(dep: &str) -> Result<(&str, &str, &str), ManifestError> 
     Ok((user, project, version))
 }
 
-fn find_manifest(schema: &SchemaStore, project: &str, version: &str) -> Option<Manifest> {
+fn find_manifest(schema: &SchemaStore, project: &str, version: &str) -> Option<Arc<Manifest>> {
     schema.manifests().list_all()
         .into_iter()
         .find(|(_, m)| m.project() == project && m.version() == version)

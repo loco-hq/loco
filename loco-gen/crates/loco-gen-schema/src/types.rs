@@ -79,18 +79,3 @@ impl TypeDef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum FieldValue {
-    String(String),
-    Integer(i64),
-    Float(f64),
-    Boolean(bool),
-    List(Vec<FieldValue>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Instance {
-    pub type_name: String,
-    pub namespace: String,
-    pub values: Vec<(String, FieldValue)>,
-}

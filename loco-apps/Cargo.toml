@@ -8,11 +8,11 @@ name = "loco_apps"
 path = "src/lib.rs"
 
 [dependencies]
-loco-gen-schema = { path = "../loco-gen/crates/loco-gen-schema" }
+loco-schema-runtime = { path = "../loco-schema/crates/loco-schema-runtime" }
 loco-lake = { path = "../loco-lake/crates/loco-lake" }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"

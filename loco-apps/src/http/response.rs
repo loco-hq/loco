@@ -44,12 +44,12 @@ pub fn lake_error_to_response(err: loco_lake::Error) -> Response {
     }
 }
 
-pub fn schema_error_to_response(err: loco_gen_schema::error::Error) -> Response {
+pub fn schema_error_to_response(err: loco_schema_runtime::Error) -> Response {
     match &err {
-        loco_gen_schema::error::Error::AlreadyExists(_) => {
+        loco_schema_runtime::Error::AlreadyExists(_) => {
             error_response(StatusCode::CONFLICT, &err.to_string())
         }
-        loco_gen_schema::error::Error::NotFound(_) => {
+        loco_schema_runtime::Error::NotFound(_) => {
             error_response(StatusCode::NOT_FOUND, &err.to_string())
         }
         _ => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),

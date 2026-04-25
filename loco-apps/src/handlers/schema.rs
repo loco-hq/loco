@@ -240,8 +240,8 @@ pub async fn delete_field(
 #[derive(Serialize)]
 struct CollectionWithFields {
     name: String,
-    fields: Collection,
-    collection_fields: Vec<(String, Field)>,
+    fields: Arc<Collection>,
+    collection_fields: Vec<(String, Arc<Field>)>,
 }
 
 #[derive(Serialize)]
