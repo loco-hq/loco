@@ -1,44 +1,53 @@
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
+use crate::adapters::SchemaPersistence;
 use crate::error::Error;
-use crate::io;
 
-/// Implemented by every generated schema type. Gives the store just enough
-/// generic access to do CRUD and write YAML without knowing the type's fields.
+/// Implemented by every generated schema type. Gives the store and adapter just
+/// enough generic access to do CRUD, write the persisted form, and parse it
+/// back into a typed instance — without knowing the type's fields.
 pub trait SchemaInstance: Clone + Sized + serde::Serialize + 'static {
     type Update;
 
-    /// Build this instance's on-disk key (its namespace / relative path without `.yaml`).
+    /// Build this instance's persistence key (its namespace / relative path
+    /// without `.yaml`).
     fn to_path(&self) -> String;
 
     /// Apply a partial update in-place. Only `Some` fields are overwritten.
     fn apply_update(&mut self, patch: &Self::Update);
+
+    /// Match a key against this type's `pathTemplate`. Returns the extracted
+    /// template variables on success, or `None` if the key belongs to a
+    /// different type.
+    fn from_path(path: &str) -> Option<HashMap<String, String>>;
+
+    /// Parse the persisted YAML body for this type, merging in path-derived
+    /// `vars` for fields that come from the key.
+    fn from_yaml(yaml: &str, vars: &HashMap<String, String>) -> Result<Self, Error>;
 }
 
 /// Per-type typed cache backed by `RwLock<BTreeMap<String, Arc<T>>>`.
 /// Reads hand out `Arc<T>` so in-flight readers are unaffected by concurrent writes.
+///
+/// All persistence I/O is delegated to the [`SchemaPersistence`] adapter; the
+/// store only manages the in-memory index and the read/write coordination.
 pub struct InstanceStore<T: SchemaInstance> {
     cache: RwLock<BTreeMap<String, Arc<T>>>,
-    instances_dir: PathBuf,
+    adapter: Arc<dyn SchemaPersistence<T>>,
 }
 
 impl<T: SchemaInstance> InstanceStore<T> {
-    pub fn new(instances_dir: PathBuf) -> Self {
+    pub fn new(adapter: Arc<dyn SchemaPersistence<T>>) -> Self {
         Self {
             cache: RwLock::new(BTreeMap::new()),
-            instances_dir,
+            adapter,
         }
     }
 
     /// Insert an already-parsed instance into the cache. Used by `SchemaStore::load`.
-    pub fn insert_loaded(&self, namespace: String, instance: Arc<T>) {
-        self.cache.write().unwrap().insert(namespace, instance);
-    }
-
-    pub fn instances_dir(&self) -> &Path {
-        &self.instances_dir
+    pub fn insert_loaded(&self, key: String, instance: Arc<T>) {
+        self.cache.write().unwrap().insert(key, instance);
     }
 
     pub fn get(&self, key: &str) -> Option<Arc<T>> {
@@ -72,8 +81,7 @@ impl<T: SchemaInstance> InstanceStore<T> {
                 return Err(Error::AlreadyExists(key));
             }
         }
-        let file_path = self.resolve_file_path(&key);
-        io::write_yaml(&file_path, &value)?;
+        self.adapter.write(&key, &value)?;
         let arc = Arc::new(value);
         self.cache.write().unwrap().insert(key, arc.clone());
         Ok(arc)
@@ -85,8 +93,7 @@ impl<T: SchemaInstance> InstanceStore<T> {
             .ok_or_else(|| Error::NotFound(key.to_string()))?;
         let mut updated: T = (*current).clone();
         updated.apply_update(&patch);
-        let file_path = self.resolve_file_path(key);
-        io::write_yaml(&file_path, &updated)?;
+        self.adapter.write(key, &updated)?;
         let arc = Arc::new(updated);
         self.cache.write().unwrap().insert(key.to_string(), arc.clone());
         Ok(arc)
@@ -99,8 +106,7 @@ impl<T: SchemaInstance> InstanceStore<T> {
                 return Err(Error::NotFound(key.to_string()));
             }
         }
-        let file_path = self.resolve_file_path(key);
-        io::delete_yaml(&file_path, &self.instances_dir)?;
+        self.adapter.delete(key)?;
         self.cache.write().unwrap().remove(key);
         Ok(())
     }
@@ -114,25 +120,21 @@ impl<T: SchemaInstance> InstanceStore<T> {
                 .map(|(k, _)| k.clone())
                 .collect()
         };
-        for ns in &to_delete {
-            let file_path = self.resolve_file_path(ns);
-            let _ = io::delete_yaml(&file_path, &self.instances_dir);
+        for key in &to_delete {
+            let _ = self.adapter.delete(key);
         }
         let mut cache = self.cache.write().unwrap();
-        for ns in &to_delete {
-            cache.remove(ns);
+        for key in &to_delete {
+            cache.remove(key);
         }
         Ok(to_delete)
-    }
-
-    fn resolve_file_path(&self, namespace: &str) -> PathBuf {
-        self.instances_dir.join(format!("{namespace}.yaml"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::YamlFsAdapter;
 
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
     struct TestItem {
@@ -156,6 +158,35 @@ mod tests {
                 self.label = v.clone();
             }
         }
+        fn from_path(path: &str) -> Option<HashMap<String, String>> {
+            let segs: Vec<&str> = path.split('/').collect();
+            if segs.len() != 4 || segs[2] != "items" {
+                return None;
+            }
+            let mut vars = HashMap::new();
+            vars.insert("project".to_string(), format!("{}/{}", segs[0], segs[1]));
+            vars.insert("name".to_string(), segs[3].to_string());
+            Some(vars)
+        }
+        fn from_yaml(yaml: &str, vars: &HashMap<String, String>) -> Result<Self, Error> {
+            let value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+            Ok(TestItem {
+                project: vars.get("project").cloned().unwrap_or_default(),
+                name: vars.get("name").cloned().unwrap_or_default(),
+                label: value
+                    .get("label")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_default(),
+            })
+        }
+    }
+
+    fn fresh_store() -> (tempfile::TempDir, InstanceStore<TestItem>) {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter: Arc<dyn SchemaPersistence<TestItem>> =
+            Arc::new(YamlFsAdapter::new(dir.path().to_path_buf()));
+        let store = InstanceStore::new(adapter);
+        (dir, store)
     }
 
     fn sample(project: &str, name: &str, label: &str) -> TestItem {
@@ -168,8 +199,7 @@ mod tests {
 
     #[test]
     fn create_and_get() {
-        let dir = tempfile::tempdir().unwrap();
-        let store: InstanceStore<TestItem> = InstanceStore::new(dir.path().to_path_buf());
+        let (dir, store) = fresh_store();
 
         let v = store.create(sample("ben/crm", "account", "Account")).unwrap();
         assert_eq!(v.label, "Account");
@@ -183,8 +213,7 @@ mod tests {
 
     #[test]
     fn duplicate_create_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let store: InstanceStore<TestItem> = InstanceStore::new(dir.path().to_path_buf());
+        let (_dir, store) = fresh_store();
         store.create(sample("ben/crm", "a", "A")).unwrap();
         assert!(matches!(
             store.create(sample("ben/crm", "a", "A")),
@@ -194,8 +223,7 @@ mod tests {
 
     #[test]
     fn update_merges_and_writes() {
-        let dir = tempfile::tempdir().unwrap();
-        let store: InstanceStore<TestItem> = InstanceStore::new(dir.path().to_path_buf());
+        let (_dir, store) = fresh_store();
         store.create(sample("ben/crm", "a", "A")).unwrap();
 
         let updated = store
@@ -212,8 +240,7 @@ mod tests {
 
     #[test]
     fn update_missing_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let store: InstanceStore<TestItem> = InstanceStore::new(dir.path().to_path_buf());
+        let (_dir, store) = fresh_store();
         let res = store.update(
             "ben/crm/items/missing",
             TestItemUpdate {
@@ -225,8 +252,7 @@ mod tests {
 
     #[test]
     fn delete_and_prefix() {
-        let dir = tempfile::tempdir().unwrap();
-        let store: InstanceStore<TestItem> = InstanceStore::new(dir.path().to_path_buf());
+        let (_dir, store) = fresh_store();
         store.create(sample("ben/crm", "a", "A")).unwrap();
         store.create(sample("ben/crm", "b", "B")).unwrap();
         store.create(sample("ben/cars", "x", "X")).unwrap();
@@ -246,8 +272,7 @@ mod tests {
 
     #[test]
     fn list_uses_prefix() {
-        let dir = tempfile::tempdir().unwrap();
-        let store: InstanceStore<TestItem> = InstanceStore::new(dir.path().to_path_buf());
+        let (_dir, store) = fresh_store();
         store.create(sample("ben/crm", "a", "A")).unwrap();
         store.create(sample("ben/crm", "b", "B")).unwrap();
         store.create(sample("ben/cars", "x", "X")).unwrap();

@@ -447,6 +447,19 @@ fn generate_schema_instance_impl(out: &mut String, type_def: &TypeDef) {
     ));
     out.push_str("        patch.apply(self);\n");
     out.push_str("    }\n");
+    // Delegate to the inherent `from_path` / `from_yaml`. Inherent methods
+    // take precedence over trait methods at concrete types, so this is not
+    // recursive.
+    out.push_str(
+        "    fn from_path(path: &str) -> Option<std::collections::HashMap<String, String>> {\n",
+    );
+    out.push_str(&format!("        {name}::from_path(path)\n"));
+    out.push_str("    }\n");
+    out.push_str(
+        "    fn from_yaml(yaml: &str, vars: &std::collections::HashMap<String, String>) -> Result<Self, loco_schema_runtime::Error> {\n"
+    );
+    out.push_str(&format!("        {name}::from_yaml(yaml, vars)\n"));
+    out.push_str("    }\n");
     out.push_str("}\n\n");
 }
 
@@ -479,41 +492,30 @@ fn generate_preamble(type_defs: &[TypeDef]) -> String {
 
     out.push_str("impl SchemaStore {\n");
     out.push_str("    pub fn load(instances_dir: &std::path::Path) -> Result<Self, loco_schema_runtime::Error> {\n");
-    out.push_str("        let schema = SchemaStore {\n");
-    for td in type_defs {
-        let plural = plural_field(&td.name);
-        let store = format!("{}Store", td.name);
-        out.push_str(&format!(
-            "            {plural}: {store}::new(instances_dir.to_path_buf()),\n"
-        ));
-    }
-    out.push_str("        };\n");
-    out.push_str("        for file_path in loco_schema_runtime::io::collect_yaml_files(instances_dir)? {\n");
-    out.push_str("            let rel = file_path.strip_prefix(instances_dir).unwrap_or(&file_path).to_string_lossy().to_string();\n");
-    out.push_str("            let rel_no_ext = rel.strip_suffix(\".yaml\").unwrap_or(&rel).to_string();\n");
-
-    let mut first = true;
     for td in type_defs {
         let type_name = &td.name;
         let plural = plural_field(type_name);
-        let head = if first { "if" } else { "} else if" };
+        let store = format!("{type_name}Store");
         out.push_str(&format!(
-            "            {head} let Some(vars) = {type_name}::from_path(&rel_no_ext) {{\n"
-        ));
-        out.push_str("                let yaml = std::fs::read_to_string(&file_path)?;\n");
-        out.push_str(&format!(
-            "                let inst = {type_name}::from_yaml(&yaml, &vars)?;\n"
+            "        let {plural}_adapter: std::sync::Arc<dyn loco_schema_runtime::SchemaPersistence<{type_name}>> = std::sync::Arc::new(loco_schema_runtime::YamlFsAdapter::<{type_name}>::new(instances_dir.to_path_buf()));\n"
         ));
         out.push_str(&format!(
-            "                schema.{plural}.insert_loaded(rel_no_ext.clone(), std::sync::Arc::new(inst));\n"
+            "        let {plural} = {store}::new({plural}_adapter.clone());\n"
         ));
-        first = false;
+        out.push_str(&format!(
+            "        for (key, inst) in {plural}_adapter.load_all()? {{\n"
+        ));
+        out.push_str(&format!(
+            "            {plural}.insert_loaded(key, std::sync::Arc::new(inst));\n"
+        ));
+        out.push_str("        }\n");
     }
-    if !first {
-        out.push_str("            }\n");
+    out.push_str("        Ok(SchemaStore {\n");
+    for td in type_defs {
+        let plural = plural_field(&td.name);
+        out.push_str(&format!("            {plural},\n"));
     }
-    out.push_str("        }\n");
-    out.push_str("        Ok(schema)\n");
+    out.push_str("        })\n");
     out.push_str("    }\n");
     out.push_str("}\n");
     out
@@ -658,6 +660,11 @@ mod tests {
         assert!(code.contains("Collection::to_path(&self.namespace, &self.version, &self.name)"));
         assert!(code.contains("fn apply_update(&mut self, patch: &CollectionUpdate)"));
         assert!(code.contains("patch.apply(self);"));
+        // Trait impl forwards from_path / from_yaml to the inherent methods.
+        assert!(code.contains("fn from_path(path: &str) -> Option<std::collections::HashMap<String, String>>"));
+        assert!(code.contains("Collection::from_path(path)"));
+        assert!(code.contains("fn from_yaml(yaml: &str, vars: &std::collections::HashMap<String, String>) -> Result<Self, loco_schema_runtime::Error>"));
+        assert!(code.contains("Collection::from_yaml(yaml, vars)"));
     }
 
     #[test]
@@ -712,11 +719,19 @@ mod tests {
         assert!(code.contains("pub struct SchemaStore {"));
         assert!(code.contains("sites: SiteStore,"));
         assert!(code.contains("pub fn load(instances_dir: &std::path::Path) -> Result<Self, loco_schema_runtime::Error>"));
-        assert!(code.contains("SiteStore::new(instances_dir.to_path_buf())"));
-        assert!(code.contains("loco_schema_runtime::io::collect_yaml_files"));
-        assert!(code.contains("Site::from_path(&rel_no_ext)"));
-        assert!(code.contains("Site::from_yaml(&yaml, &vars)"));
-        assert!(code.contains("std::sync::Arc::new(inst)"));
+        // Each type gets its own YAML/FS adapter, wrapped in an Arc and shared
+        // with the InstanceStore.
+        assert!(code.contains("loco_schema_runtime::YamlFsAdapter::<Site>::new(instances_dir.to_path_buf())"));
+        assert!(code.contains("loco_schema_runtime::SchemaPersistence<Site>"));
+        assert!(code.contains("SiteStore::new(sites_adapter.clone())"));
+        // Loading is per-type via adapter.load_all().
+        assert!(code.contains("sites_adapter.load_all()?"));
+        assert!(code.contains("sites.insert_loaded(key, std::sync::Arc::new(inst))"));
+
+        // The shared FS walk that used to live in the preamble is gone.
+        assert!(!code.contains("loco_schema_runtime::io::"));
+        assert!(!code.contains("collect_yaml_files"));
+        assert!(!code.contains("rel_no_ext"));
 
         // None of these should be emitted anymore.
         assert!(!code.contains("SchemaRegistry"));
