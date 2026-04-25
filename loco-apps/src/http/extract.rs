@@ -7,10 +7,7 @@ use axum::http::request::Parts;
 use axum::response::Response;
 
 use crate::auth::{AuthSession, AuthenticatedUser};
-use crate::http::authz::{
-    authorize_user, require_config_site, require_draft, validate_collection, validate_project,
-};
-use crate::http::paths::{collection_key, resolve_dataset_id};
+use crate::http::authz::{authorize_user, require_config_site};
 use crate::http::response::error_response;
 use crate::server::AppState;
 
@@ -61,50 +58,6 @@ async fn path_params(
     Ok(params)
 }
 
-/// Authenticated + authorized context for `/schema/{user}/{project}/{version}/...` routes.
-///
-/// Runs (in order): authenticate → `require_config_site` → `authorize_user(user)` →
-/// `validate_project(user, project)`. Mutating handlers should call [`SchemaAuth::require_draft`].
-pub struct SchemaAuth {
-    pub auth: AuthSession,
-    pub user: String,
-    pub project: String,
-    pub version: String,
-}
-
-impl SchemaAuth {
-    pub fn require_draft(&self) -> Result<(), Response> {
-        require_draft(&self.version)
-    }
-}
-
-impl FromRequestParts<Arc<AppState>> for SchemaAuth {
-    type Rejection = Response;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<AppState>,
-    ) -> Result<Self, Self::Rejection> {
-        let AuthenticatedUser(auth) = AuthenticatedUser::from_request_parts(parts, state).await?;
-        require_config_site(&auth.user)?;
-
-        let params = path_params(parts, state).await?;
-        let user = params.get("user").cloned().unwrap_or_default();
-        let project = params.get("project").cloned().unwrap_or_default();
-        let version = params.get("version").cloned().unwrap_or_default();
-
-        authorize_user(&auth.user, &user)?;
-        validate_project(&state.schema, &user, &project)?;
-
-        Ok(SchemaAuth {
-            auth,
-            user,
-            project,
-            version,
-        })
-    }
-}
-
 /// Authenticated + authorized context for `/config/{get|create|update|delete}/{*path}` routes.
 ///
 /// Parses the wildcard `{*path}` as `"<type_name>/<id>"`. Runs: authenticate →
@@ -153,56 +106,3 @@ impl FromRequestParts<Arc<AppState>> for ConfigAuth {
     }
 }
 
-/// Resolved record-level context for `/data/{name}/...` routes.
-///
-/// Reads the qualified project from the `X-Project-Id` header (e.g. `alice/testapp`) and
-/// the site from [`SiteId`], then runs `validate_collection` → `resolve_dataset_id`.
-/// Supplies the computed `collection_key` and `dataset_id` the lake adapter needs.
-pub struct DataScope {
-    pub collection_key: String,
-    pub dataset_id: String,
-}
-
-impl FromRequestParts<Arc<AppState>> for DataScope {
-    type Rejection = Response;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<AppState>,
-    ) -> Result<Self, Self::Rejection> {
-        let params = path_params(parts, state).await?;
-        let name = params.get("name").cloned().unwrap_or_default();
-
-        let project_id = parts
-            .headers
-            .get("x-project-id")
-            .and_then(|v| v.to_str().ok())
-            .filter(|v| !v.is_empty())
-            .map(|v| v.to_string())
-            .ok_or_else(|| {
-                error_response(
-                    StatusCode::BAD_REQUEST,
-                    "missing project: use X-Project-Id header",
-                )
-            })?;
-
-        let SiteId(site_id) = SiteId::from_request_parts(parts, state).await?;
-
-        let (user, project) = project_id.split_once('/').ok_or_else(|| {
-            error_response(
-                StatusCode::BAD_REQUEST,
-                "X-Project-Id must be in the form 'user/project'",
-            )
-        })?;
-
-        validate_collection(&state.schema, user, project, &name)?;
-
-        let dataset_id = resolve_dataset_id(&state.schema, &project_id, &site_id)
-            .map_err(|msg| error_response(StatusCode::BAD_REQUEST, &msg))?;
-
-        Ok(DataScope {
-            collection_key: collection_key(user, project, &name),
-            dataset_id,
-        })
-    }
-}

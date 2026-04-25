@@ -10,9 +10,9 @@
 # When introspecting acme/sales, we should see all three namespaces.
 # When introspecting acme/crm, we should see crm + core but NOT sales.
 
-# Login as acme on the cards site (config-editing site in acme/sales namespace)
+# Login as acme on the metadata-editor site (loco/cards/cards is allowlisted)
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: acme/sales
+X-Project-Id: loco/cards
 X-Site-Id: cards
 Content-Type: application/json
 {"username": "acme"}

@@ -5,7 +5,7 @@
 
 # Login as alice
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: alice/testapp
+X-Project-Id: loco/cards
 X-Site-Id: cards
 Content-Type: application/json
 {"username": "alice"}

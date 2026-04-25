@@ -14,7 +14,7 @@ jsonpath "$.error" contains "missing site"
 GET http://127.0.0.1:{{port}}/data/tasks/list
 X-Project-Id: testuser/testapp
 X-Site-Id: nonexistent
-HTTP 400
+HTTP 404
 [Asserts]
 jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown site"
@@ -29,7 +29,7 @@ Content-Type: application/json
     "title": "Should fail"
   }
 }
-HTTP 400
+HTTP 404
 [Asserts]
 jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown site"
@@ -38,7 +38,7 @@ jsonpath "$.error" contains "unknown site"
 GET http://127.0.0.1:{{port}}/data/tasks/get/fake-id
 X-Project-Id: testuser/testapp
 X-Site-Id: nonexistent
-HTTP 400
+HTTP 404
 [Asserts]
 jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown site"
@@ -53,7 +53,7 @@ Content-Type: application/json
     "title": "Should fail"
   }
 }
-HTTP 400
+HTTP 404
 [Asserts]
 jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown site"
@@ -62,7 +62,7 @@ jsonpath "$.error" contains "unknown site"
 DELETE http://127.0.0.1:{{port}}/data/tasks/delete/fake-id
 X-Project-Id: testuser/testapp
 X-Site-Id: nonexistent
-HTTP 400
+HTTP 404
 [Asserts]
 jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown site"

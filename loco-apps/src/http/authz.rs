@@ -3,7 +3,7 @@ use axum::response::Response;
 
 use crate::auth::AuthUser;
 use crate::http::response::error_response;
-use crate::{Project, SchemaStore};
+use crate::SchemaStore;
 
 /// Sites that are allowed to edit config/schema (like admin tools).
 const CONFIG_SITES: &[&str] = &["studio", "cards"];
@@ -32,18 +32,6 @@ pub fn authorize_user(auth_user: &AuthUser, path_user: &str) -> Result<(), Respo
         Err(error_response(
             StatusCode::FORBIDDEN,
             "you do not have access to this resource",
-        ))
-    }
-}
-
-pub fn validate_project(schema: &SchemaStore, user: &str, project: &str) -> Result<(), Response> {
-    let config_id = Project::to_path(&format!("{user}/{project}"));
-    if schema.projects().has(&config_id) {
-        Ok(())
-    } else {
-        Err(error_response(
-            StatusCode::NOT_FOUND,
-            &format!("unknown project: {user}/{project}"),
         ))
     }
 }

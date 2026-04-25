@@ -11,8 +11,8 @@ use crate::auth::{
     auth_error_to_response, AuthenticatedUser, CreateUserRequest, LoginCredentials,
     UpdateUserRequest,
 };
-use crate::http::paths::lookup_site_in_project;
-use crate::http::response::{ApiResponse, error_response};
+use crate::http::response::ApiResponse;
+use crate::http::scope::SiteScope;
 use crate::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -34,36 +34,11 @@ pub struct LoginRequest {
 }
 
 pub async fn login(
+    scope: SiteScope,
     State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Response {
-    let project_id = headers
-        .get("x-project-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|v| !v.is_empty())
-        .map(|v| v.to_string());
-    let site_name = headers
-        .get("x-site-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|v| !v.is_empty())
-        .map(|v| v.to_string());
-
-    let (Some(project_id), Some(site_name)) = (project_id, site_name) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "missing site context: use X-Project-Id and X-Site-Id headers",
-        );
-    };
-
-    if lookup_site_in_project(&state.schema, &project_id, &site_name).is_none() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            &format!("unknown site: {site_name} in project {project_id}"),
-        );
-    }
-
-    let qualified_site_id = format!("{project_id}/{site_name}");
+    let qualified_site_id = scope.qualified_site_id();
     let credentials = LoginCredentials {
         username: body.username,
         password: None,

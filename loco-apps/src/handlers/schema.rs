@@ -7,10 +7,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::AuthenticatedUser;
-use crate::http::authz::{authorize_user, require_config_site};
-use crate::http::extract::SchemaAuth;
-use crate::http::paths::lookup_site_in_project;
+use crate::http::authz::authorize_user;
 use crate::http::response::{ApiResponse, error_response, schema_error_to_response};
+use crate::http::scope::{require_metadata_editor, SiteScope, VersionScope};
 use crate::server::AppState;
 use crate::{Collection, CollectionUpdate, Field, FieldUpdate};
 
@@ -57,17 +56,17 @@ pub struct CreateFieldRequest {
 }
 
 pub async fn create_collection(
-    ctx: SchemaAuth,
+    scope: VersionScope,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateCollectionRequest>,
 ) -> Response {
-    if let Err(resp) = ctx.require_draft() {
+    if let Err(resp) = scope.require_draft() {
         return resp;
     }
 
     let value = Collection::new(
-        format!("{}/{}", ctx.user, ctx.project),
-        ctx.version.clone(),
+        scope.project_id(),
+        scope.version.clone(),
         body.name,
         body.label,
         body.label_plural,
@@ -79,93 +78,81 @@ pub async fn create_collection(
     }
 }
 
-pub async fn list_collections(ctx: SchemaAuth, State(state): State<Arc<AppState>>) -> Response {
+pub async fn list_collections(scope: VersionScope, State(state): State<Arc<AppState>>) -> Response {
     let entries = state
         .schema
         .collections()
-        .list(&format!("{}/{}/", ctx.user, ctx.project));
+        .list(&format!("{}/", scope.project_id()));
     ApiResponse::success(entries).into_response()
 }
 
 pub async fn get_collection(
-    ctx: SchemaAuth,
+    scope: VersionScope,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
 ) -> Response {
-    let namespace = Collection::to_path(
-        &format!("{}/{}", ctx.user, ctx.project),
-        &ctx.version,
-        &name,
-    );
-    match state.schema.collections().get(&namespace) {
+    let key = Collection::to_path(&scope.project_id(), &scope.version, &name);
+    match state.schema.collections().get(&key) {
         Some(c) => ApiResponse::success(c).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("collection not found: {name}")),
     }
 }
 
 pub async fn update_collection(
-    ctx: SchemaAuth,
+    scope: VersionScope,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
     Json(patch): Json<CollectionUpdate>,
 ) -> Response {
-    if let Err(resp) = ctx.require_draft() {
+    if let Err(resp) = scope.require_draft() {
         return resp;
     }
 
-    let namespace_key = Collection::to_path(
-        &format!("{}/{}", ctx.user, ctx.project),
-        &ctx.version,
-        &name,
-    );
-
-    match state.schema.collections().update(&namespace_key, patch) {
+    let key = Collection::to_path(&scope.project_id(), &scope.version, &name);
+    match state.schema.collections().update(&key, patch) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
 }
 
 pub async fn delete_collection(
-    ctx: SchemaAuth,
+    scope: VersionScope,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
 ) -> Response {
-    if let Err(resp) = ctx.require_draft() {
+    if let Err(resp) = scope.require_draft() {
         return resp;
     }
 
     // First delete all fields belonging to this collection
     let field_prefix = format!(
-        "{}/{}/versions/{}/fields/{}/",
-        ctx.user, ctx.project, ctx.version, name
+        "{}/versions/{}/fields/{}/",
+        scope.project_id(),
+        scope.version,
+        name
     );
     let _ = state.schema.fields().delete_by_prefix(&field_prefix);
 
-    let namespace_key = Collection::to_path(
-        &format!("{}/{}", ctx.user, ctx.project),
-        &ctx.version,
-        &name,
-    );
-
-    match state.schema.collections().delete(&namespace_key) {
+    let key = Collection::to_path(&scope.project_id(), &scope.version, &name);
+    match state.schema.collections().delete(&key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
 }
 
 pub async fn create_field(
-    ctx: SchemaAuth,
+    scope: VersionScope,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, collection)): Path<(String, String, String, String)>,
     Json(body): Json<CreateFieldRequest>,
 ) -> Response {
-    if let Err(resp) = ctx.require_draft() {
+    if let Err(resp) = scope.require_draft() {
         return resp;
     }
 
     let value = Field::new(
-        format!("{}/{}", ctx.user, ctx.project),
-        ctx.version.clone(),
+        scope.project_id(),
+        scope.version.clone(),
         collection,
         body.name,
         body.r#type,
@@ -178,58 +165,48 @@ pub async fn create_field(
 }
 
 pub async fn list_fields(
-    ctx: SchemaAuth,
+    scope: VersionScope,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, collection)): Path<(String, String, String, String)>,
 ) -> Response {
     let prefix = format!(
-        "{}/{}/versions/{}/fields/{}/",
-        ctx.user, ctx.project, ctx.version, collection
+        "{}/versions/{}/fields/{}/",
+        scope.project_id(),
+        scope.version,
+        collection
     );
     let entries = state.schema.fields().list(&prefix);
     ApiResponse::success(entries).into_response()
 }
 
 pub async fn update_field(
-    ctx: SchemaAuth,
+    scope: VersionScope,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
     Json(patch): Json<FieldUpdate>,
 ) -> Response {
-    if let Err(resp) = ctx.require_draft() {
+    if let Err(resp) = scope.require_draft() {
         return resp;
     }
 
-    let namespace_key = Field::to_path(
-        &format!("{}/{}", ctx.user, ctx.project),
-        &ctx.version,
-        &collection,
-        &name,
-    );
-
-    match state.schema.fields().update(&namespace_key, patch) {
+    let key = Field::to_path(&scope.project_id(), &scope.version, &collection, &name);
+    match state.schema.fields().update(&key, patch) {
         Ok(result) => ApiResponse::success(result).into_response(),
         Err(e) => schema_error_to_response(e),
     }
 }
 
 pub async fn delete_field(
-    ctx: SchemaAuth,
+    scope: VersionScope,
     State(state): State<Arc<AppState>>,
     Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
 ) -> Response {
-    if let Err(resp) = ctx.require_draft() {
+    if let Err(resp) = scope.require_draft() {
         return resp;
     }
 
-    let namespace_key = Field::to_path(
-        &format!("{}/{}", ctx.user, ctx.project),
-        &ctx.version,
-        &collection,
-        &name,
-    );
-
-    match state.schema.fields().delete(&namespace_key) {
+    let key = Field::to_path(&scope.project_id(), &scope.version, &collection, &name);
+    match state.schema.fields().delete(&key) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -251,52 +228,23 @@ struct NamespaceCollections {
 }
 
 pub async fn introspect(
+    scope: SiteScope,
     auth_user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
 ) -> Response {
-    if let Err(resp) = require_config_site(&auth_user.0.user) {
+    if let Err(resp) = require_metadata_editor(&auth_user.0.user.site_id) {
+        return resp;
+    }
+    if let Err(resp) = authorize_user(&auth_user.0.user, &scope.project.user) {
         return resp;
     }
 
-    let project_id = headers
-        .get("x-project-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|v| !v.is_empty())
-        .map(|v| v.to_string());
-    let site_name = headers
-        .get("x-site-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|v| !v.is_empty())
-        .map(|v| v.to_string());
-
-    let (Some(project_id), Some(site_name)) = (project_id, site_name) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "missing site context: use X-Project-Id and X-Site-Id headers",
-        );
-    };
-
-    let site = match lookup_site_in_project(&state.schema, &project_id, &site_name) {
-        Some(s) => s,
-        None => return error_response(StatusCode::NOT_FOUND, "site not found"),
-    };
-
-    let namespace = project_id.clone();
-
-    let ns_user = namespace.split('/').next().unwrap_or("");
-    if let Err(resp) = authorize_user(&auth_user.0.user, ns_user) {
-        return resp;
+    let version_scope = scope.version_scope();
+    if version_scope.version.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "site has no version configured");
     }
-    let version = {
-        let v = site.version();
-        if v.is_empty() {
-            return error_response(StatusCode::BAD_REQUEST, "site has no version configured");
-        }
-        v.to_string()
-    };
-    let namespace_str = format!("{namespace}@{version}");
 
+    let namespace_str = format!("{}@{}", scope.project.project_id(), version_scope.version);
     let ns_pairs = match crate::manifest::resolve_dependency_tree(&state.schema, &namespace_str) {
         Ok(pairs) => pairs,
         Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
