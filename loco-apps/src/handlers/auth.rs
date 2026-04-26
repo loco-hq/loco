@@ -45,14 +45,14 @@ pub async fn login(
         site_id: qualified_site_id.clone(),
     };
 
-    match state.auth.login(&qualified_site_id, &credentials) {
+    match state.auth_adapter.login(&qualified_site_id, &credentials) {
         Ok(session) => ApiResponse::success(session).into_response(),
         Err(e) => auth_error_to_response(e),
     }
 }
 
 pub async fn logout(user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
-    match state.auth.logout(&user.0.token) {
+    match state.auth_adapter.logout(&user.0.token) {
         Ok(()) => ApiResponse::success("logged out").into_response(),
         Err(e) => auth_error_to_response(e),
     }
@@ -82,14 +82,14 @@ pub async fn create_user(
         password: None,
     };
 
-    match state.auth.create_user(&user.0.user.site_id, &req) {
+    match state.auth_adapter.create_user(&user.0.user.site_id, &req) {
         Ok(new_user) => (StatusCode::CREATED, ApiResponse::success(new_user)).into_response(),
         Err(e) => auth_error_to_response(e),
     }
 }
 
 pub async fn list_users(user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
-    match state.auth.list_users(&user.0.user.site_id) {
+    match state.auth_adapter.list_users(&user.0.user.site_id) {
         Ok(users) => ApiResponse::success(users).into_response(),
         Err(e) => auth_error_to_response(e),
     }
@@ -117,7 +117,7 @@ pub async fn update_user(
         status: body.status,
     };
 
-    match state.auth.update_user(&user.0.user.site_id, &id, &updates) {
+    match state.auth_adapter.update_user(&user.0.user.site_id, &id, &updates) {
         Ok(updated) => ApiResponse::success(updated).into_response(),
         Err(e) => auth_error_to_response(e),
     }
@@ -128,7 +128,7 @@ pub async fn delete_user(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.auth.delete_user(&user.0.user.site_id, &id) {
+    match state.auth_adapter.delete_user(&user.0.user.site_id, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => auth_error_to_response(e),
     }
@@ -145,7 +145,7 @@ pub async fn create_api_key(
     Json(body): Json<CreateApiKeyRequest>,
 ) -> Response {
     match state
-        .auth
+        .auth_adapter
         .create_api_key(&user.0.user.site_id, &user.0.user.id, &body.label)
     {
         Ok(key) => (StatusCode::CREATED, ApiResponse::success(key)).into_response(),
@@ -155,7 +155,7 @@ pub async fn create_api_key(
 
 pub async fn list_api_keys(user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
     match state
-        .auth
+        .auth_adapter
         .list_api_keys(&user.0.user.site_id, &user.0.user.id)
     {
         Ok(keys) => ApiResponse::success(keys).into_response(),
@@ -168,7 +168,7 @@ pub async fn revoke_api_key(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.auth.revoke_api_key(&user.0.user.site_id, &id) {
+    match state.auth_adapter.revoke_api_key(&user.0.user.site_id, &id) {
         Ok(()) => ApiResponse::success("revoked").into_response(),
         Err(e) => auth_error_to_response(e),
     }

@@ -151,9 +151,9 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUser {
         };
 
         // Try session token first, then API key
-        match state.auth.validate_session(&token) {
+        match state.auth_adapter.validate_session(&token) {
             Ok(session) => Ok(AuthenticatedUser(session)),
-            Err(_) => match state.auth.validate_api_key(&token) {
+            Err(_) => match state.auth_adapter.validate_api_key(&token) {
                 Ok(session) => Ok(AuthenticatedUser(session)),
                 Err(_) => Err(auth_error_response(
                     StatusCode::UNAUTHORIZED,

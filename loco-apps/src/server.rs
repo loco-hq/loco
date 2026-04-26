@@ -11,7 +11,7 @@ use crate::SchemaStore;
 
 pub struct AppState {
     pub data_adapter: Box<dyn DataAdapter>,
-    pub auth: Box<dyn AuthAdapter>,
+    pub auth_adapter: Box<dyn AuthAdapter>,
     pub schema: SchemaStore,
 }
 
@@ -58,12 +58,12 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
     crate::manifest::validate_manifests(&schema).expect("manifest validation failed");
 
     let data_adapter = build_data_adapter();
-    let auth = build_auth_adapter(root);
+    let auth_adapter = build_auth_adapter(root);
     println!("Sites are managed in schemas/instances/");
 
     let state = Arc::new(AppState {
         data_adapter,
-        auth,
+        auth_adapter,
         schema,
     });
 
