@@ -91,6 +91,24 @@ impl CollectionScope {
     }
 }
 
+/// A `CollectionScope` plus the `{id}` of a specific record. Use this for
+/// record-level data routes (get/update/delete) so handlers don't need to
+/// extract `Path` separately.
+pub struct RecordScope {
+    pub collection: CollectionScope,
+    pub id: String,
+}
+
+impl RecordScope {
+    pub fn dataset_id(&self) -> String {
+        self.collection.dataset_id()
+    }
+
+    pub fn collection_key(&self) -> &str {
+        &self.collection.collection_key
+    }
+}
+
 impl SiteScope {
     /// `{user}/{project}/{site_name}` — matches `AuthUser.site_id`.
     pub fn qualified_site_id(&self) -> String {
@@ -213,6 +231,22 @@ impl FromRequestParts<Arc<AppState>> for CollectionScope {
             site,
             collection_key,
         })
+    }
+}
+
+impl FromRequestParts<Arc<AppState>> for RecordScope {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let collection = CollectionScope::from_request_parts(parts, state).await?;
+        let params = read_path_params(parts, state).await?;
+        let id = params.get("id").cloned().ok_or_else(|| {
+            error_response(StatusCode::BAD_REQUEST, "missing record id in path")
+        })?;
+        Ok(RecordScope { collection, id })
     }
 }
 

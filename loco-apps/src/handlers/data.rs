@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -10,7 +10,7 @@ use serde::Deserialize;
 use loco_lake::{InsertRequest, UpdatePatch, Value};
 
 use crate::http::response::{ApiResponse, error_response, lake_error_to_response};
-use crate::http::scope::CollectionScope;
+use crate::http::scope::{CollectionScope, RecordScope};
 use crate::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -58,14 +58,10 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
     }
 }
 
-pub async fn get(
-    scope: CollectionScope,
-    State(state): State<Arc<AppState>>,
-    Path((_, id)): Path<(String, String)>,
-) -> Response {
+pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Response {
     match state
         .data_adapter
-        .get(&scope.dataset_id(), &scope.collection_key, &id)
+        .get(&scope.dataset_id(), scope.collection_key(), &scope.id)
     {
         Ok(Some(record)) => ApiResponse::success(record).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
@@ -73,14 +69,10 @@ pub async fn get(
     }
 }
 
-pub async fn delete(
-    scope: CollectionScope,
-    State(state): State<Arc<AppState>>,
-    Path((_, id)): Path<(String, String)>,
-) -> Response {
+pub async fn delete(scope: RecordScope, State(state): State<Arc<AppState>>) -> Response {
     match state
         .data_adapter
-        .delete(&scope.dataset_id(), &scope.collection_key, &id)
+        .delete(&scope.dataset_id(), scope.collection_key(), &scope.id)
     {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => lake_error_to_response(e),
@@ -88,9 +80,8 @@ pub async fn delete(
 }
 
 pub async fn update(
-    scope: CollectionScope,
+    scope: RecordScope,
     State(state): State<Arc<AppState>>,
-    Path((_, id)): Path<(String, String)>,
     Json(body): Json<AddRecordRequest>,
 ) -> Response {
     let patch = UpdatePatch {
@@ -99,7 +90,7 @@ pub async fn update(
     };
     match state
         .data_adapter
-        .update(&scope.dataset_id(), &scope.collection_key, &id, patch)
+        .update(&scope.dataset_id(), scope.collection_key(), &scope.id, patch)
     {
         Ok(rec) => ApiResponse::success(rec).into_response(),
         Err(e) => lake_error_to_response(e),
