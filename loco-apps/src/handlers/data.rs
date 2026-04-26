@@ -10,7 +10,7 @@ use serde::Deserialize;
 use loco_lake::{Record, Value};
 
 use crate::http::response::{ApiResponse, error_response, lake_error_to_response};
-use crate::http::scope::SiteScope;
+use crate::http::scope::CollectionScope;
 use crate::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -31,15 +31,10 @@ pub struct AddRecordRequest {
 }
 
 pub async fn add(
-    scope: SiteScope,
+    scope: CollectionScope,
     State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
     Json(body): Json<AddRecordRequest>,
 ) -> Response {
-    let collection_key = match scope.require_collection(&name) {
-        Ok(k) => k,
-        Err(e) => return e,
-    };
     let dataset_id = scope.dataset_id();
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -55,37 +50,34 @@ pub async fn add(
         fields: body.fields,
     };
 
-    match state.data_adapter.insert(&dataset_id, &collection_key, record) {
+    match state
+        .data_adapter
+        .insert(&dataset_id, &scope.collection_key, record)
+    {
         Ok(rec) => (StatusCode::CREATED, ApiResponse::success(rec)).into_response(),
         Err(e) => lake_error_to_response(e),
     }
 }
 
-pub async fn list(
-    scope: SiteScope,
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> Response {
-    let collection_key = match scope.require_collection(&name) {
-        Ok(k) => k,
-        Err(e) => return e,
-    };
-    match state.data_adapter.list(&scope.dataset_id(), &collection_key) {
+pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) -> Response {
+    match state
+        .data_adapter
+        .list(&scope.dataset_id(), &scope.collection_key)
+    {
         Ok(records) => ApiResponse::success(records).into_response(),
         Err(e) => lake_error_to_response(e),
     }
 }
 
 pub async fn get(
-    scope: SiteScope,
+    scope: CollectionScope,
     State(state): State<Arc<AppState>>,
-    Path((name, id)): Path<(String, String)>,
+    Path((_, id)): Path<(String, String)>,
 ) -> Response {
-    let collection_key = match scope.require_collection(&name) {
-        Ok(k) => k,
-        Err(e) => return e,
-    };
-    match state.data_adapter.get(&scope.dataset_id(), &collection_key, &id) {
+    match state
+        .data_adapter
+        .get(&scope.dataset_id(), &scope.collection_key, &id)
+    {
         Ok(Some(record)) => ApiResponse::success(record).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
         Err(e) => lake_error_to_response(e),
@@ -93,33 +85,31 @@ pub async fn get(
 }
 
 pub async fn delete(
-    scope: SiteScope,
+    scope: CollectionScope,
     State(state): State<Arc<AppState>>,
-    Path((name, id)): Path<(String, String)>,
+    Path((_, id)): Path<(String, String)>,
 ) -> Response {
-    let collection_key = match scope.require_collection(&name) {
-        Ok(k) => k,
-        Err(e) => return e,
-    };
-    match state.data_adapter.delete(&scope.dataset_id(), &collection_key, &id) {
+    match state
+        .data_adapter
+        .delete(&scope.dataset_id(), &scope.collection_key, &id)
+    {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => lake_error_to_response(e),
     }
 }
 
 pub async fn update(
-    scope: SiteScope,
+    scope: CollectionScope,
     State(state): State<Arc<AppState>>,
-    Path((name, id)): Path<(String, String)>,
+    Path((_, id)): Path<(String, String)>,
     Json(body): Json<AddRecordRequest>,
 ) -> Response {
-    let collection_key = match scope.require_collection(&name) {
-        Ok(k) => k,
-        Err(e) => return e,
-    };
     let dataset_id = scope.dataset_id();
 
-    let existing = match state.data_adapter.get(&dataset_id, &collection_key, &id) {
+    let existing = match state
+        .data_adapter
+        .get(&dataset_id, &scope.collection_key, &id)
+    {
         Ok(Some(r)) => r,
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "record not found"),
         Err(e) => return lake_error_to_response(e),
@@ -142,7 +132,10 @@ pub async fn update(
         fields,
     };
 
-    match state.data_adapter.update(&dataset_id, &collection_key, &id, record) {
+    match state
+        .data_adapter
+        .update(&dataset_id, &scope.collection_key, &id, record)
+    {
         Ok(rec) => ApiResponse::success(rec).into_response(),
         Err(e) => lake_error_to_response(e),
     }

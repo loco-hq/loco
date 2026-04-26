@@ -77,6 +77,20 @@ pub struct SiteScope {
     pub site: Arc<Site>,
 }
 
+/// A `SiteScope` plus a validated collection from the request path's `{name}`.
+/// Use this for data routes scoped to a single collection — it pre-resolves
+/// `collection_key` so handlers don't repeat the validation dance.
+pub struct CollectionScope {
+    pub site: SiteScope,
+    pub collection_key: String,
+}
+
+impl CollectionScope {
+    pub fn dataset_id(&self) -> String {
+        self.site.dataset_id()
+    }
+}
+
 impl SiteScope {
     /// `{user}/{project}/{site_name}` — matches `AuthUser.site_id`.
     pub fn qualified_site_id(&self) -> String {
@@ -180,6 +194,24 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
                 state: state.clone(),
             },
             site,
+        })
+    }
+}
+
+impl FromRequestParts<Arc<AppState>> for CollectionScope {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let site = SiteScope::from_request_parts(parts, state).await?;
+        let params = read_path_params(parts, state).await?;
+        let name = params.get("name").cloned().unwrap_or_default();
+        let collection_key = site.require_collection(&name)?;
+        Ok(CollectionScope {
+            site,
+            collection_key,
         })
     }
 }
