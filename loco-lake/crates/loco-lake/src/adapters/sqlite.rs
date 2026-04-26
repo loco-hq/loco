@@ -6,7 +6,7 @@ use rusqlite::Connection;
 
 use crate::adapter::DataAdapter;
 use crate::error::Error;
-use crate::record::Record;
+use crate::record::{InsertRequest, Record, UpdatePatch};
 use crate::value::Value;
 
 pub struct SqliteAdapter {
@@ -34,14 +34,11 @@ impl SqliteAdapter {
 
         Ok(SqliteAdapter { conn: Mutex::new(conn) })
     }
-}
 
-impl DataAdapter for SqliteAdapter {
-    fn insert(&self, dataset_id: &str, collection: &str, record: Record) -> Result<Record, Error> {
+    fn write_record(&self, dataset_id: &str, collection: &str, record: &Record) -> Result<(), Error> {
         let fields_json =
             serde_json::to_string(&record.fields).map_err(|e| Error::Internal(e.to_string()))?;
         let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
-
         conn.execute(
             "INSERT INTO records (dataset_id, collection, id, created_at, created_by, updated_at, updated_by, owner, fields)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -65,7 +62,19 @@ impl DataAdapter for SqliteAdapter {
             }
             _ => Error::Internal(e.to_string()),
         })?;
+        Ok(())
+    }
+}
 
+impl DataAdapter for SqliteAdapter {
+    fn insert(
+        &self,
+        dataset_id: &str,
+        collection: &str,
+        req: InsertRequest,
+    ) -> Result<Record, Error> {
+        let record = Record::new_for_insert(dataset_id, req);
+        self.write_record(dataset_id, collection, &record)?;
         Ok(record)
     }
 
@@ -104,22 +113,24 @@ impl DataAdapter for SqliteAdapter {
         dataset_id: &str,
         collection: &str,
         id: &str,
-        record: Record,
+        patch: UpdatePatch,
     ) -> Result<Record, Error> {
+        let existing = self
+            .get(dataset_id, collection, id)?
+            .ok_or(Error::NotFound)?;
+        let record = existing.apply_patch(patch);
+
         let fields_json =
             serde_json::to_string(&record.fields).map_err(|e| Error::Internal(e.to_string()))?;
         let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
 
         let rows = conn
             .execute(
-                "UPDATE records SET created_at = ?1, created_by = ?2, updated_at = ?3, updated_by = ?4, owner = ?5, fields = ?6
-                 WHERE dataset_id = ?7 AND collection = ?8 AND id = ?9",
+                "UPDATE records SET updated_at = ?1, updated_by = ?2, fields = ?3
+                 WHERE dataset_id = ?4 AND collection = ?5 AND id = ?6",
                 rusqlite::params![
-                    record.created_at,
-                    record.created_by,
                     record.updated_at,
                     record.updated_by,
-                    record.owner,
                     fields_json,
                     dataset_id,
                     collection,
@@ -205,17 +216,20 @@ mod tests {
         SqliteAdapter::new(Path::new(":memory:")).unwrap()
     }
 
-    fn make_record(id: &str, name: &str) -> Record {
+    fn make_request(name: &str) -> InsertRequest {
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), Value::String(name.to_string()));
-        Record {
-            id: id.to_string(),
-            dataset_id: None,
-            created_at: "2024-01-01".to_string(),
-            created_by: "test".to_string(),
-            updated_at: "2024-01-01".to_string(),
-            updated_by: "test".to_string(),
-            owner: "test".to_string(),
+        InsertRequest {
+            user: "test".to_string(),
+            fields,
+        }
+    }
+
+    fn make_patch(name: &str) -> UpdatePatch {
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), Value::String(name.to_string()));
+        UpdatePatch {
+            user: "test".to_string(),
             fields,
         }
     }
@@ -223,19 +237,11 @@ mod tests {
     #[test]
     fn test_insert_and_get() {
         let adapter = make_adapter();
-        adapter.insert(DATASET, "users", make_record("1", "Alice")).unwrap();
+        let inserted = adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
 
-        let retrieved = adapter.get(DATASET, "users", "1").unwrap().unwrap();
-        assert_eq!(retrieved.id, "1");
+        let retrieved = adapter.get(DATASET, "users", &inserted.id).unwrap().unwrap();
+        assert_eq!(retrieved.id, inserted.id);
         assert_eq!(retrieved.fields.get("name").unwrap(), &Value::String("Alice".to_string()));
-    }
-
-    #[test]
-    fn test_insert_duplicate() {
-        let adapter = make_adapter();
-        adapter.insert(DATASET, "users", make_record("1", "Alice")).unwrap();
-        let result = adapter.insert(DATASET, "users", make_record("1", "Bob"));
-        assert!(result.is_err());
     }
 
     #[test]
@@ -246,28 +252,56 @@ mod tests {
     }
 
     #[test]
-    fn test_update() {
+    fn test_update_merges_fields_and_stamps_updated_by() {
         let adapter = make_adapter();
-        adapter.insert(DATASET, "users", make_record("1", "Alice")).unwrap();
-        adapter.update(DATASET, "users", "1", make_record("1", "Bob")).unwrap();
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), Value::String("Alice".to_string()));
+        fields.insert("age".to_string(), Value::Integer(30));
+        let inserted = adapter
+            .insert(
+                DATASET,
+                "users",
+                InsertRequest {
+                    user: "creator".to_string(),
+                    fields,
+                },
+            )
+            .unwrap();
 
-        let retrieved = adapter.get(DATASET, "users", "1").unwrap().unwrap();
-        assert_eq!(retrieved.fields.get("name").unwrap(), &Value::String("Bob".to_string()));
+        let mut patch_fields = HashMap::new();
+        patch_fields.insert("name".to_string(), Value::String("Bob".to_string()));
+        let updated = adapter
+            .update(
+                DATASET,
+                "users",
+                &inserted.id,
+                UpdatePatch {
+                    user: "editor".to_string(),
+                    fields: patch_fields,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.fields.get("name").unwrap(), &Value::String("Bob".to_string()));
+        assert_eq!(updated.fields.get("age").unwrap(), &Value::Integer(30));
+        assert_eq!(updated.created_by, "creator");
+        assert_eq!(updated.owner, "creator");
+        assert_eq!(updated.updated_by, "editor");
     }
 
     #[test]
     fn test_update_missing() {
         let adapter = make_adapter();
-        let result = adapter.update(DATASET, "users", "1", make_record("1", "Alice"));
+        let result = adapter.update(DATASET, "users", "1", make_patch("Alice"));
         assert!(result.is_err());
     }
 
     #[test]
     fn test_delete() {
         let adapter = make_adapter();
-        adapter.insert(DATASET, "users", make_record("1", "Alice")).unwrap();
-        adapter.delete(DATASET, "users", "1").unwrap();
-        let result = adapter.get(DATASET, "users", "1").unwrap();
+        let inserted = adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
+        adapter.delete(DATASET, "users", &inserted.id).unwrap();
+        let result = adapter.get(DATASET, "users", &inserted.id).unwrap();
         assert!(result.is_none());
     }
 
@@ -281,8 +315,8 @@ mod tests {
     #[test]
     fn test_list() {
         let adapter = make_adapter();
-        adapter.insert(DATASET, "users", make_record("1", "Alice")).unwrap();
-        adapter.insert(DATASET, "users", make_record("2", "Bob")).unwrap();
+        adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
+        adapter.insert(DATASET, "users", make_request("Bob")).unwrap();
 
         let records = adapter.list(DATASET, "users").unwrap();
         assert_eq!(records.len(), 2);
@@ -298,9 +332,9 @@ mod tests {
     #[test]
     fn test_dataset_isolation() {
         let adapter = make_adapter();
-        adapter.insert("dataset-a", "users", make_record("1", "Alice")).unwrap();
+        let inserted = adapter.insert("dataset-a", "users", make_request("Alice")).unwrap();
 
-        let result = adapter.get("dataset-b", "users", "1").unwrap();
+        let result = adapter.get("dataset-b", "users", &inserted.id).unwrap();
         assert!(result.is_none());
 
         let list = adapter.list("dataset-b", "users").unwrap();
@@ -310,9 +344,9 @@ mod tests {
     #[test]
     fn test_delete_dataset() {
         let adapter = make_adapter();
-        adapter.insert("ds", "users", make_record("1", "Alice")).unwrap();
-        adapter.insert("ds", "orders", make_record("2", "Order1")).unwrap();
-        adapter.insert("other", "users", make_record("3", "Bob")).unwrap();
+        adapter.insert("ds", "users", make_request("Alice")).unwrap();
+        adapter.insert("ds", "orders", make_request("Order1")).unwrap();
+        adapter.insert("other", "users", make_request("Bob")).unwrap();
 
         adapter.delete_dataset("ds").unwrap();
 
@@ -325,18 +359,5 @@ mod tests {
     fn test_delete_dataset_empty() {
         let adapter = make_adapter();
         adapter.delete_dataset("nonexistent").unwrap();
-    }
-
-    #[test]
-    fn test_same_id_different_datasets() {
-        let adapter = make_adapter();
-        adapter.insert("dataset-a", "users", make_record("1", "Alice")).unwrap();
-        adapter.insert("dataset-b", "users", make_record("1", "Bob")).unwrap();
-
-        let a = adapter.get("dataset-a", "users", "1").unwrap().unwrap();
-        let b = adapter.get("dataset-b", "users", "1").unwrap().unwrap();
-
-        assert_eq!(a.fields.get("name").unwrap(), &Value::String("Alice".to_string()));
-        assert_eq!(b.fields.get("name").unwrap(), &Value::String("Bob".to_string()));
     }
 }
