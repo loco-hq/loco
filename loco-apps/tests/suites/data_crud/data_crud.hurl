@@ -13,23 +13,21 @@ HTTP 200
 jsonpath "$.ok" == true
 jsonpath "$.data" count == 0
 
-# 2. Add a record
+# 2. Add a record (no auth → owner becomes "public")
 POST http://127.0.0.1:{{port}}/data/tasks/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
 Content-Type: application/json
 {
-  "fields": {
-    "title": "Write tests",
-    "done": false
-  },
-  "owner": "alice"
+  "title": "Write tests",
+  "done": false
 }
 HTTP 201
 [Asserts]
 jsonpath "$.ok" == true
 jsonpath "$.data.id" isString
-jsonpath "$.data.owner" == "alice"
+jsonpath "$.data.owner" == "public"
+jsonpath "$.data.created_by" == "public"
 jsonpath "$.data.fields.title" == "Write tests"
 jsonpath "$.data.fields.done" == false
 [Captures]
@@ -41,10 +39,8 @@ X-Project-Id: testuser/testapp
 X-Site-Id: dev
 Content-Type: application/json
 {
-  "fields": {
-    "title": "Ship feature",
-    "done": false
-  }
+  "title": "Ship feature",
+  "done": false
 }
 HTTP 201
 [Asserts]
@@ -72,21 +68,20 @@ jsonpath "$.ok" == true
 jsonpath "$.data.id" == {{record1_id}}
 jsonpath "$.data.fields.title" == "Write tests"
 
-# 6. Update the first record
+# 6. Update the first record (patch merges into existing fields)
 PUT http://127.0.0.1:{{port}}/data/tasks/update/{{record1_id}}
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
 Content-Type: application/json
 {
-  "fields": {
-    "done": true
-  }
+  "done": true
 }
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 jsonpath "$.data.fields.done" == true
 jsonpath "$.data.fields.title" == "Write tests"
+jsonpath "$.data.updated_by" == "public"
 
 # 7. Get the updated record — verify fields merged
 GET http://127.0.0.1:{{port}}/data/tasks/get/{{record1_id}}

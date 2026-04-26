@@ -5,7 +5,6 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
-use serde::Deserialize;
 
 use loco_lake::{InsertRequest, UpdatePatch, Value};
 
@@ -23,21 +22,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/{name}/delete/{id}", route_delete(delete))
 }
 
-#[derive(Deserialize)]
-pub struct AddRecordRequest {
-    fields: HashMap<String, Value>,
-    #[serde(default)]
-    owner: Option<String>,
-}
-
 pub async fn add(
     scope: CollectionScope,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<AddRecordRequest>,
+    Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
     let req = InsertRequest {
-        user: body.owner.unwrap_or_default(),
-        fields: body.fields,
+        user: scope.user().username.clone(),
+        fields,
     };
     match state
         .data_adapter
@@ -82,11 +74,11 @@ pub async fn delete(scope: RecordScope, State(state): State<Arc<AppState>>) -> R
 pub async fn update(
     scope: RecordScope,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<AddRecordRequest>,
+    Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
     let patch = UpdatePatch {
-        user: body.owner.unwrap_or_default(),
-        fields: body.fields,
+        user: scope.user().username.clone(),
+        fields,
     };
     match state
         .data_adapter

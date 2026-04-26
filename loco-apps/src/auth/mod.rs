@@ -47,6 +47,30 @@ pub struct AuthSession {
     pub user: AuthUser,
 }
 
+/// Reserved username for unauthenticated requests. Apps can attach permissions
+/// to this user the same way they would to any other.
+pub const PUBLIC_USERNAME: &str = "public";
+
+impl AuthSession {
+    /// Synthetic session used when a request arrives with no auth token.
+    /// `qualified_site_id` is `{user}/{project}/{site}`.
+    pub fn public(qualified_site_id: &str) -> Self {
+        AuthSession {
+            token: String::new(),
+            user: AuthUser {
+                id: PUBLIC_USERNAME.to_string(),
+                site_id: qualified_site_id.to_string(),
+                username: PUBLIC_USERNAME.to_string(),
+                name: "Public".to_string(),
+                role: PUBLIC_USERNAME.to_string(),
+                status: "active".to_string(),
+                created_at: "1970-01-01T00:00:00Z".to_string(),
+                last_login_at: None,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthUser {
     pub id: String,

@@ -24,11 +24,7 @@ POST http://127.0.0.1:{{port}}/data/tasks/add
 X-Project-Id: testuser/testapp
 X-Site-Id: nonexistent
 Content-Type: application/json
-{
-  "fields": {
-    "title": "Should fail"
-  }
-}
+{"title": "Should fail"}
 HTTP 404
 [Asserts]
 jsonpath "$.ok" == false
@@ -48,11 +44,7 @@ PUT http://127.0.0.1:{{port}}/data/tasks/update/fake-id
 X-Project-Id: testuser/testapp
 X-Site-Id: nonexistent
 Content-Type: application/json
-{
-  "fields": {
-    "title": "Should fail"
-  }
-}
+{"title": "Should fail"}
 HTTP 404
 [Asserts]
 jsonpath "$.ok" == false

@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::Response;
 
-use crate::auth::AuthenticatedUser;
+use crate::auth::{AuthenticatedUser, AuthSession, AuthUser};
 use crate::http::authz::{require_draft, validate_collection};
 use crate::http::extract::SiteId;
 use crate::http::paths::collection_key;
@@ -75,6 +75,9 @@ impl VersionScope {
 pub struct SiteScope {
     pub project: ProjectScope,
     pub site: Arc<Site>,
+    /// Always populated — synthesized as `AuthSession::public(...)` when no
+    /// token is provided. So every scope has a user.
+    pub auth: AuthSession,
 }
 
 /// A `SiteScope` plus a validated collection from the request path's `{name}`.
@@ -88,6 +91,10 @@ pub struct CollectionScope {
 impl CollectionScope {
     pub fn dataset_id(&self) -> String {
         self.site.dataset_id()
+    }
+
+    pub fn user(&self) -> &AuthUser {
+        self.site.user()
     }
 }
 
@@ -107,12 +114,20 @@ impl RecordScope {
     pub fn collection_key(&self) -> &str {
         &self.collection.collection_key
     }
+
+    pub fn user(&self) -> &AuthUser {
+        self.collection.user()
+    }
 }
 
 impl SiteScope {
     /// `{user}/{project}/{site_name}` — matches `AuthUser.site_id`.
     pub fn qualified_site_id(&self) -> String {
         format!("{}/{}", self.project.project_id(), self.site.name())
+    }
+
+    pub fn user(&self) -> &AuthUser {
+        &self.auth.user
     }
 
     pub fn dataset_id(&self) -> String {
@@ -205,6 +220,12 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
                 )
             })?;
 
+        let qualified = format!("{project_id}/{site_name}");
+        let auth = AuthenticatedUser::from_request_parts(parts, state)
+            .await
+            .map(|AuthenticatedUser(s)| s)
+            .unwrap_or_else(|_| AuthSession::public(&qualified));
+
         Ok(SiteScope {
             project: ProjectScope {
                 user,
@@ -212,6 +233,7 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
                 state: state.clone(),
             },
             site,
+            auth,
         })
     }
 }
