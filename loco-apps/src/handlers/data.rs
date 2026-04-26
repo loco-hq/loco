@@ -55,7 +55,7 @@ pub async fn add(
         fields: body.fields,
     };
 
-    match state.adapter.insert(&dataset_id, &collection_key, record) {
+    match state.data_adapter.insert(&dataset_id, &collection_key, record) {
         Ok(rec) => (StatusCode::CREATED, ApiResponse::success(rec)).into_response(),
         Err(e) => lake_error_to_response(e),
     }
@@ -70,7 +70,7 @@ pub async fn list(
         Ok(k) => k,
         Err(e) => return e,
     };
-    match state.adapter.list(&scope.dataset_id(), &collection_key) {
+    match state.data_adapter.list(&scope.dataset_id(), &collection_key) {
         Ok(records) => ApiResponse::success(records).into_response(),
         Err(e) => lake_error_to_response(e),
     }
@@ -85,7 +85,7 @@ pub async fn get(
         Ok(k) => k,
         Err(e) => return e,
     };
-    match state.adapter.get(&scope.dataset_id(), &collection_key, &id) {
+    match state.data_adapter.get(&scope.dataset_id(), &collection_key, &id) {
         Ok(Some(record)) => ApiResponse::success(record).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
         Err(e) => lake_error_to_response(e),
@@ -101,7 +101,7 @@ pub async fn delete(
         Ok(k) => k,
         Err(e) => return e,
     };
-    match state.adapter.delete(&scope.dataset_id(), &collection_key, &id) {
+    match state.data_adapter.delete(&scope.dataset_id(), &collection_key, &id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => lake_error_to_response(e),
     }
@@ -119,7 +119,7 @@ pub async fn update(
     };
     let dataset_id = scope.dataset_id();
 
-    let existing = match state.adapter.get(&dataset_id, &collection_key, &id) {
+    let existing = match state.data_adapter.get(&dataset_id, &collection_key, &id) {
         Ok(Some(r)) => r,
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "record not found"),
         Err(e) => return lake_error_to_response(e),
@@ -142,7 +142,7 @@ pub async fn update(
         fields,
     };
 
-    match state.adapter.update(&dataset_id, &collection_key, &id, record) {
+    match state.data_adapter.update(&dataset_id, &collection_key, &id, record) {
         Ok(rec) => ApiResponse::success(rec).into_response(),
         Err(e) => lake_error_to_response(e),
     }

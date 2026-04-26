@@ -187,7 +187,7 @@ pub async fn delete(ctx: ConfigAuth, State(state): State<Arc<AppState>>) -> Resp
                         Dataset::from_path(ds_id).and_then(|v| v.get("name").cloned())
                     {
                         let qualified = format!("{project_path}/{dataset_name}");
-                        let _ = state.adapter.delete_dataset(&qualified);
+                        let _ = state.data_adapter.delete_dataset(&qualified);
                     }
                     let _ = state.schema.datasets().delete(ds_id);
                 }
@@ -210,7 +210,7 @@ pub async fn delete(ctx: ConfigAuth, State(state): State<Arc<AppState>>) -> Resp
             (ds_vars.get("project"), ds_vars.get("name"))
         {
             let qualified = format!("{project_path}/{dataset_name}");
-            if let Err(e) = state.adapter.delete_dataset(&qualified) {
+            if let Err(e) = state.data_adapter.delete_dataset(&qualified) {
                 return error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     &format!("failed to purge dataset records: {e}"),
