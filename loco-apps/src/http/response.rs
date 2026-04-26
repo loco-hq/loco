@@ -3,6 +3,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
+use crate::validation::Diagnostic;
+
 #[derive(Serialize)]
 pub struct ApiResponse<T: Serialize> {
     pub ok: bool,
@@ -10,6 +12,8 @@ pub struct ApiResponse<T: Serialize> {
     pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Vec<Diagnostic>>,
 }
 
 impl<T: Serialize> ApiResponse<T> {
@@ -18,6 +22,25 @@ impl<T: Serialize> ApiResponse<T> {
             ok: true,
             data: Some(data),
             error: None,
+            diagnostics: None,
+        })
+    }
+
+    /// Like `success`, but attaches non-fatal diagnostics. Empty list collapses
+    /// to `None` so the field stays absent on clean reads.
+    pub fn success_with_diagnostics(
+        data: T,
+        diagnostics: Vec<Diagnostic>,
+    ) -> Json<ApiResponse<T>> {
+        Json(ApiResponse {
+            ok: true,
+            data: Some(data),
+            error: None,
+            diagnostics: if diagnostics.is_empty() {
+                None
+            } else {
+                Some(diagnostics)
+            },
         })
     }
 }
@@ -27,8 +50,21 @@ pub fn error_response(status: StatusCode, msg: &str) -> Response {
         ok: false,
         data: None,
         error: Some(msg.to_string()),
+        diagnostics: None,
     };
     (status, Json(body)).into_response()
+}
+
+/// 400 with the validation report attached. Use for write paths when
+/// `ValidationReport::has_errors()` is true.
+pub fn validation_error_response(diagnostics: Vec<Diagnostic>) -> Response {
+    let body = ApiResponse::<()> {
+        ok: false,
+        data: None,
+        error: Some("validation failed".to_string()),
+        diagnostics: Some(diagnostics),
+    };
+    (StatusCode::BAD_REQUEST, Json(body)).into_response()
 }
 
 pub fn lake_error_to_response(err: loco_lake::Error) -> Response {
@@ -55,3 +91,4 @@ pub fn schema_error_to_response(err: loco_schema_runtime::Error) -> Response {
         _ => error_response(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
 }
+

@@ -140,3 +140,13 @@ fn suite_authorization() {
 fn suite_project_lifecycle() {
     run_suite(&suites_dir().join("project_lifecycle"));
 }
+
+#[test]
+fn suite_data_validation_writes() {
+    run_suite(&suites_dir().join("data_validation_writes"));
+}
+
+#[test]
+fn suite_data_validation_reads() {
+    run_suite(&suites_dir().join("data_validation_reads"));
+}

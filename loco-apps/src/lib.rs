@@ -8,6 +8,7 @@ pub mod handlers;
 pub mod http;
 pub mod manifest;
 pub mod server;
+pub mod validation;
 
 #[cfg(test)]
 mod generated_tests {

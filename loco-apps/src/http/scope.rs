@@ -20,7 +20,10 @@ use crate::http::extract::SiteId;
 use crate::http::paths::collection_key;
 use crate::http::response::error_response;
 use crate::server::AppState;
+use crate::validation::{validate_record, validate_records, ValidationMode, ValidationReport};
 use crate::{Project, Site};
+
+use loco_lake::Value;
 
 /// Fully-qualified `{user}/{project}/{site}` ids of sites allowed to edit
 /// versioned metadata via /schema routes.
@@ -86,6 +89,9 @@ pub struct SiteScope {
 pub struct CollectionScope {
     pub site: SiteScope,
     pub collection_key: String,
+    /// Bare collection name (e.g. "account") — needed for schema lookups
+    /// where `collection_key` (`"user/project.name"`) is the wrong shape.
+    pub collection_name: String,
 }
 
 impl CollectionScope {
@@ -95,6 +101,55 @@ impl CollectionScope {
 
     pub fn user(&self) -> &AuthUser {
         self.site.user()
+    }
+
+    pub fn project_id(&self) -> String {
+        self.site.project.project_id()
+    }
+
+    /// Schema version pinned by the site this scope belongs to.
+    pub fn version(&self) -> &str {
+        self.site.site.version()
+    }
+
+    /// Validate a single record's fields against this collection's schema.
+    /// Thin adapter over [`validate_record`] — keeps the validator pure and
+    /// gives handlers a one-line call site.
+    pub fn validate(
+        &self,
+        schema: &crate::SchemaStore,
+        fields: &HashMap<String, Value>,
+        mode: ValidationMode,
+    ) -> ValidationReport {
+        validate_record(
+            schema,
+            &self.project_id(),
+            self.version(),
+            &self.collection_name,
+            fields,
+            mode,
+        )
+    }
+
+    /// Validate every record in a list against this collection's schema.
+    /// Diagnostics are aggregated and each path is prefixed with its record id.
+    pub fn validate_records<'a, I>(
+        &self,
+        schema: &crate::SchemaStore,
+        records: I,
+        mode: ValidationMode,
+    ) -> ValidationReport
+    where
+        I: IntoIterator<Item = (&'a str, &'a HashMap<String, Value>)>,
+    {
+        validate_records(
+            schema,
+            &self.project_id(),
+            self.version(),
+            &self.collection_name,
+            records,
+            mode,
+        )
     }
 }
 
@@ -117,6 +172,17 @@ impl RecordScope {
 
     pub fn user(&self) -> &AuthUser {
         self.collection.user()
+    }
+
+    /// Validate this record's fields against its collection's schema.
+    /// Convenience that forwards to [`CollectionScope::validate`].
+    pub fn validate(
+        &self,
+        schema: &crate::SchemaStore,
+        fields: &HashMap<String, Value>,
+        mode: ValidationMode,
+    ) -> ValidationReport {
+        self.collection.validate(schema, fields, mode)
     }
 }
 
@@ -252,6 +318,7 @@ impl FromRequestParts<Arc<AppState>> for CollectionScope {
         Ok(CollectionScope {
             site,
             collection_key,
+            collection_name: name,
         })
     }
 }
