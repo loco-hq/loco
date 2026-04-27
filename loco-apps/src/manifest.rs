@@ -18,6 +18,24 @@ impl std::fmt::Display for ManifestError {
 
 impl std::error::Error for ManifestError {}
 
+/// Fully-qualified `(project_id, version)` pointer to an installed schema.
+/// `project_id` is `"user/project"`. Used as the namespace key in
+/// `SiteSchema` lookups.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct Dependency {
+    pub project_id: String,
+    pub version: String,
+}
+
+impl Dependency {
+    pub fn new(project_id: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            project_id: project_id.into(),
+            version: version.into(),
+        }
+    }
+}
+
 /// Parse a dependency string like `alice/billing@0.1.0` into (user, project, version).
 pub fn parse_dependency(dep: &str) -> Result<(&str, &str, &str), ManifestError> {
     let (namespace, version) = dep
@@ -30,7 +48,9 @@ pub fn parse_dependency(dep: &str) -> Result<(&str, &str, &str), ManifestError> 
 }
 
 fn find_manifest(schema: &SchemaStore, project: &str, version: &str) -> Option<Arc<Manifest>> {
-    schema.manifests().list_all()
+    schema
+        .manifests()
+        .list_all()
         .into_iter()
         .find(|(_, m)| m.project() == project && m.version() == version)
         .map(|(_, m)| m)
@@ -38,30 +58,31 @@ fn find_manifest(schema: &SchemaStore, project: &str, version: &str) -> Option<A
 
 /// Given a root dependency string like `ben/cars@0.0.1-dev`, walk the full
 /// transitive dependency graph via Manifest instances. Returns every
-/// `(user, project)` reachable from the root, root first.
-pub fn resolve_dependency_tree(schema: &SchemaStore, root: &str) -> Result<Vec<(String, String)>, ManifestError> {
+/// `(project_id, version)` reachable from the root, root first.
+pub fn resolve_dependency_tree(
+    schema: &SchemaStore,
+    root: &str,
+) -> Result<Vec<Dependency>, ManifestError> {
     let (root_user, root_project, root_version) = parse_dependency(root)?;
 
-    let mut visited: HashSet<(String, String)> = HashSet::new();
+    let mut visited: HashSet<Dependency> = HashSet::new();
     let mut result = Vec::new();
-    let mut queue: VecDeque<(String, String, String)> = VecDeque::new();
-    queue.push_back((
-        root_user.to_string(),
-        root_project.to_string(),
-        root_version.to_string(),
+    let mut queue: VecDeque<Dependency> = VecDeque::new();
+    queue.push_back(Dependency::new(
+        format!("{root_user}/{root_project}"),
+        root_version,
     ));
 
-    while let Some((user, project, version)) = queue.pop_front() {
-        if !visited.insert((user.clone(), project.clone())) {
+    while let Some(dep) = queue.pop_front() {
+        if !visited.insert(dep.clone()) {
             continue;
         }
-        result.push((user.clone(), project.clone()));
+        result.push(dep.clone());
 
-        let project_str = format!("{user}/{project}");
-        if let Some(manifest) = find_manifest(schema, &project_str, &version) {
-            for dep in manifest.dependencies() {
-                let (du, dp, dv) = parse_dependency(dep)?;
-                queue.push_back((du.to_string(), dp.to_string(), dv.to_string()));
+        if let Some(manifest) = find_manifest(schema, &dep.project_id, &dep.version) {
+            for child in manifest.dependencies() {
+                let (du, dp, dv) = parse_dependency(child)?;
+                queue.push_back(Dependency::new(format!("{du}/{dp}"), dv));
             }
         }
     }

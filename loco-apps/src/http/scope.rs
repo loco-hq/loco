@@ -19,6 +19,7 @@ use crate::http::authz::{require_draft, validate_collection};
 use crate::http::extract::SiteId;
 use crate::http::paths::collection_key;
 use crate::http::response::error_response;
+use crate::http::site_schema::SiteSchema;
 use crate::server::AppState;
 use crate::validation::{validate_record, validate_records, ValidationMode, ValidationReport};
 use crate::{Project, Site};
@@ -81,6 +82,11 @@ pub struct SiteScope {
     /// Always populated — synthesized as `AuthSession::public(...)` when no
     /// token is provided. So every scope has a user.
     pub auth: AuthSession,
+    /// Scoped schema view — bounded by this site's project+version plus its
+    /// installed dependencies. Use this instead of `state.schema` from
+    /// handlers under `/data` so they can't reach metadata for unrelated
+    /// projects or non-installed versions.
+    pub schema: SiteSchema,
 }
 
 /// A `SiteScope` plus a validated collection from the request path's `{name}`.
@@ -117,39 +123,23 @@ impl CollectionScope {
     /// gives handlers a one-line call site.
     pub fn validate(
         &self,
-        schema: &crate::SchemaStore,
         fields: &HashMap<String, Value>,
         mode: ValidationMode,
     ) -> ValidationReport {
-        validate_record(
-            schema,
-            &self.project_id(),
-            self.version(),
-            &self.collection_name,
-            fields,
-            mode,
-        )
+        validate_record(&self.site.schema, &self.collection_name, fields, mode)
     }
 
     /// Validate every record in a list against this collection's schema.
     /// Diagnostics are aggregated and each path is prefixed with its record id.
     pub fn validate_records<'a, I>(
         &self,
-        schema: &crate::SchemaStore,
         records: I,
         mode: ValidationMode,
     ) -> ValidationReport
     where
         I: IntoIterator<Item = (&'a str, &'a HashMap<String, Value>)>,
     {
-        validate_records(
-            schema,
-            &self.project_id(),
-            self.version(),
-            &self.collection_name,
-            records,
-            mode,
-        )
+        validate_records(&self.site.schema, &self.collection_name, records, mode)
     }
 }
 
@@ -178,11 +168,10 @@ impl RecordScope {
     /// Convenience that forwards to [`CollectionScope::validate`].
     pub fn validate(
         &self,
-        schema: &crate::SchemaStore,
         fields: &HashMap<String, Value>,
         mode: ValidationMode,
     ) -> ValidationReport {
-        self.collection.validate(schema, fields, mode)
+        self.collection.validate(fields, mode)
     }
 }
 
@@ -292,6 +281,11 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
             .map(|AuthenticatedUser(s)| s)
             .unwrap_or_else(|_| AuthSession::public(&qualified));
 
+        let version = site.version().to_string();
+        let schema = SiteSchema::new(state.schema.clone(), &project_id, &version).map_err(|e| {
+            error_response(StatusCode::BAD_REQUEST, &e.to_string())
+        })?;
+
         Ok(SiteScope {
             project: ProjectScope {
                 user,
@@ -300,6 +294,7 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
             },
             site,
             auth,
+            schema,
         })
     }
 }

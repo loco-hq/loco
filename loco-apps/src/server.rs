@@ -12,7 +12,7 @@ use crate::SchemaStore;
 pub struct AppState {
     pub data_adapter: Box<dyn DataAdapter>,
     pub auth_adapter: Box<dyn AuthAdapter>,
-    pub schema: SchemaStore,
+    pub schema: Arc<SchemaStore>,
 }
 
 fn build_data_adapter() -> Box<dyn DataAdapter> {
@@ -53,11 +53,10 @@ pub fn build_app() -> Router {
 pub fn build_app_with_root(root: &std::path::Path) -> Router {
     // Load schema from disk into a fresh store
     let instances_dir = root.join("schemas/instances");
-    let schema = SchemaStore::load(&instances_dir).expect("failed to load schema");
+    let schema = Arc::new(SchemaStore::load(&instances_dir).expect("failed to load schema"));
 
     let data_adapter = build_data_adapter();
     let auth_adapter = build_auth_adapter(root);
-    println!("Sites are managed in schemas/instances/");
 
     let state = Arc::new(AppState {
         data_adapter,

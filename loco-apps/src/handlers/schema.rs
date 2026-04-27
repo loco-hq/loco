@@ -245,24 +245,22 @@ pub async fn introspect(
     }
 
     let namespace_str = format!("{}@{}", scope.project.project_id(), version_scope.version);
-    let ns_pairs = match crate::manifest::resolve_dependency_tree(&state.schema, &namespace_str) {
-        Ok(pairs) => pairs,
+    let deps = match crate::manifest::resolve_dependency_tree(&state.schema, &namespace_str) {
+        Ok(deps) => deps,
         Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
     };
 
     let mut result: Vec<NamespaceCollections> = Vec::new();
-    for (user, project) in &ns_pairs {
-        let collections = state
-            .schema
-            .collections()
-            .list(&format!("{user}/{project}/"));
-        let all_fields = state.schema.fields().list(&format!("{user}/{project}/"));
+    for dep in &deps {
+        let collection_prefix = format!("{}/versions/{}/collections/", dep.project_id, dep.version);
+        let field_prefix_base = format!("{}/versions/{}/fields/", dep.project_id, dep.version);
+        let collections = state.schema.collections().list(&collection_prefix);
+        let all_fields = state.schema.fields().list(&field_prefix_base);
 
         let mut coll_with_fields: Vec<CollectionWithFields> = Vec::new();
-        for (col_ns, col) in &collections {
+        for (_, col) in &collections {
             let col_name = col.name();
-            let version_prefix = col_ns.split("/collections/").next().unwrap_or("");
-            let field_prefix = format!("{version_prefix}/fields/{col_name}/");
+            let field_prefix = format!("{field_prefix_base}{col_name}/");
             let matching_fields: Vec<_> = all_fields
                 .iter()
                 .filter(|(ns, _)| ns.starts_with(&field_prefix))
@@ -277,7 +275,7 @@ pub async fn introspect(
         }
 
         result.push(NamespaceCollections {
-            namespace: format!("{user}/{project}"),
+            namespace: dep.project_id.clone(),
             collections: coll_with_fields,
         });
     }

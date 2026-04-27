@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use loco_lake::Value;
 
-use crate::SchemaStore;
+use crate::http::site_schema::SiteSchema;
 
 /// Stable string identifiers for the `kind` field on diagnostics. Clients can
 /// switch on these. Using string constants (not an enum) keeps the set open
@@ -107,24 +107,22 @@ impl ValidationReport {
     }
 }
 
-/// Validate a record's fields against the schema for `(project, version, collection)`.
+/// Validate a record's fields against the schema for a collection.
 ///
-/// Looks up field definitions via `schema.fields().list(...)`; the record is
-/// schemaless until this function correlates it with the schema in memory.
+/// `schema.fields(collection)` returns the union of fields targeting this
+/// collection across every installed dependency — extensions declared by
+/// other deps are picked up automatically.
 pub fn validate_record(
-    schema: &SchemaStore,
-    project_id: &str,
-    version: &str,
+    schema: &SiteSchema,
     collection: &str,
     fields: &HashMap<String, Value>,
     mode: ValidationMode,
 ) -> ValidationReport {
-    let prefix = format!("{project_id}/versions/{version}/fields/{collection}/");
-    let field_defs = schema.fields().list(&prefix);
+    let field_defs = schema.fields(collection);
     // Map of field name -> declared type string ("string", "integer", ...).
     let by_name: HashMap<&str, &str> = field_defs
         .iter()
-        .map(|(_, f)| (f.name(), f.r#type()))
+        .map(|f| (f.name(), f.r#type()))
         .collect();
 
     let make = |kind: &str, path: Option<String>, message: String| match mode {
@@ -132,6 +130,7 @@ pub fn validate_record(
         ValidationMode::Read => Diagnostic::warning(kind, path, message),
     };
 
+    let version = schema.version();
     let mut diagnostics = Vec::new();
 
     for (name, value) in fields {
@@ -196,9 +195,7 @@ fn value_type_name(value: &Value) -> &'static str {
 /// Convenience: validate every record in a list, prefixing each diagnostic's
 /// path with the record id so call sites can flatten without losing context.
 pub fn validate_records<'a, I>(
-    schema: &SchemaStore,
-    project_id: &str,
-    version: &str,
+    schema: &SiteSchema,
     collection: &str,
     records: I,
     mode: ValidationMode,
@@ -208,7 +205,7 @@ where
 {
     let mut combined = ValidationReport::default();
     for (id, fields) in records {
-        let report = validate_record(schema, project_id, version, collection, fields, mode);
+        let report = validate_record(schema, collection, fields, mode);
         if !report.is_empty() {
             combined.extend(report.prefix_paths(id));
         }
@@ -221,35 +218,37 @@ mod tests {
     use super::*;
     use crate::SchemaStore;
     use std::path::Path;
+    use std::sync::Arc;
 
-    fn load_schema() -> SchemaStore {
+    fn load_store() -> Arc<SchemaStore> {
         // Use the repo's checked-in instances so we get a real account
         // collection with fields to validate against.
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/instances");
-        SchemaStore::load(&dir).expect("load schema fixtures")
+        Arc::new(SchemaStore::load(&dir).expect("load schema fixtures"))
     }
 
-    /// The default fixtures define `ben/crm` at version `0.0.1-dev` with an
-    /// `account` collection. This helper finds a real (project, version,
-    /// collection) triple with at least one declared field, so tests are not
-    /// brittle to specific fixture names.
-    fn first_collection_with_fields(
-        schema: &SchemaStore,
-    ) -> (String, String, String, Vec<(String, String)>) {
-        for (key, _) in schema.collections().list_all() {
+    /// Find a real (project, version, collection) triple with at least one
+    /// declared field, build a `SiteSchema` for it, and return the collection
+    /// name plus the (name, type) pairs of its declared fields. Tests stay
+    /// robust across fixture changes this way.
+    fn first_collection_with_fields() -> (SiteSchema, String, Vec<(String, String)>) {
+        let store = load_store();
+        for (key, _) in store.collections().list_all() {
             let vars = crate::Collection::from_path(&key).unwrap();
             let project = vars["project"].clone();
             let version = vars["version"].clone();
             let name = vars["name"].clone();
             let prefix = format!("{project}/versions/{version}/fields/{name}/");
-            let fields: Vec<_> = schema
+            let fields: Vec<_> = store
                 .fields()
                 .list(&prefix)
                 .into_iter()
                 .map(|(_, f)| (f.name().to_string(), f.r#type().to_string()))
                 .collect();
             if !fields.is_empty() {
-                return (project, version, name, fields);
+                let schema = SiteSchema::new(store.clone(), &project, &version)
+                    .expect("build SiteSchema for fixture");
+                return (schema, name, fields);
             }
         }
         panic!("no collection with declared fields found in fixtures");
@@ -257,8 +256,7 @@ mod tests {
 
     #[test]
     fn create_mode_emits_errors_for_unknown_fields() {
-        let schema = load_schema();
-        let (project, version, collection, _fields) = first_collection_with_fields(&schema);
+        let (schema, collection, _fields) = first_collection_with_fields();
 
         let mut data = HashMap::new();
         data.insert(
@@ -266,14 +264,7 @@ mod tests {
             Value::String("hi".into()),
         );
 
-        let report = validate_record(
-            &schema,
-            &project,
-            &version,
-            &collection,
-            &data,
-            ValidationMode::Create,
-        );
+        let report = validate_record(&schema, &collection, &data, ValidationMode::Create);
         assert!(report.has_errors());
         let d = report
             .diagnostics
@@ -286,20 +277,12 @@ mod tests {
 
     #[test]
     fn read_mode_downgrades_to_warning() {
-        let schema = load_schema();
-        let (project, version, collection, _fields) = first_collection_with_fields(&schema);
+        let (schema, collection, _fields) = first_collection_with_fields();
 
         let mut data = HashMap::new();
         data.insert("not_a_real_field_zzz".to_string(), Value::String("hi".into()));
 
-        let report = validate_record(
-            &schema,
-            &project,
-            &version,
-            &collection,
-            &data,
-            ValidationMode::Read,
-        );
+        let report = validate_record(&schema, &collection, &data, ValidationMode::Read);
         assert!(!report.has_errors());
         assert!(report
             .diagnostics
@@ -309,8 +292,7 @@ mod tests {
 
     #[test]
     fn declared_field_with_matching_type_passes() {
-        let schema = load_schema();
-        let (project, version, collection, fields) = first_collection_with_fields(&schema);
+        let (schema, collection, fields) = first_collection_with_fields();
 
         let mut data = HashMap::new();
         for (fname, ftype) in &fields {
@@ -324,21 +306,13 @@ mod tests {
             data.insert(fname.clone(), v);
         }
 
-        let report = validate_record(
-            &schema,
-            &project,
-            &version,
-            &collection,
-            &data,
-            ValidationMode::Create,
-        );
+        let report = validate_record(&schema, &collection, &data, ValidationMode::Create);
         assert!(report.is_empty(), "unexpected diagnostics: {:?}", report);
     }
 
     #[test]
     fn type_mismatch_is_caught() {
-        let schema = load_schema();
-        let (project, version, collection, fields) = first_collection_with_fields(&schema);
+        let (schema, collection, fields) = first_collection_with_fields();
 
         // Pick a known string field and send an integer.
         let Some((string_field, _)) = fields.iter().find(|(_, t)| t == "string") else {
@@ -349,14 +323,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(string_field.clone(), Value::Integer(42));
 
-        let report = validate_record(
-            &schema,
-            &project,
-            &version,
-            &collection,
-            &data,
-            ValidationMode::Create,
-        );
+        let report = validate_record(&schema, &collection, &data, ValidationMode::Create);
         assert!(report
             .diagnostics
             .iter()
@@ -365,22 +332,14 @@ mod tests {
 
     #[test]
     fn null_passes_for_any_type() {
-        let schema = load_schema();
-        let (project, version, collection, fields) = first_collection_with_fields(&schema);
+        let (schema, collection, fields) = first_collection_with_fields();
 
         let mut data = HashMap::new();
         for (fname, _) in &fields {
             data.insert(fname.clone(), Value::Null);
         }
 
-        let report = validate_record(
-            &schema,
-            &project,
-            &version,
-            &collection,
-            &data,
-            ValidationMode::Create,
-        );
+        let report = validate_record(&schema, &collection, &data, ValidationMode::Create);
         assert!(report.is_empty());
     }
 
@@ -407,16 +366,8 @@ mod tests {
 
     #[test]
     fn empty_fields_produces_empty_report() {
-        let schema = load_schema();
-        let (project, version, collection, _) = first_collection_with_fields(&schema);
-        let report = validate_record(
-            &schema,
-            &project,
-            &version,
-            &collection,
-            &HashMap::new(),
-            ValidationMode::Create,
-        );
+        let (schema, collection, _) = first_collection_with_fields();
+        let report = validate_record(&schema, &collection, &HashMap::new(), ValidationMode::Create);
         assert!(report.is_empty());
         assert!(!report.has_errors());
     }
@@ -425,7 +376,7 @@ mod tests {
     fn unknown_collection_marks_every_field_unknown() {
         // No such collection has any field defs — so every field in the
         // payload should come back as `unknown_field`.
-        let schema = load_schema();
+        let (schema, _, _) = first_collection_with_fields();
         let mut data = HashMap::new();
         data.insert("a".to_string(), Value::String("x".into()));
         data.insert("b".to_string(), Value::Integer(1));
@@ -433,8 +384,6 @@ mod tests {
 
         let report = validate_record(
             &schema,
-            "ben/crm",
-            "0.0.1-dev",
             "no_such_collection_zzz",
             &data,
             ValidationMode::Create,
@@ -448,18 +397,10 @@ mod tests {
 
     #[test]
     fn update_mode_emits_errors_not_warnings() {
-        let schema = load_schema();
-        let (project, version, collection, _) = first_collection_with_fields(&schema);
+        let (schema, collection, _) = first_collection_with_fields();
         let mut data = HashMap::new();
         data.insert("not_real".to_string(), Value::String("x".into()));
-        let report = validate_record(
-            &schema,
-            &project,
-            &version,
-            &collection,
-            &data,
-            ValidationMode::Update,
-        );
+        let report = validate_record(&schema, &collection, &data, ValidationMode::Update);
         assert!(report.has_errors());
         assert!(report
             .diagnostics
@@ -469,8 +410,7 @@ mod tests {
 
     #[test]
     fn multiple_issues_in_single_record_all_reported() {
-        let schema = load_schema();
-        let (project, version, collection, fields) = first_collection_with_fields(&schema);
+        let (schema, collection, fields) = first_collection_with_fields();
         let Some((string_field, _)) = fields.iter().find(|(_, t)| t == "string") else {
             return;
         };
@@ -482,14 +422,7 @@ mod tests {
         data.insert("ghost1".to_string(), Value::String("a".into()));
         data.insert("ghost2".to_string(), Value::Boolean(true));
 
-        let report = validate_record(
-            &schema,
-            &project,
-            &version,
-            &collection,
-            &data,
-            ValidationMode::Create,
-        );
+        let report = validate_record(&schema, &collection, &data, ValidationMode::Create);
         assert_eq!(
             report
                 .diagnostics
@@ -510,8 +443,7 @@ mod tests {
 
     #[test]
     fn validate_records_aggregates_and_prefixes_paths() {
-        let schema = load_schema();
-        let (project, version, collection, _) = first_collection_with_fields(&schema);
+        let (schema, collection, _) = first_collection_with_fields();
 
         let mut a = HashMap::new();
         a.insert("ghost_a".to_string(), Value::String("x".into()));
@@ -521,8 +453,6 @@ mod tests {
 
         let report = validate_records(
             &schema,
-            &project,
-            &version,
             &collection,
             records.iter().map(|(id, f)| (*id, *f)),
             ValidationMode::Read,
@@ -544,8 +474,7 @@ mod tests {
 
     #[test]
     fn validate_records_skips_clean_records() {
-        let schema = load_schema();
-        let (project, version, collection, fields) = first_collection_with_fields(&schema);
+        let (schema, collection, fields) = first_collection_with_fields();
         let mut clean = HashMap::new();
         for (fname, ftype) in &fields {
             let v = match ftype.as_str() {
@@ -560,8 +489,6 @@ mod tests {
         let records = [("rec-clean", &clean)];
         let report = validate_records(
             &schema,
-            &project,
-            &version,
             &collection,
             records.iter().map(|(id, f)| (*id, *f)),
             ValidationMode::Read,

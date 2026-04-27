@@ -30,7 +30,7 @@ pub async fn add(
     State(state): State<Arc<AppState>>,
     Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
-    let report = scope.validate(&state.schema, &fields, ValidationMode::Create);
+    let report = scope.validate(&fields, ValidationMode::Create);
     if report.has_errors() {
         return validation_error_response(report.diagnostics);
     }
@@ -55,7 +55,6 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
     {
         Ok(records) => {
             let report = scope.validate_records(
-                &state.schema,
                 records.iter().map(|r| (r.id.as_str(), &r.fields)),
                 ValidationMode::Read,
             );
@@ -71,7 +70,7 @@ pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Resp
         .get(&scope.dataset_id(), scope.collection_key(), &scope.id)
     {
         Ok(Some(record)) => {
-            let report = scope.validate(&state.schema, &record.fields, ValidationMode::Read);
+            let report = scope.validate(&record.fields, ValidationMode::Read);
             ApiResponse::success_with_diagnostics(record, report.diagnostics).into_response()
         }
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
@@ -94,7 +93,7 @@ pub async fn update(
     State(state): State<Arc<AppState>>,
     Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
-    let report = scope.validate(&state.schema, &fields, ValidationMode::Update);
+    let report = scope.validate(&fields, ValidationMode::Update);
     if report.has_errors() {
         return validation_error_response(report.diagnostics);
     }

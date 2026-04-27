@@ -3,3 +3,4 @@ pub mod extract;
 pub mod paths;
 pub mod response;
 pub mod scope;
+pub mod site_schema;
