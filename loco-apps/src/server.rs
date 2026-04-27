@@ -55,8 +55,6 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
     let instances_dir = root.join("schemas/instances");
     let schema = SchemaStore::load(&instances_dir).expect("failed to load schema");
 
-    crate::manifest::validate_manifests(&schema).expect("manifest validation failed");
-
     let data_adapter = build_data_adapter();
     let auth_adapter = build_auth_adapter(root);
     println!("Sites are managed in schemas/instances/");

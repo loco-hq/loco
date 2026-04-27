@@ -6,16 +6,12 @@ use crate::{Manifest, SchemaStore};
 #[derive(Debug)]
 pub enum ManifestError {
     InvalidDependency(String),
-    UnsatisfiedDependency { from: String, missing: String },
 }
 
 impl std::fmt::Display for ManifestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidDependency(s) => write!(f, "invalid dependency: {s}"),
-            Self::UnsatisfiedDependency { from, missing } => {
-                write!(f, "{from} requires {missing}, but it was not found")
-            }
         }
     }
 }
@@ -38,15 +34,6 @@ fn find_manifest(schema: &SchemaStore, project: &str, version: &str) -> Option<A
         .into_iter()
         .find(|(_, m)| m.project() == project && m.version() == version)
         .map(|(_, m)| m)
-}
-
-fn manifest_dep_key(manifest: &Manifest) -> Option<String> {
-    let project = manifest.project();
-    let version = manifest.version();
-    if project.is_empty() || version.is_empty() {
-        return None;
-    }
-    Some(format!("{project}@{version}"))
 }
 
 /// Given a root dependency string like `ben/cars@0.0.1-dev`, walk the full
@@ -82,32 +69,6 @@ pub fn resolve_dependency_tree(schema: &SchemaStore, root: &str) -> Result<Vec<(
     Ok(result)
 }
 
-/// Walk every Manifest in the registry and verify that each declared
-/// dependency is itself present as a Manifest. Intended for startup.
-pub fn validate_manifests(schema: &SchemaStore) -> Result<(), ManifestError> {
-    let all = schema.manifests().list_all();
-    let available: HashSet<String> = all
-        .iter()
-        .filter_map(|(_, m)| manifest_dep_key(m))
-        .collect();
-
-    for (_, manifest) in &all {
-        let Some(from) = manifest_dep_key(manifest) else {
-            continue;
-        };
-        for dep in manifest.dependencies() {
-            parse_dependency(dep)?;
-            if !available.contains(dep.as_str()) {
-                return Err(ManifestError::UnsatisfiedDependency {
-                    from,
-                    missing: dep.to_string(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,15 +83,5 @@ mod tests {
     fn test_parse_dependency_errors() {
         assert!(parse_dependency("no-at-sign").is_err());
         assert!(parse_dependency("noSlash@1").is_err());
-    }
-
-    #[test]
-    fn test_manifest_dep_key() {
-        let manifest = Manifest::new(
-            "ben/crm".to_string(),
-            "0.0.1-dev".to_string(),
-            vec![],
-        );
-        assert_eq!(manifest_dep_key(&manifest), Some("ben/crm@0.0.1-dev".to_string()));
     }
 }
