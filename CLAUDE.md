@@ -98,7 +98,6 @@ All frontend apps use the same stack:
 ### Frontend locations
 
 - `loco-studio/` — Schema management UI (port 5174)
-- `loco-frontend-examples/cars/` — Example app using schema introspection (default port)
 
 ## Rust Edition
 
