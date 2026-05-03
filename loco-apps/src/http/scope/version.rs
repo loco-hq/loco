@@ -4,6 +4,7 @@ use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::Response;
+use serde::Deserialize;
 
 use crate::auth::AuthenticatedUser;
 use crate::http::authz::require_draft;
@@ -13,6 +14,13 @@ use crate::Project;
 
 use super::helpers::read_path_params;
 use super::project::ProjectScope;
+
+#[derive(Deserialize)]
+struct VersionPathParams {
+    user: String,
+    project: String,
+    version: String,
+}
 
 /// Fully-qualified `{user}/{project}/{site}` ids of sites allowed to edit
 /// versioned metadata via /schema routes.
@@ -64,10 +72,11 @@ impl FromRequestParts<Arc<AppState>> for VersionScope {
 
         require_metadata_editor(&auth.user.site_id)?;
 
-        let params = read_path_params(parts, state).await?;
-        let user = params.get("user").cloned().unwrap_or_default();
-        let project = params.get("project").cloned().unwrap_or_default();
-        let version = params.get("version").cloned().unwrap_or_default();
+        let VersionPathParams {
+            user,
+            project,
+            version,
+        } = read_path_params(parts, state).await?;
 
         if auth.user.username != user {
             return Err(error_response(

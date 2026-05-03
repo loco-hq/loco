@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::response::Response;
+use serde::Deserialize;
 
 use crate::auth::AuthUser;
 use crate::server::AppState;
@@ -13,6 +14,11 @@ use loco_lake::Value;
 
 use super::helpers::read_path_params;
 use super::site::SiteScope;
+
+#[derive(Deserialize)]
+struct CollectionPathParams {
+    name: String,
+}
 
 /// A `SiteScope` plus a validated collection from the request path's `{name}`.
 /// Use this for data routes scoped to a single collection — it pre-resolves
@@ -76,8 +82,7 @@ impl FromRequestParts<Arc<AppState>> for CollectionScope {
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         let site = SiteScope::from_request_parts(parts, state).await?;
-        let params = read_path_params(parts, state).await?;
-        let name = params.get("name").cloned().unwrap_or_default();
+        let CollectionPathParams { name } = read_path_params(parts, state).await?;
         let collection_key = site.require_collection(&name)?;
         Ok(CollectionScope {
             site,

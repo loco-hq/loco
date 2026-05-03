@@ -2,12 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
-use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::Response;
+use serde::Deserialize;
 
 use crate::auth::AuthUser;
-use crate::http::response::error_response;
 use crate::server::AppState;
 use crate::validation::{ValidationMode, ValidationReport};
 
@@ -15,6 +14,11 @@ use loco_lake::Value;
 
 use super::collection::CollectionScope;
 use super::helpers::read_path_params;
+
+#[derive(Deserialize)]
+struct RecordPathParams {
+    id: String,
+}
 
 /// A `CollectionScope` plus the `{id}` of a specific record. Use this for
 /// record-level data routes (get/update/delete) so handlers don't need to
@@ -56,10 +60,7 @@ impl FromRequestParts<Arc<AppState>> for RecordScope {
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         let collection = CollectionScope::from_request_parts(parts, state).await?;
-        let params = read_path_params(parts, state).await?;
-        let id = params.get("id").cloned().ok_or_else(|| {
-            error_response(StatusCode::BAD_REQUEST, "missing record id in path")
-        })?;
+        let RecordPathParams { id } = read_path_params(parts, state).await?;
         Ok(RecordScope { collection, id })
     }
 }

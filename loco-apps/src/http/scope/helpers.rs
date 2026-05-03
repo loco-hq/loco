@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{FromRequestParts, Path};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::Response;
+use serde::de::DeserializeOwned;
 
 use crate::http::response::error_response;
 use crate::server::AppState;
@@ -43,11 +43,14 @@ pub(super) fn read_site_id(parts: &Parts) -> Result<String, Response> {
     })
 }
 
-pub(super) async fn read_path_params(
+pub(super) async fn read_path_params<T>(
     parts: &mut Parts,
     state: &Arc<AppState>,
-) -> Result<HashMap<String, String>, Response> {
-    let Path(params): Path<HashMap<String, String>> = Path::from_request_parts(parts, state)
+) -> Result<T, Response>
+where
+    T: DeserializeOwned + Send + 'static,
+{
+    let Path(params): Path<T> = Path::from_request_parts(parts, state)
         .await
         .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e.to_string()))?;
     Ok(params)
