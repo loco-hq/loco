@@ -148,7 +148,6 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUser {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // 1. Authorization: Bearer {token} header
         let token = parts
             .headers
             .get("authorization")
@@ -156,21 +155,10 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUser {
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(|v| v.to_string());
 
-        // 2. ?session= query param (for browser dev)
-        let token = token.or_else(|| {
-            parts.uri.query().and_then(|q| {
-                q.split('&')
-                    .filter_map(|pair| pair.split_once('='))
-                    .find(|(k, _)| *k == "session")
-                    .map(|(_, v)| v.to_string())
-                    .filter(|v| !v.is_empty())
-            })
-        });
-
         let Some(token) = token else {
             return Err(auth_error_response(
                 StatusCode::UNAUTHORIZED,
-                "missing auth: use Authorization: Bearer <token> header or ?session= query param",
+                "missing auth: use Authorization: Bearer <token> header",
             ));
         };
 
