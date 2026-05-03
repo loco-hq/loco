@@ -15,7 +15,6 @@ use crate::Site;
 
 use super::helpers::{read_project_id, read_site_id};
 use super::project::ProjectScope;
-use super::version::VersionScope;
 
 pub struct SiteScope {
     pub project: ProjectScope,
@@ -44,17 +43,6 @@ impl SiteScope {
         let ds = self.site.dataset();
         let ds = if ds.is_empty() { self.site.name() } else { ds };
         format!("{}/{}", self.project.project_id(), ds)
-    }
-
-    pub fn version_scope(&self) -> VersionScope {
-        VersionScope {
-            project: ProjectScope {
-                user: self.project.user.clone(),
-                project: self.project.project.clone(),
-                state: self.project.state.clone(),
-            },
-            version: self.site.version().to_string(),
-        }
     }
 
     /// Lake key for a collection inside this site's project.

@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::AuthenticatedUser;
 use crate::http::authz::authorize_user;
-use crate::http::response::{ApiResponse, error_response, schema_error_to_response};
+use crate::http::response::{
+    error_response, version_schema_error_to_response, ApiResponse,
+};
 use crate::http::scope::{require_metadata_editor, SiteScope, VersionScope};
 use crate::server::AppState;
 use crate::{Collection, CollectionUpdate, Field, FieldUpdate};
@@ -57,42 +59,26 @@ pub struct CreateFieldRequest {
 
 pub async fn create_collection(
     scope: VersionScope,
-    State(state): State<Arc<AppState>>,
     Json(body): Json<CreateCollectionRequest>,
 ) -> Response {
-    if let Err(resp) = scope.require_draft() {
-        return resp;
-    }
-
-    let value = Collection::new(
-        scope.project_id(),
-        scope.version.clone(),
-        body.name,
-        body.label,
-        body.label_plural,
-    );
-
-    match state.schema.collections().create(value) {
-        Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
-        Err(e) => schema_error_to_response(e),
+    match scope
+        .schema
+        .create_collection(body.name, body.label, body.label_plural)
+    {
+        Ok(c) => (StatusCode::CREATED, ApiResponse::success(c)).into_response(),
+        Err(e) => version_schema_error_to_response(e),
     }
 }
 
-pub async fn list_collections(scope: VersionScope, State(state): State<Arc<AppState>>) -> Response {
-    let entries = state
-        .schema
-        .collections()
-        .list(&format!("{}/", scope.project_id()));
-    ApiResponse::success(entries).into_response()
+pub async fn list_collections(scope: VersionScope) -> Response {
+    ApiResponse::success(scope.schema.collections()).into_response()
 }
 
 pub async fn get_collection(
     scope: VersionScope,
-    State(state): State<Arc<AppState>>,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
 ) -> Response {
-    let key = Collection::to_path(&scope.project_id(), &scope.version, &name);
-    match state.schema.collections().get(&key) {
+    match scope.schema.collection(&name) {
         Some(c) => ApiResponse::success(c).into_response(),
         None => error_response(StatusCode::NOT_FOUND, &format!("collection not found: {name}")),
     }
@@ -100,115 +86,61 @@ pub async fn get_collection(
 
 pub async fn update_collection(
     scope: VersionScope,
-    State(state): State<Arc<AppState>>,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
     Json(patch): Json<CollectionUpdate>,
 ) -> Response {
-    if let Err(resp) = scope.require_draft() {
-        return resp;
-    }
-
-    let key = Collection::to_path(&scope.project_id(), &scope.version, &name);
-    match state.schema.collections().update(&key, patch) {
-        Ok(result) => ApiResponse::success(result).into_response(),
-        Err(e) => schema_error_to_response(e),
+    match scope.schema.update_collection(&name, patch) {
+        Ok(c) => ApiResponse::success(c).into_response(),
+        Err(e) => version_schema_error_to_response(e),
     }
 }
 
 pub async fn delete_collection(
     scope: VersionScope,
-    State(state): State<Arc<AppState>>,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
 ) -> Response {
-    if let Err(resp) = scope.require_draft() {
-        return resp;
-    }
-
-    // First delete all fields belonging to this collection
-    let field_prefix = format!(
-        "{}/versions/{}/fields/{}/",
-        scope.project_id(),
-        scope.version,
-        name
-    );
-    let _ = state.schema.fields().delete_by_prefix(&field_prefix);
-
-    let key = Collection::to_path(&scope.project_id(), &scope.version, &name);
-    match state.schema.collections().delete(&key) {
+    match scope.schema.delete_collection(&name) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
-        Err(e) => schema_error_to_response(e),
+        Err(e) => version_schema_error_to_response(e),
     }
 }
 
 pub async fn create_field(
     scope: VersionScope,
-    State(state): State<Arc<AppState>>,
     Path((_, _, _, collection)): Path<(String, String, String, String)>,
     Json(body): Json<CreateFieldRequest>,
 ) -> Response {
-    if let Err(resp) = scope.require_draft() {
-        return resp;
-    }
-
-    let value = Field::new(
-        scope.project_id(),
-        scope.version.clone(),
-        collection,
-        body.name,
-        body.r#type,
-    );
-
-    match state.schema.fields().create(value) {
-        Ok(result) => (StatusCode::CREATED, ApiResponse::success(result)).into_response(),
-        Err(e) => schema_error_to_response(e),
+    match scope.schema.create_field(collection, body.name, body.r#type) {
+        Ok(f) => (StatusCode::CREATED, ApiResponse::success(f)).into_response(),
+        Err(e) => version_schema_error_to_response(e),
     }
 }
 
 pub async fn list_fields(
     scope: VersionScope,
-    State(state): State<Arc<AppState>>,
     Path((_, _, _, collection)): Path<(String, String, String, String)>,
 ) -> Response {
-    let prefix = format!(
-        "{}/versions/{}/fields/{}/",
-        scope.project_id(),
-        scope.version,
-        collection
-    );
-    let entries = state.schema.fields().list(&prefix);
-    ApiResponse::success(entries).into_response()
+    ApiResponse::success(scope.schema.fields(&collection)).into_response()
 }
 
 pub async fn update_field(
     scope: VersionScope,
-    State(state): State<Arc<AppState>>,
     Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
     Json(patch): Json<FieldUpdate>,
 ) -> Response {
-    if let Err(resp) = scope.require_draft() {
-        return resp;
-    }
-
-    let key = Field::to_path(&scope.project_id(), &scope.version, &collection, &name);
-    match state.schema.fields().update(&key, patch) {
-        Ok(result) => ApiResponse::success(result).into_response(),
-        Err(e) => schema_error_to_response(e),
+    match scope.schema.update_field(&collection, &name, patch) {
+        Ok(f) => ApiResponse::success(f).into_response(),
+        Err(e) => version_schema_error_to_response(e),
     }
 }
 
 pub async fn delete_field(
     scope: VersionScope,
-    State(state): State<Arc<AppState>>,
     Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
 ) -> Response {
-    if let Err(resp) = scope.require_draft() {
-        return resp;
-    }
-
-    let key = Field::to_path(&scope.project_id(), &scope.version, &collection, &name);
-    match state.schema.fields().delete(&key) {
+    match scope.schema.delete_field(&collection, &name) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
-        Err(e) => schema_error_to_response(e),
+        Err(e) => version_schema_error_to_response(e),
     }
 }
 
@@ -239,12 +171,12 @@ pub async fn introspect(
         return resp;
     }
 
-    let version_scope = scope.version_scope();
-    if version_scope.version.is_empty() {
+    let site_version = scope.site.version();
+    if site_version.is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "site has no version configured");
     }
 
-    let namespace_str = format!("{}@{}", scope.project.project_id(), version_scope.version);
+    let namespace_str = format!("{}@{}", scope.project.project_id(), site_version);
     let deps = match crate::manifest::resolve_dependency_tree(&state.schema, &namespace_str) {
         Ok(deps) => deps,
         Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),

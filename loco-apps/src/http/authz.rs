@@ -60,14 +60,3 @@ pub fn validate_collection(
 pub fn is_draft_version(version: &str) -> bool {
     version.contains('-')
 }
-
-pub fn require_draft(version: &str) -> Result<(), Response> {
-    if is_draft_version(version) {
-        Ok(())
-    } else {
-        Err(error_response(
-            StatusCode::BAD_REQUEST,
-            &format!("version {version} is published and read-only"),
-        ))
-    }
-}

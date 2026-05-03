@@ -7,8 +7,8 @@ use axum::response::Response;
 use serde::Deserialize;
 
 use crate::auth::AuthenticatedUser;
-use crate::http::authz::require_draft;
 use crate::http::response::error_response;
+use crate::http::version_schema::VersionSchema;
 use crate::server::AppState;
 use crate::Project;
 
@@ -44,6 +44,10 @@ pub fn require_metadata_editor(qualified_site_id: &str) -> Result<(), Response> 
 pub struct VersionScope {
     pub project: ProjectScope,
     pub version: String,
+    /// Scoped schema view: read across the manifest closure, write only to
+    /// `(project_id, version)`. Use this instead of `state.schema` from
+    /// /schema handlers.
+    pub schema: VersionSchema,
 }
 
 impl VersionScope {
@@ -53,10 +57,6 @@ impl VersionScope {
 
     pub fn project_id(&self) -> String {
         self.project.project_id()
-    }
-
-    pub fn require_draft(&self) -> Result<(), Response> {
-        require_draft(&self.version)
     }
 }
 
@@ -93,6 +93,9 @@ impl FromRequestParts<Arc<AppState>> for VersionScope {
             ));
         }
 
+        let schema = VersionSchema::new(state.schema.clone(), &project_id, &version)
+            .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e.to_string()))?;
+
         Ok(VersionScope {
             project: ProjectScope {
                 user,
@@ -100,6 +103,7 @@ impl FromRequestParts<Arc<AppState>> for VersionScope {
                 state: state.clone(),
             },
             version,
+            schema,
         })
     }
 }

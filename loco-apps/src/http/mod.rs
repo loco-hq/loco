@@ -4,3 +4,4 @@ pub mod paths;
 pub mod response;
 pub mod scope;
 pub mod site_schema;
+pub mod version_schema;

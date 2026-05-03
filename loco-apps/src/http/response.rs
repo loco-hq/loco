@@ -92,3 +92,15 @@ pub fn schema_error_to_response(err: loco_schema_runtime::Error) -> Response {
     }
 }
 
+pub fn version_schema_error_to_response(
+    err: crate::http::version_schema::VersionSchemaError,
+) -> Response {
+    use crate::http::version_schema::VersionSchemaError;
+    match err {
+        e @ VersionSchemaError::NotDraft(_) => {
+            error_response(StatusCode::BAD_REQUEST, &e.to_string())
+        }
+        VersionSchemaError::Schema(e) => schema_error_to_response(e),
+    }
+}
+
