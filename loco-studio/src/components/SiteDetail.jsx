@@ -29,7 +29,8 @@ export default function SiteDetail() {
 
       if (s.name) {
         try {
-          setSchemaNamespaces(await getSiteCollections(s.name));
+          const projectId = siteId.replace(/\/sites\/.*$/, '');
+          setSchemaNamespaces(await getSiteCollections(projectId, s.name));
         } catch { setSchemaNamespaces([]); }
       }
     } catch (err) {

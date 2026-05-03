@@ -16,7 +16,6 @@ use axum::response::Response;
 
 use crate::auth::{AuthenticatedUser, AuthSession, AuthUser};
 use crate::http::authz::{require_draft, validate_collection};
-use crate::http::extract::SiteId;
 use crate::http::paths::collection_key;
 use crate::http::response::error_response;
 use crate::http::site_schema::SiteSchema;
@@ -222,18 +221,22 @@ impl SiteScope {
 
 // --- Extractors ---
 
-fn read_project_id(parts: &Parts) -> Result<(String, String), Response> {
-    let raw = parts
+fn read_header(parts: &Parts, name: &str) -> Option<String> {
+    parts
         .headers
-        .get("x-project-id")
+        .get(name)
         .and_then(|v| v.to_str().ok())
         .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            error_response(
-                StatusCode::BAD_REQUEST,
-                "missing project: use X-Project-Id header",
-            )
-        })?;
+        .map(|v| v.to_string())
+}
+
+fn read_project_id(parts: &Parts) -> Result<(String, String), Response> {
+    let raw = read_header(parts, "x-project-id").ok_or_else(|| {
+        error_response(
+            StatusCode::BAD_REQUEST,
+            "missing project: use X-Project-Id header",
+        )
+    })?;
     let (user, project) = raw.split_once('/').ok_or_else(|| {
         error_response(
             StatusCode::BAD_REQUEST,
@@ -241,6 +244,15 @@ fn read_project_id(parts: &Parts) -> Result<(String, String), Response> {
         )
     })?;
     Ok((user.to_string(), project.to_string()))
+}
+
+fn read_site_id(parts: &Parts) -> Result<String, Response> {
+    read_header(parts, "x-site-id").ok_or_else(|| {
+        error_response(
+            StatusCode::BAD_REQUEST,
+            "missing site: use X-Site-Id header",
+        )
+    })
 }
 
 async fn read_path_params(
@@ -261,7 +273,7 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         let (user, project) = read_project_id(parts)?;
-        let SiteId(site_name) = SiteId::from_request_parts(parts, state).await?;
+        let site_name = read_site_id(parts)?;
 
         let project_id = format!("{user}/{project}");
         let site = state

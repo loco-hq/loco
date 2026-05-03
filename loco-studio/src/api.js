@@ -55,8 +55,10 @@ export async function listFields(user, project, version, collection) {
   return request(`/schema/${user}/${project}/${version}/field/${collection}/list`);
 }
 
-export async function getSiteCollections(siteId) {
-  return request(`/schema/collections?site=${encodeURIComponent(siteId)}`);
+export async function getSiteCollections(projectId, siteName) {
+  return request(`/schema/collections`, {
+    headers: { 'X-Project-Id': projectId, 'X-Site-Id': siteName },
+  });
 }
 
 // --- Config CRUD (projects, sites, datasets) ---
