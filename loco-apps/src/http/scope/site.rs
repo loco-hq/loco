@@ -9,7 +9,7 @@ use crate::auth::{AuthenticatedUser, AuthSession, AuthUser};
 use crate::http::authz::validate_collection;
 use crate::http::paths::collection_key;
 use crate::http::response::error_response;
-use crate::http::site_schema::SiteSchema;
+use crate::http::version_schema::VersionSchema;
 use crate::server::AppState;
 use crate::Site;
 
@@ -22,11 +22,12 @@ pub struct SiteScope {
     /// Always populated — synthesized as `AuthSession::public(...)` when no
     /// token is provided. So every scope has a user.
     pub auth: AuthSession,
-    /// Scoped schema view — bounded by this site's project+version plus its
-    /// installed dependencies. Use this instead of `state.schema` from
-    /// handlers under `/data` so they can't reach metadata for unrelated
-    /// projects or non-installed versions.
-    pub schema: SiteSchema,
+    /// Read-only scoped schema view — bounded by this site's project+version
+    /// plus its installed dependencies. Use this instead of `state.schema`
+    /// from handlers under `/data` so they can't reach metadata for
+    /// unrelated projects or non-installed versions, and can't mutate
+    /// metadata at all (writes go through `VersionScope`).
+    pub schema: VersionSchema,
 }
 
 impl SiteScope {
@@ -92,7 +93,7 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
             .unwrap_or_else(|_| AuthSession::public(&qualified));
 
         let version = site.version().to_string();
-        let schema = SiteSchema::new(state.schema.clone(), &project_id, &version)
+        let schema = VersionSchema::new_read_only(state.schema.clone(), &project_id, &version)
             .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e.to_string()))?;
 
         Ok(SiteScope {

@@ -1,19 +1,17 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-use crate::auth::AuthenticatedUser;
-use crate::http::authz::authorize_user;
 use crate::http::response::{
     error_response, version_schema_error_to_response, ApiResponse,
 };
-use crate::http::scope::{require_metadata_editor, SiteScope, VersionScope};
+use crate::http::scope::VersionScope;
 use crate::server::AppState;
-use crate::{Collection, CollectionUpdate, Field, FieldUpdate};
+use crate::{CollectionUpdate, FieldUpdate};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{get, post};
@@ -41,7 +39,6 @@ pub fn router() -> Router<Arc<AppState>> {
             "/{user}/{project}/{version}/field/{collection}/{name}",
             axum::routing::put(update_field).delete(delete_field),
         )
-        .route("/collections", get(introspect))
 }
 
 #[derive(Deserialize)]
@@ -142,75 +139,4 @@ pub async fn delete_field(
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => version_schema_error_to_response(e),
     }
-}
-
-// --- Schema introspection ---
-
-#[derive(Serialize)]
-struct CollectionWithFields {
-    name: String,
-    fields: Arc<Collection>,
-    collection_fields: Vec<(String, Arc<Field>)>,
-}
-
-#[derive(Serialize)]
-struct NamespaceCollections {
-    namespace: String,
-    collections: Vec<CollectionWithFields>,
-}
-
-pub async fn introspect(
-    scope: SiteScope,
-    auth_user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
-) -> Response {
-    if let Err(resp) = require_metadata_editor(&auth_user.0.user.site_id) {
-        return resp;
-    }
-    if let Err(resp) = authorize_user(&auth_user.0.user, &scope.project.user) {
-        return resp;
-    }
-
-    let site_version = scope.site.version();
-    if site_version.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "site has no version configured");
-    }
-
-    let namespace_str = format!("{}@{}", scope.project.project_id(), site_version);
-    let deps = match crate::manifest::resolve_dependency_tree(&state.schema, &namespace_str) {
-        Ok(deps) => deps,
-        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
-    };
-
-    let mut result: Vec<NamespaceCollections> = Vec::new();
-    for dep in &deps {
-        let collection_prefix = format!("{}/versions/{}/collections/", dep.project_id, dep.version);
-        let field_prefix_base = format!("{}/versions/{}/fields/", dep.project_id, dep.version);
-        let collections = state.schema.collections().list(&collection_prefix);
-        let all_fields = state.schema.fields().list(&field_prefix_base);
-
-        let mut coll_with_fields: Vec<CollectionWithFields> = Vec::new();
-        for (_, col) in &collections {
-            let col_name = col.name();
-            let field_prefix = format!("{field_prefix_base}{col_name}/");
-            let matching_fields: Vec<_> = all_fields
-                .iter()
-                .filter(|(ns, _)| ns.starts_with(&field_prefix))
-                .map(|(ns, f)| (ns.clone(), f.clone()))
-                .collect();
-
-            coll_with_fields.push(CollectionWithFields {
-                name: col_name.to_string(),
-                fields: col.clone(),
-                collection_fields: matching_fields,
-            });
-        }
-
-        result.push(NamespaceCollections {
-            namespace: dep.project_id.clone(),
-            collections: coll_with_fields,
-        });
-    }
-
-    ApiResponse::success(result).into_response()
 }

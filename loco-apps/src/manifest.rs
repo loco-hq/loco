@@ -19,8 +19,8 @@ impl std::fmt::Display for ManifestError {
 impl std::error::Error for ManifestError {}
 
 /// Fully-qualified `(project_id, version)` pointer to an installed schema.
-/// `project_id` is `"user/project"`. Used as the namespace key in
-/// `SiteSchema` lookups.
+/// `project_id` is `"user/project"`. Used as the entry type in a
+/// `VersionSchema`'s dependency closure.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Dependency {
     pub project_id: String,

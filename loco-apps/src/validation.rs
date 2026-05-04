@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use loco_lake::Value;
 
-use crate::http::site_schema::SiteSchema;
+use crate::http::version_schema::VersionSchema;
 
 /// Stable string identifiers for the `kind` field on diagnostics. Clients can
 /// switch on these. Using string constants (not an enum) keeps the set open
@@ -113,7 +113,7 @@ impl ValidationReport {
 /// collection across every installed dependency — extensions declared by
 /// other deps are picked up automatically.
 pub fn validate_record(
-    schema: &SiteSchema,
+    schema: &VersionSchema,
     collection: &str,
     fields: &HashMap<String, Value>,
     mode: ValidationMode,
@@ -195,7 +195,7 @@ fn value_type_name(value: &Value) -> &'static str {
 /// Convenience: validate every record in a list, prefixing each diagnostic's
 /// path with the record id so call sites can flatten without losing context.
 pub fn validate_records<'a, I>(
-    schema: &SiteSchema,
+    schema: &VersionSchema,
     collection: &str,
     records: I,
     mode: ValidationMode,

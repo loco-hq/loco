@@ -19,4 +19,4 @@ pub use collection::CollectionScope;
 pub use project::ProjectScope;
 pub use record::RecordScope;
 pub use site::SiteScope;
-pub use version::{require_metadata_editor, VersionScope};
+pub use version::VersionScope;

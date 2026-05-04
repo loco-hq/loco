@@ -30,7 +30,7 @@ fn is_metadata_editor(qualified_site_id: &str) -> bool {
     METADATA_EDITOR_SITES.contains(&qualified_site_id)
 }
 
-pub fn require_metadata_editor(qualified_site_id: &str) -> Result<(), Response> {
+fn require_metadata_editor(qualified_site_id: &str) -> Result<(), Response> {
     if is_metadata_editor(qualified_site_id) {
         Ok(())
     } else {
