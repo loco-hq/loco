@@ -74,6 +74,8 @@ jsonpath "$.diagnostics" not exists
 # this field in the lake — it just becomes "unknown" now.
 DELETE http://127.0.0.1:{{port}}/schema/testuser/testapp/0-draft/field/items/extra
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -110,6 +112,8 @@ jsonpath "$.diagnostics[*].path" includes "{{rec2_id}}/extra"
 # stored integers; reads should now warn about the type mismatch.
 PUT http://127.0.0.1:{{port}}/schema/testuser/testapp/0-draft/field/items/quantity
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 Content-Type: application/json
 {
   "type": "string"

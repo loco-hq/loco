@@ -14,6 +14,8 @@ token: jsonpath "$.data.token"
 # 1. Create a collection
 POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 Content-Type: application/json
 {
   "name": "tasks",
@@ -30,6 +32,8 @@ jsonpath "$.data.label_plural" == "Tasks"
 # 2. List collections — should have exactly 1
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -38,6 +42,8 @@ jsonpath "$.data" count == 1
 # 3. Get the specific collection by name
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/tasks
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -46,6 +52,8 @@ jsonpath "$.data.name" == "tasks"
 # 4. Create a field on that collection
 POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/tasks
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 Content-Type: application/json
 {
   "name": "title",
@@ -61,6 +69,8 @@ jsonpath "$.data.type" == "string"
 # 5. Create a second field
 POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/tasks
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 Content-Type: application/json
 {
   "name": "done",
@@ -74,6 +84,8 @@ jsonpath "$.data.name" == "done"
 # 6. List fields for the collection — should have 2
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/tasks/list
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -82,6 +94,8 @@ jsonpath "$.data" count == 2
 # 7. Delete a field
 DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/tasks/done
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -89,6 +103,8 @@ jsonpath "$.ok" == true
 # 8. List fields again — should have 1
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/tasks/list
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -97,6 +113,8 @@ jsonpath "$.data" count == 1
 # 9. Delete the collection
 DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/tasks
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -104,6 +122,8 @@ jsonpath "$.ok" == true
 # 10. List collections — should be empty
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
 Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true

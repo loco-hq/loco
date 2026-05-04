@@ -1,10 +1,13 @@
 //! Request-scoped accessors that pre-resolve "what's visible from here".
 //!
 //! - [`ProjectScope`]: pinned to a project; configs only (project, dataset, site).
-//! - [`VersionScope`]: pinned to a (project, version); versioned metadata
-//!   (collection, field, manifest).
-//! - [`SiteScope`]: pinned to a site, which itself pins a version + dataset;
-//!   the natural shape for data API routes and pre-auth flows.
+//! - [`SiteScope`]: pinned to a site (X-Project-Id + X-Site-Id headers).
+//!   The single home for request-time authz (`require_authenticated`,
+//!   `require_metadata_editing_site`, `require_can_edit_user`) and the
+//!   read-only schema view used by data routes.
+//! - [`VersionScope`]: a `SiteScope` plus a writable `VersionSchema` for
+//!   the `{user}/{project}/{version}` triple in the path. Has no authz
+//!   logic of its own — composes `SiteScope`'s checks.
 //! - [`CollectionScope`] / [`RecordScope`] layer on top of `SiteScope` for
 //!   data routes that need a specific collection or record.
 

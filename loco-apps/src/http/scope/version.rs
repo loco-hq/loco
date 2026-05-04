@@ -6,14 +6,13 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use serde::Deserialize;
 
-use crate::auth::AuthenticatedUser;
 use crate::http::response::error_response;
 use crate::http::version_schema::VersionSchema;
 use crate::server::AppState;
 use crate::Project;
 
 use super::helpers::read_path_params;
-use super::project::ProjectScope;
+use super::site::SiteScope;
 
 #[derive(Deserialize)]
 struct VersionPathParams {
@@ -22,42 +21,19 @@ struct VersionPathParams {
     version: String,
 }
 
-/// Fully-qualified `{user}/{project}/{site}` ids of sites allowed to edit
-/// versioned metadata via /schema routes.
-const METADATA_EDITOR_SITES: &[&str] = &["loco/studio/studio", "loco/cards/cards"];
-
-fn is_metadata_editor(qualified_site_id: &str) -> bool {
-    METADATA_EDITOR_SITES.contains(&qualified_site_id)
-}
-
-fn require_metadata_editor(qualified_site_id: &str) -> Result<(), Response> {
-    if is_metadata_editor(qualified_site_id) {
-        Ok(())
-    } else {
-        Err(error_response(
-            StatusCode::FORBIDDEN,
-            "this site does not have metadata editing permissions",
-        ))
-    }
-}
-
+/// A `SiteScope` (the editor session, identified by X-Project-Id /
+/// X-Site-Id headers) plus a writable `VersionSchema` for the
+/// `{user}/{project}/{version}` triple in the request path.
+///
+/// Authz lives entirely on `SiteScope` — this extractor just composes:
+/// authenticate, gate to metadata-editor sites, scope the path target to
+/// the authed user, and resolve the schema view.
 pub struct VersionScope {
-    pub project: ProjectScope,
-    pub version: String,
-    /// Scoped schema view: read across the manifest closure, write only to
-    /// `(project_id, version)`. Use this instead of `state.schema` from
-    /// /schema handlers.
+    pub site: SiteScope,
+    /// Writable schema view for the path-extracted `(user/project, version)`.
+    /// Writes are still gated on the version being a draft; see
+    /// `VersionSchema::require_writable`.
     pub schema: VersionSchema,
-}
-
-impl VersionScope {
-    pub fn user(&self) -> &str {
-        &self.project.user
-    }
-
-    pub fn project_id(&self) -> String {
-        self.project.project_id()
-    }
 }
 
 impl FromRequestParts<Arc<AppState>> for VersionScope {
@@ -67,10 +43,9 @@ impl FromRequestParts<Arc<AppState>> for VersionScope {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let AuthenticatedUser(auth) =
-            AuthenticatedUser::from_request_parts(parts, state).await?;
-
-        require_metadata_editor(&auth.user.site_id)?;
+        let site = SiteScope::from_request_parts(parts, state).await?;
+        site.require_authenticated()?;
+        site.require_metadata_editing_site()?;
 
         let VersionPathParams {
             user,
@@ -78,12 +53,7 @@ impl FromRequestParts<Arc<AppState>> for VersionScope {
             version,
         } = read_path_params(parts, state).await?;
 
-        if auth.user.username != user {
-            return Err(error_response(
-                StatusCode::FORBIDDEN,
-                "you do not have access to this resource",
-            ));
-        }
+        site.require_can_edit_user(&user)?;
 
         let project_id = format!("{user}/{project}");
         if !state.schema.projects().has(&Project::to_path(&project_id)) {
@@ -96,14 +66,6 @@ impl FromRequestParts<Arc<AppState>> for VersionScope {
         let schema = VersionSchema::new(state.schema.clone(), &project_id, &version)
             .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e.to_string()))?;
 
-        Ok(VersionScope {
-            project: ProjectScope {
-                user,
-                project,
-                state: state.clone(),
-            },
-            version,
-            schema,
-        })
+        Ok(VersionScope { site, schema })
     }
 }

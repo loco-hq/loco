@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::Response;
 
-use crate::auth::{AuthenticatedUser, AuthSession, AuthUser};
+use crate::auth::{AuthenticatedUser, AuthSession, AuthUser, PUBLIC_USERNAME};
 use crate::http::authz::validate_collection;
 use crate::http::paths::collection_key;
 use crate::http::response::error_response;
@@ -15,6 +15,11 @@ use crate::Site;
 
 use super::helpers::{read_project_id, read_site_id};
 use super::project::ProjectScope;
+
+/// Sites whose authenticated users are allowed to edit versioned metadata via
+/// /schema routes. Until permission sets land, this is a flat allowlist of
+/// fully-qualified site ids (`{user}/{project}/{site_name}`).
+const METADATA_EDITOR_SITES: &[&str] = &["loco/studio/studio", "loco/cards/cards"];
 
 pub struct SiteScope {
     pub project: ProjectScope,
@@ -61,6 +66,53 @@ impl SiteScope {
             name,
         )?;
         Ok(self.collection_key(name))
+    }
+
+    // --- Authz checks ---
+    //
+    // SiteScope is the single home for request-time authz. As permission
+    // sets / profiles / named permissions land, they get added here so
+    // every route benefits without each scope re-implementing them.
+
+    /// Reject synthesized public sessions. Use on routes that require a
+    /// real logged-in user (writes, anything mutating state).
+    pub fn require_authenticated(&self) -> Result<(), Response> {
+        if self.auth.user.username == PUBLIC_USERNAME {
+            Err(error_response(
+                StatusCode::UNAUTHORIZED,
+                "authentication required",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Reject when this site isn't on the metadata-editor allowlist. Used
+    /// to gate /schema routes — only sites like `loco/studio/studio` and
+    /// `loco/cards/cards` can mutate versioned metadata.
+    pub fn require_metadata_editing_site(&self) -> Result<(), Response> {
+        if METADATA_EDITOR_SITES.contains(&self.qualified_site_id().as_str()) {
+            Ok(())
+        } else {
+            Err(error_response(
+                StatusCode::FORBIDDEN,
+                "this site does not have metadata editing permissions",
+            ))
+        }
+    }
+
+    /// Reject when the authed user isn't `path_user`. Used for
+    /// path-targeted routes (e.g. /schema/{user}/...) so a session can
+    /// only act on its own user's resources.
+    pub fn require_can_edit_user(&self, path_user: &str) -> Result<(), Response> {
+        if self.auth.user.username == path_user {
+            Ok(())
+        } else {
+            Err(error_response(
+                StatusCode::FORBIDDEN,
+                "you do not have access to this resource",
+            ))
+        }
     }
 }
 
