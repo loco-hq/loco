@@ -8,10 +8,15 @@
 //! - [`VersionScope`]: a `SiteScope` plus a writable `VersionSchema` for
 //!   the `{user}/{project}/{version}` triple in the path. Has no authz
 //!   logic of its own — composes `SiteScope`'s checks.
+//! - [`ConfigProjectScope`] / [`ConfigUserScope`]: layer on top of
+//!   `SiteScope` for `/config` routes. The first targets an existing
+//!   `{user}/{project}`; the second is for routes with no project in the
+//!   URL (project create, project list).
 //! - [`CollectionScope`] / [`RecordScope`] layer on top of `SiteScope` for
 //!   data routes that need a specific collection or record.
 
 mod collection;
+mod config;
 mod helpers;
 mod project;
 mod record;
@@ -19,6 +24,7 @@ mod site;
 mod version;
 
 pub use collection::CollectionScope;
+pub use config::{ConfigProjectScope, ConfigUserScope};
 pub use project::ProjectScope;
 pub use record::RecordScope;
 pub use site::SiteScope;
