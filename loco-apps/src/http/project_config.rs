@@ -122,18 +122,9 @@ impl ProjectConfig {
             .get(&Dataset::to_path(&self.project_id(), name))
     }
 
-    pub fn create_dataset(
-        &self,
-        name: impl Into<String>,
-        label: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Result<Arc<Dataset>, Error> {
-        self.store.datasets().create(Dataset::new(
-            self.project_id(),
-            name.into(),
-            label.into(),
-            description.into(),
-        ))
+    pub fn create_dataset(&self, mut input: Dataset) -> Result<Arc<Dataset>, Error> {
+        input.project = self.project_id();
+        self.store.datasets().create(input)
     }
 
     pub fn update_dataset(
@@ -165,20 +156,9 @@ impl ProjectConfig {
             .get(&Site::to_path(&self.project_id(), name))
     }
 
-    pub fn create_site(
-        &self,
-        name: impl Into<String>,
-        label: impl Into<String>,
-        version: impl Into<String>,
-        dataset: impl Into<String>,
-    ) -> Result<Arc<Site>, Error> {
-        self.store.sites().create(Site::new(
-            self.project_id(),
-            name.into(),
-            label.into(),
-            version.into(),
-            dataset.into(),
-        ))
+    pub fn create_site(&self, mut input: Site) -> Result<Arc<Site>, Error> {
+        input.project = self.project_id();
+        self.store.sites().create(input)
     }
 
     pub fn update_site(&self, name: &str, patch: SiteUpdate) -> Result<Arc<Site>, Error> {

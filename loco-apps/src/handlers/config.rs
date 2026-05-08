@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::http::response::{ApiResponse, error_response, schema_error_to_response};
 use crate::http::scope::{ConfigProjectScope, ConfigUserScope};
 use crate::server::AppState;
-use crate::{DatasetUpdate, ProjectUpdate, SiteUpdate};
+use crate::{Dataset, DatasetUpdate, ProjectUpdate, Site, SiteUpdate};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{get, post};
@@ -66,12 +66,19 @@ pub async fn create_project(
 
     // Auto-bootstrap a default "dev" dataset + site for the new project.
     let default_label = format!("{} Dev", body.label);
-    let _ = pc.create_dataset(
-        "dev",
+    let _ = pc.create_dataset(Dataset::new(
+        String::new(),
+        "dev".to_string(),
         default_label.clone(),
-        "Default development dataset",
-    );
-    let _ = pc.create_site("dev", default_label, "0.0.1-dev", "dev");
+        "Default development dataset".to_string(),
+    ));
+    let _ = pc.create_site(Site::new(
+        String::new(),
+        "dev".to_string(),
+        default_label,
+        "0.0.1-dev".to_string(),
+        "dev".to_string(),
+    ));
 
     (StatusCode::CREATED, ApiResponse::success(project)).into_response()
 }
@@ -122,21 +129,11 @@ pub async fn delete_project(
 
 // --- dataset ---
 
-#[derive(Deserialize)]
-pub struct CreateDatasetBody {
-    name: String,
-    label: String,
-    description: String,
-}
-
 pub async fn create_dataset(
     scope: ConfigProjectScope,
-    Json(body): Json<CreateDatasetBody>,
+    Json(input): Json<Dataset>,
 ) -> Response {
-    match scope
-        .config
-        .create_dataset(body.name, body.label, body.description)
-    {
+    match scope.config.create_dataset(input) {
         Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
@@ -191,22 +188,11 @@ pub async fn delete_dataset(
 
 // --- site ---
 
-#[derive(Deserialize)]
-pub struct CreateSiteBody {
-    name: String,
-    label: String,
-    version: String,
-    dataset: String,
-}
-
 pub async fn create_site(
     scope: ConfigProjectScope,
-    Json(body): Json<CreateSiteBody>,
+    Json(input): Json<Site>,
 ) -> Response {
-    match scope
-        .config
-        .create_site(body.name, body.label, body.version, body.dataset)
-    {
+    match scope.config.create_site(input) {
         Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
