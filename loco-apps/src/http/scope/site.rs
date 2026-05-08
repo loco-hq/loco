@@ -145,8 +145,7 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
             .unwrap_or_else(|_| AuthSession::public(&qualified));
 
         let version = site.version().to_string();
-        let schema = VersionSchema::new_read_only(state.schema.clone(), &project_id, &version)
-            .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e.to_string()))?;
+        let schema = VersionSchema::new_read_only(state.schema.clone(), &project_id, &version);
 
         Ok(SiteScope {
             project: ProjectScope {

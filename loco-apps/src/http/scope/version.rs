@@ -63,8 +63,7 @@ impl FromRequestParts<Arc<AppState>> for VersionScope {
             ));
         }
 
-        let schema = VersionSchema::new(state.schema.clone(), &project_id, &version)
-            .map_err(|e| error_response(StatusCode::BAD_REQUEST, &e.to_string()))?;
+        let schema = VersionSchema::new(state.schema.clone(), &project_id, &version);
 
         Ok(VersionScope { site, schema })
     }

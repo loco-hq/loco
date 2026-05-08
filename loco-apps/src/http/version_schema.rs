@@ -1,15 +1,16 @@
 //! Per-version, scoped view over the global `SchemaStore`.
 //!
 //! A `VersionSchema` is built around a `(project_id, version)` pair plus the
-//! transitive dependency closure declared in that version's manifest. It can:
+//! direct dependencies declared in that version's manifest. It can:
 //!
-//! - **read** any metadata reachable from the closure (own version + every
-//!   transitively installed dependency), and
+//! - **read** any metadata in its own version OR a directly-declared
+//!   dependency. Transitive deps are not visible — to use a piece of
+//!   metadata, the project must depend on its owner directly.
 //! - **write** to its own `(project_id, version)` *only* when constructed
 //!   writable AND the version is a draft (`-dev` suffix).
 //!
-//! The closure is snapshotted at construction so a request gets a coherent
-//! view even if a concurrent write mutates a manifest mid-flight.
+//! The dep set is snapshotted at construction so a request gets a coherent
+//! view even if a concurrent write mutates the manifest mid-flight.
 //!
 //! Two construction modes:
 //! - [`VersionSchema::new`] — writable. Used by `VersionScope` for /schema
@@ -18,11 +19,9 @@
 //!   data and auth routes can resolve the same metadata view without ever
 //!   being able to mutate it.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::http::authz::is_draft_version;
-use crate::manifest::{resolve_dependency_tree, Dependency, ManifestError};
 use crate::{Collection, CollectionUpdate, Field, FieldUpdate, Manifest, SchemaStore};
 
 #[derive(Debug)]
@@ -54,10 +53,10 @@ pub struct VersionSchema {
     store: Arc<SchemaStore>,
     project_id: String,
     version: String,
-    /// Manifest closure for `(project_id, version)`, including the self entry.
-    /// Order is not significant — collections and fields will be fully
-    /// qualified, so reads can't collide across deps.
-    dependencies: HashSet<Dependency>,
+    /// Self entry plus direct deps as `(project_id, version)` pairs.
+    /// Order is not significant — collections and fields are fully qualified,
+    /// so reads can't collide across deps.
+    dependencies: Vec<(String, String)>,
     read_only: bool,
 }
 
@@ -68,7 +67,7 @@ impl VersionSchema {
         store: Arc<SchemaStore>,
         project_id: impl Into<String>,
         version: impl Into<String>,
-    ) -> Result<Self, ManifestError> {
+    ) -> Self {
         Self::build(store, project_id, version, false)
     }
 
@@ -78,7 +77,7 @@ impl VersionSchema {
         store: Arc<SchemaStore>,
         project_id: impl Into<String>,
         version: impl Into<String>,
-    ) -> Result<Self, ManifestError> {
+    ) -> Self {
         Self::build(store, project_id, version, true)
     }
 
@@ -87,19 +86,17 @@ impl VersionSchema {
         project_id: impl Into<String>,
         version: impl Into<String>,
         read_only: bool,
-    ) -> Result<Self, ManifestError> {
+    ) -> Self {
         let project_id = project_id.into();
         let version = version.into();
-        let root = format!("{project_id}@{version}");
-        let dependencies: HashSet<Dependency> =
-            resolve_dependency_tree(&store, &root)?.into_iter().collect();
-        Ok(Self {
+        let dependencies = direct_dependencies(&store, &project_id, &version);
+        Self {
             store,
             project_id,
             version,
             dependencies,
             read_only,
-        })
+        }
     }
 
     pub fn project_id(&self) -> &str {
@@ -110,7 +107,7 @@ impl VersionSchema {
         &self.version
     }
 
-    pub fn dependencies(&self) -> &HashSet<Dependency> {
+    pub fn dependencies(&self) -> &[(String, String)] {
         &self.dependencies
     }
 
@@ -124,12 +121,12 @@ impl VersionSchema {
             .get(&Manifest::to_path(&self.project_id, &self.version))
     }
 
-    /// Every collection visible to this version, across self + installed deps.
+    /// Every collection visible to this version, across self + direct deps.
     pub fn collections(&self) -> Vec<Arc<Collection>> {
         self.dependencies
             .iter()
-            .flat_map(|dep| {
-                let prefix = format!("{}/versions/{}/collections/", dep.project_id, dep.version);
+            .flat_map(|(project_id, version)| {
+                let prefix = format!("{project_id}/versions/{version}/collections/");
                 self.store
                     .collections()
                     .list(&prefix)
@@ -139,26 +136,24 @@ impl VersionSchema {
             .collect()
     }
 
-    /// First collection with the given `name` across the closure.
+    /// First collection with the given `name` across self + direct deps.
     pub fn collection(&self, name: &str) -> Option<Arc<Collection>> {
-        self.dependencies.iter().find_map(|dep| {
+        self.dependencies.iter().find_map(|(project_id, version)| {
             self.store
                 .collections()
-                .get(&Collection::to_path(&dep.project_id, &dep.version, name))
+                .get(&Collection::to_path(project_id, version, name))
         })
     }
 
-    /// Every field across self + installed deps that targets the given
+    /// Every field across self + direct deps that targets the given
     /// collection name. Deps may declare fields that extend a collection
     /// owned by another dep; those extensions are picked up here.
     pub fn fields(&self, collection: &str) -> Vec<Arc<Field>> {
         self.dependencies
             .iter()
-            .flat_map(|dep| {
-                let prefix = format!(
-                    "{}/versions/{}/fields/{}/",
-                    dep.project_id, dep.version, collection
-                );
+            .flat_map(|(project_id, version)| {
+                let prefix =
+                    format!("{project_id}/versions/{version}/fields/{collection}/");
                 self.store
                     .fields()
                     .list(&prefix)
@@ -168,12 +163,12 @@ impl VersionSchema {
             .collect()
     }
 
-    /// First field with the given `(collection, name)` across the closure.
+    /// First field with the given `(collection, name)` across self + direct deps.
     pub fn field(&self, collection: &str, name: &str) -> Option<Arc<Field>> {
-        self.dependencies.iter().find_map(|dep| {
+        self.dependencies.iter().find_map(|(project_id, version)| {
             self.store
                 .fields()
-                .get(&Field::to_path(&dep.project_id, &dep.version, collection, name))
+                .get(&Field::to_path(project_id, version, collection, name))
         })
     }
 
@@ -255,4 +250,26 @@ impl VersionSchema {
         let key = Field::to_path(&self.project_id, &self.version, collection, name);
         Ok(self.store.fields().delete(&key)?)
     }
+}
+
+/// Self entry plus direct deps from the manifest, as `(project_id, version)`
+/// pairs. Dep strings are `user/project@version`; malformed entries are
+/// skipped — they shouldn't reach the store once write-time validation lands.
+fn direct_dependencies(
+    store: &SchemaStore,
+    project_id: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let mut deps = vec![(project_id.to_string(), version.to_string())];
+    if let Some(manifest) = store
+        .manifests()
+        .get(&Manifest::to_path(project_id, version))
+    {
+        for child in manifest.dependencies() {
+            if let Some((namespace, v)) = child.split_once('@') {
+                deps.push((namespace.to_string(), v.to_string()));
+            }
+        }
+    }
+    deps
 }
