@@ -6,9 +6,10 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use serde::Deserialize;
 
+use crate::http::project_config::ProjectConfig;
 use crate::http::response::error_response;
 use crate::server::AppState;
-use crate::Project;
+use crate::{Project, SchemaStore};
 
 use super::helpers::read_path_params;
 use super::site::SiteScope;
@@ -19,21 +20,30 @@ struct ConfigProjectPathParams {
     project: String,
 }
 
-/// A `SiteScope` plus a `{user}/{project}` pulled from the request path,
-/// for `/config/...` routes that target an existing project.
+/// A `SiteScope` plus a `ProjectConfig` pinned to the `{user}/{project}`
+/// in the request path, for `/config/...` routes that target an existing
+/// project.
 ///
-/// Authz lives entirely on `SiteScope` — this extractor just composes:
-/// authenticate, gate to metadata-editor sites, scope the path target to
-/// the authed user, and confirm the project exists.
+/// Authz lives entirely on `SiteScope` — this extractor composes it
+/// (authenticate, gate to metadata-editor sites, scope the path target to
+/// the authed user) and verifies the project exists before handing the
+/// `ProjectConfig` to the handler.
 pub struct ConfigProjectScope {
     pub site: SiteScope,
-    pub user: String,
-    pub project: String,
+    pub config: ProjectConfig,
 }
 
 impl ConfigProjectScope {
+    pub fn user(&self) -> &str {
+        self.config.user()
+    }
+
+    pub fn project(&self) -> &str {
+        self.config.project()
+    }
+
     pub fn project_id(&self) -> String {
-        format!("{}/{}", self.user, self.project)
+        self.config.project_id()
     }
 }
 
@@ -52,19 +62,15 @@ impl FromRequestParts<Arc<AppState>> for ConfigProjectScope {
 
         site.require_can_edit_user(&user)?;
 
-        let project_id = format!("{user}/{project}");
-        if !state.schema.projects().has(&Project::to_path(&project_id)) {
+        let config = ProjectConfig::new(state.schema.clone(), user, project);
+        if !config.exists() {
             return Err(error_response(
                 StatusCode::NOT_FOUND,
-                &format!("unknown project: {project_id}"),
+                &format!("unknown project: {}", config.project_id()),
             ));
         }
 
-        Ok(ConfigProjectScope {
-            site,
-            user,
-            project,
-        })
+        Ok(ConfigProjectScope { site, config })
     }
 }
 
@@ -72,15 +78,29 @@ impl FromRequestParts<Arc<AppState>> for ConfigProjectScope {
 /// existing project — `POST /config/project` (the project doesn't exist
 /// yet) and `GET /config/project/list` (no project in the URL at all).
 ///
-/// Same authz chain as `ConfigProjectScope` but skips path reading and the
-/// project-existence check. The target user comes from the auth session.
+/// Holds the schema store privately so handlers can list user projects or
+/// build a `ProjectConfig` without reaching into `state.schema`.
 pub struct ConfigUserScope {
     pub site: SiteScope,
+    store: Arc<SchemaStore>,
 }
 
 impl ConfigUserScope {
     pub fn username(&self) -> &str {
         &self.site.user().username
+    }
+
+    /// Projects owned by the authenticated user.
+    pub fn list_projects(&self) -> Vec<(String, Arc<Project>)> {
+        let prefix = format!("{}/", self.username());
+        self.store.projects().list(&prefix)
+    }
+
+    /// Build a `ProjectConfig` for `(auth_user, project)`. Caller is
+    /// responsible for any existence semantics (e.g. `create_project`
+    /// expects no entry; `update`/`delete` expect one).
+    pub fn project_config(&self, project: &str) -> ProjectConfig {
+        ProjectConfig::new(self.store.clone(), self.username().to_string(), project.to_string())
     }
 }
 
@@ -94,6 +114,10 @@ impl FromRequestParts<Arc<AppState>> for ConfigUserScope {
         let site = SiteScope::from_request_parts(parts, state).await?;
         site.require_authenticated()?;
         site.require_metadata_editing_site()?;
-        Ok(ConfigUserScope { site })
+        Ok(ConfigUserScope {
+            site,
+            store: state.schema.clone(),
+        })
     }
 }
+
