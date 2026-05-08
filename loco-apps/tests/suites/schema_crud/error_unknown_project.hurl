@@ -50,12 +50,13 @@ jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown project"
 
 # 4. Create field on unknown project
-POST http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-draft/field/widgets
+POST http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-draft/field
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
 Content-Type: application/json
 {
+  "collection": "widgets",
   "name": "size",
   "type": "integer"
 }

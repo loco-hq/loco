@@ -197,19 +197,12 @@ impl VersionSchema {
 
     pub fn create_collection(
         &self,
-        name: String,
-        label: String,
-        label_plural: String,
+        mut input: Collection,
     ) -> Result<Arc<Collection>, VersionSchemaError> {
         self.require_writable()?;
-        let value = Collection::new(
-            self.project_id.clone(),
-            self.version.clone(),
-            name,
-            label,
-            label_plural,
-        );
-        Ok(self.store.collections().create(value)?)
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.collections().create(input)?)
     }
 
     pub fn update_collection(
@@ -235,21 +228,11 @@ impl VersionSchema {
         Ok(self.store.collections().delete(&key)?)
     }
 
-    pub fn create_field(
-        &self,
-        collection: String,
-        name: String,
-        ty: String,
-    ) -> Result<Arc<Field>, VersionSchemaError> {
+    pub fn create_field(&self, mut input: Field) -> Result<Arc<Field>, VersionSchemaError> {
         self.require_writable()?;
-        let value = Field::new(
-            self.project_id.clone(),
-            self.version.clone(),
-            collection,
-            name,
-            ty,
-        );
-        Ok(self.store.fields().create(value)?)
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.fields().create(input)?)
     }
 
     pub fn update_field(

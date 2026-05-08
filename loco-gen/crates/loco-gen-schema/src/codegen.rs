@@ -37,11 +37,12 @@ pub fn generate(type_def: &TypeDef) -> String {
     let fields = type_def.all_fields();
     let mut out = String::new();
 
-    out.push_str("#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n");
+    out.push_str("#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]\n");
     out.push_str(&format!("pub struct {name} {{\n"));
     for (field_name, field_type) in &fields {
+        out.push_str("    #[serde(default)]\n");
         out.push_str(&format!(
-            "    {}: {},\n",
+            "    pub {}: {},\n",
             rust_ident(field_name),
             field_type.rust_type()
         ));
@@ -584,12 +585,15 @@ mod tests {
     fn test_generates_struct() {
         let code = generate(&sample_type_def());
         assert!(code.contains("pub struct Collection {"));
-        assert!(code.contains("name: String,"));
-        assert!(code.contains("item_count: i64,"));
-        assert!(code.contains("average_rating: f64,"));
-        assert!(code.contains("is_active: bool,"));
-        // Main struct derives both Serialize and Deserialize so it can round-trip through YAML.
-        assert!(code.contains("#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]"));
+        assert!(code.contains("pub name: String,"));
+        assert!(code.contains("pub item_count: i64,"));
+        assert!(code.contains("pub average_rating: f64,"));
+        assert!(code.contains("pub is_active: bool,"));
+        // Main struct derives Default + Serialize + Deserialize so it can round-trip
+        // through YAML and accept partial JSON inputs (with `#[serde(default)]` per
+        // field) when the route layer fills in scope-provided fields.
+        assert!(code.contains("#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]"));
+        assert!(code.contains("#[serde(default)]\n    pub item_count: i64,"));
     }
 
     #[test]
@@ -603,8 +607,8 @@ mod tests {
     #[test]
     fn test_template_vars_generate_as_declared_fields() {
         let code = generate(&sample_type_def());
-        assert!(code.contains("namespace: String,"));
-        assert!(code.contains("version: String,"));
+        assert!(code.contains("pub namespace: String,"));
+        assert!(code.contains("pub version: String,"));
         assert!(code.contains("pub fn namespace(&self) -> &str"));
         assert!(code.contains("pub fn version(&self) -> &str"));
     }
@@ -776,7 +780,7 @@ mod tests {
             ],
         };
         let code = generate(&td);
-        assert!(code.contains("dependencies: Vec<String>,"));
+        assert!(code.contains("pub dependencies: Vec<String>,"));
         assert!(code.contains("pub fn dependencies(&self) -> &[String]"));
         // Loose-on-load list coercion lives in from_yaml now.
         assert!(code.contains("v.as_sequence()"));

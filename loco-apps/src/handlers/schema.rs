@@ -4,14 +4,13 @@ use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
-use serde::Deserialize;
 
 use crate::http::response::{
     error_response, version_schema_error_to_response, ApiResponse,
 };
 use crate::http::scope::VersionScope;
 use crate::server::AppState;
-use crate::{CollectionUpdate, FieldUpdate};
+use crate::{Collection, CollectionUpdate, Field, FieldUpdate};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{get, post};
@@ -27,10 +26,7 @@ pub fn router() -> Router<Arc<AppState>> {
                 .put(update_collection)
                 .delete(delete_collection),
         )
-        .route(
-            "/{user}/{project}/{version}/field/{collection}",
-            post(create_field),
-        )
+        .route("/{user}/{project}/{version}/field", post(create_field))
         .route(
             "/{user}/{project}/{version}/field/{collection}/list",
             get(list_fields),
@@ -41,27 +37,11 @@ pub fn router() -> Router<Arc<AppState>> {
         )
 }
 
-#[derive(Deserialize)]
-pub struct CreateCollectionRequest {
-    name: String,
-    label: String,
-    label_plural: String,
-}
-
-#[derive(Deserialize)]
-pub struct CreateFieldRequest {
-    name: String,
-    r#type: String,
-}
-
 pub async fn create_collection(
     scope: VersionScope,
-    Json(body): Json<CreateCollectionRequest>,
+    Json(input): Json<Collection>,
 ) -> Response {
-    match scope
-        .schema
-        .create_collection(body.name, body.label, body.label_plural)
-    {
+    match scope.schema.create_collection(input) {
         Ok(c) => (StatusCode::CREATED, ApiResponse::success(c)).into_response(),
         Err(e) => version_schema_error_to_response(e),
     }
@@ -102,12 +82,8 @@ pub async fn delete_collection(
     }
 }
 
-pub async fn create_field(
-    scope: VersionScope,
-    Path((_, _, _, collection)): Path<(String, String, String, String)>,
-    Json(body): Json<CreateFieldRequest>,
-) -> Response {
-    match scope.schema.create_field(collection, body.name, body.r#type) {
+pub async fn create_field(scope: VersionScope, Json(input): Json<Field>) -> Response {
+    match scope.schema.create_field(input) {
         Ok(f) => (StatusCode::CREATED, ApiResponse::success(f)).into_response(),
         Err(e) => version_schema_error_to_response(e),
     }

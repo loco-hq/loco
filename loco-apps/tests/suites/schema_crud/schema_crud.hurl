@@ -50,12 +50,13 @@ jsonpath "$.ok" == true
 jsonpath "$.data.name" == "tasks"
 
 # 4. Create a field on that collection
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/tasks
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
 Content-Type: application/json
 {
+  "collection": "tasks",
   "name": "title",
   "type": "string"
 }
@@ -67,12 +68,13 @@ jsonpath "$.data.collection" == "tasks"
 jsonpath "$.data.type" == "string"
 
 # 5. Create a second field
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/tasks
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
 Content-Type: application/json
 {
+  "collection": "tasks",
   "name": "done",
   "type": "boolean"
 }
