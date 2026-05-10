@@ -33,10 +33,12 @@ export default function DatasetDetail() {
   return (
     <>
       <section className="detail-header">
-        <h2>{dataset.label || 'Unnamed Dataset'}</h2>
+        <div className="detail-header-row">
+          <h2>{dataset.label || 'Unnamed Dataset'}</h2>
+          <Link to={`/projects/${user}/${project}/datasets/${name}/edit`} className="btn">Edit</Link>
+        </div>
         <p className="resource-id">{dataset.name}</p>
         {dataset.description && <p className="resource-desc">{dataset.description}</p>}
-        <button className="delete-btn" onClick={() => remove.mutate()}>Delete dataset</button>
       </section>
 
       <section>
@@ -61,6 +63,19 @@ export default function DatasetDetail() {
             ))}
           </div>
         )}
+      </section>
+
+      <section className="danger-zone">
+        <h3 className="danger-zone-heading">Danger zone</h3>
+        <div className="danger-row">
+          <div className="danger-row-info">
+            <strong>Delete this dataset</strong>
+            <p>All records in this dataset will be permanently removed. Sites referencing it will need a different dataset.</p>
+          </div>
+          <button className="delete-btn" onClick={() => remove.mutate()}>
+            Delete dataset
+          </button>
+        </div>
       </section>
     </>
   );

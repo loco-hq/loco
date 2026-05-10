@@ -64,6 +64,9 @@ export const getProject = (user, project) =>
 export const createProject = (body) =>
   request('/config/project', json('POST', body));
 
+export const updateProject = (user, project, patch) =>
+  request(`/config/project/${user}/${project}`, json('PUT', patch));
+
 export const deleteProject = (user, project) =>
   request(`/config/project/${user}/${project}`, { method: 'DELETE' });
 
@@ -94,6 +97,9 @@ export const getDataset = (user, project, name) =>
 
 export const createDataset = (user, project, body) =>
   request(`/config/dataset/${user}/${project}`, json('POST', body));
+
+export const updateDataset = (user, project, name, patch) =>
+  request(`/config/dataset/${user}/${project}/${name}`, json('PUT', patch));
 
 export const deleteDataset = (user, project, name) =>
   request(`/config/dataset/${user}/${project}/${name}`, { method: 'DELETE' });

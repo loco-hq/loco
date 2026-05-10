@@ -308,9 +308,7 @@ h2 {
 h3 {
   font-size: 16px;
   font-weight: 600;
-  padding-bottom: 8px;
   margin-bottom: 12px;
-  border-bottom: 1px solid var(--border-default);
 }
 
 h4 {
@@ -345,15 +343,11 @@ h4 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 8px;
   margin-bottom: 12px;
-  border-bottom: 1px solid var(--border-default);
 }
 
 .section-heading h2,
 .section-heading h3 {
-  border: none;
-  padding: 0;
   margin: 0;
 }
 
@@ -366,6 +360,14 @@ h4 {
 
 .detail-header {
   margin-bottom: 24px;
+}
+
+.detail-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
 }
 
 .detail-header h2 {
@@ -482,8 +484,6 @@ a.list-row:hover,
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border-muted);
 }
 
 .ns-name {
@@ -541,4 +541,33 @@ a.list-row:hover,
   margin-top: 8px;
   padding-top: 16px;
   border-top: 1px solid var(--border-muted);
+}
+
+/* --- Danger zone --- */
+
+.danger-zone-heading {
+  color: var(--danger-fg);
+}
+
+.danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid rgba(207, 34, 46, 0.4);
+  border-radius: 6px;
+  background: var(--canvas-default);
+}
+
+.danger-row-info strong {
+  color: var(--fg-default);
+  font-weight: 600;
+  display: block;
+}
+
+.danger-row-info p {
+  color: var(--fg-muted);
+  font-size: 13px;
+  margin-top: 4px;
 }

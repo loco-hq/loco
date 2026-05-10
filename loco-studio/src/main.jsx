@@ -12,8 +12,11 @@ import ProjectDetail from './components/ProjectDetail.jsx';
 import SiteDetail from './components/SiteDetail.jsx';
 import DatasetDetail from './components/DatasetDetail.jsx';
 import NewProject from './components/NewProject.jsx';
+import EditProject from './components/EditProject.jsx';
 import NewSite from './components/NewSite.jsx';
+import EditSite from './components/EditSite.jsx';
 import NewDataset from './components/NewDataset.jsx';
+import EditDataset from './components/EditDataset.jsx';
 import './style.css';
 
 function RequireAuth({ children }) {
@@ -29,10 +32,13 @@ const router = createHashRouter([
       { index: true, element: <Home /> },
       { path: 'projects/new', element: <NewProject /> },
       { path: 'projects/:user/:project', element: <ProjectDetail /> },
+      { path: 'projects/:user/:project/edit', element: <EditProject /> },
       { path: 'projects/:user/:project/sites/new', element: <NewSite /> },
       { path: 'projects/:user/:project/sites/:name', element: <SiteDetail /> },
+      { path: 'projects/:user/:project/sites/:name/edit', element: <EditSite /> },
       { path: 'projects/:user/:project/datasets/new', element: <NewDataset /> },
       { path: 'projects/:user/:project/datasets/:name', element: <DatasetDetail /> },
+      { path: 'projects/:user/:project/datasets/:name/edit', element: <EditDataset /> },
     ],
   },
 ]);

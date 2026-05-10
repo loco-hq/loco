@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useMe, useLogout } from '../auth.js';
 
@@ -5,18 +6,24 @@ function Breadcrumb() {
   const { pathname } = useLocation();
   const parts = pathname.split('/').filter(Boolean);
   if (parts[0] !== 'projects' || parts.length < 3) return null;
-  const [, user, project, section, name] = parts;
+  const [, user, project, ...rest] = parts;
   return (
     <nav className="breadcrumb" aria-label="Breadcrumb">
       <Link to={`/projects/${user}/${project}`}>{user}/{project}</Link>
-      {section && (
-        <>
-          <span className="sep">/</span>
-          <span className="crumb-muted">{section}</span>
-          <span className="sep">/</span>
-          <strong>{name}</strong>
-        </>
-      )}
+      {rest.map((part, i) => {
+        const last = i === rest.length - 1;
+        const isSection = part === 'sites' || part === 'datasets';
+        return (
+          <Fragment key={i}>
+            <span className="sep">/</span>
+            {last ? (
+              <strong>{part}</strong>
+            ) : (
+              <span className={isSection ? 'crumb-muted' : undefined}>{part}</span>
+            )}
+          </Fragment>
+        );
+      })}
     </nav>
   );
 }

@@ -1,25 +1,15 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  getSite, deleteSite, updateSite,
-  listDatasets, listCollections,
-} from '../api.js';
+import { getSite, deleteSite, listCollections } from '../api.js';
 
 export default function SiteDetail() {
   const { user, project, name } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  const siteKey = ['site', user, project, name];
-
   const { data: site, isLoading, error } = useQuery({
-    queryKey: siteKey,
+    queryKey: ['site', user, project, name],
     queryFn: () => getSite(user, project, name),
-  });
-
-  const { data: datasets = [] } = useQuery({
-    queryKey: ['datasets', user, project],
-    queryFn: () => listDatasets(user, project),
   });
 
   const { data: collections = [] } = useQuery({
@@ -36,11 +26,6 @@ export default function SiteDetail() {
     },
   });
 
-  const setDataset = useMutation({
-    mutationFn: (dataset) => updateSite(user, project, name, { dataset }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: siteKey }),
-  });
-
   if (error) return <p className="error">Error: {error.message}</p>;
   if (isLoading) return <p>Loading...</p>;
 
@@ -55,25 +40,14 @@ export default function SiteDetail() {
   return (
     <>
       <section className="detail-header">
-        <h2>{site.label || 'Unnamed Site'}</h2>
+        <div className="detail-header-row">
+          <h2>{site.label || 'Unnamed Site'}</h2>
+          <Link to={`/projects/${user}/${project}/sites/${name}/edit`} className="btn">Edit</Link>
+        </div>
         <p className="resource-id">{site.name}</p>
         <p className="detail-meta">Project: <code>{user}/{project}</code></p>
         <p className="detail-meta">Version: <code>{site.version || ''}</code></p>
-        <div className="detail-dataset">
-          Dataset:{' '}
-          <select
-            value={site.dataset || ''}
-            onChange={(e) => setDataset.mutate(e.target.value)}
-          >
-            <option value="">None</option>
-            {datasets.map(([id, fields]) => (
-              <option key={id} value={fields.name || ''}>
-                {fields.label || fields.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button className="delete-btn" onClick={() => remove.mutate()}>Delete site</button>
+        <p className="detail-meta">Dataset: <code>{site.dataset || 'none'}</code></p>
       </section>
 
       <section>
@@ -101,6 +75,19 @@ export default function SiteDetail() {
             </div>
           </div>
         ))}
+      </section>
+
+      <section className="danger-zone">
+        <h3 className="danger-zone-heading">Danger zone</h3>
+        <div className="danger-row">
+          <div className="danger-row-info">
+            <strong>Delete this site</strong>
+            <p>The site config will be permanently removed. The dataset and its records are not affected.</p>
+          </div>
+          <button className="delete-btn" onClick={() => remove.mutate()}>
+            Delete site
+          </button>
+        </div>
       </section>
     </>
   );

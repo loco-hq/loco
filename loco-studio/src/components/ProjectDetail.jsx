@@ -2,8 +2,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getProject, deleteProject,
-  listSites, deleteSite,
-  listDatasets, deleteDataset,
+  listSites, listDatasets,
 } from '../api.js';
 
 export default function ProjectDetail() {
@@ -34,16 +33,6 @@ export default function ProjectDetail() {
     },
   });
 
-  const removeSite = useMutation({
-    mutationFn: (name) => deleteSite(user, project, name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sites', user, project] }),
-  });
-
-  const removeDataset = useMutation({
-    mutationFn: (name) => deleteDataset(user, project, name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['datasets', user, project] }),
-  });
-
   if (error) return <p className="error">Error: {error.message}</p>;
   if (isLoading) return <p>Loading...</p>;
 
@@ -52,10 +41,12 @@ export default function ProjectDetail() {
   return (
     <>
       <section className="detail-header">
-        <h2>{proj.label || 'Unnamed'}</h2>
+        <div className="detail-header-row">
+          <h2>{proj.label || 'Unnamed'}</h2>
+          <Link to={`/projects/${user}/${project}/edit`} className="btn">Edit</Link>
+        </div>
         <p className="resource-id">{projectPath}</p>
         {proj.description && <p className="resource-desc">{proj.description}</p>}
-        <button className="delete-btn" onClick={() => removeProject.mutate()}>Delete project</button>
       </section>
 
       <section>
@@ -70,21 +61,17 @@ export default function ProjectDetail() {
         ) : (
           <div className="list">
             {sites.map(([id, fields]) => (
-              <div key={id} className="list-row">
+              <Link
+                key={id}
+                to={`/projects/${user}/${project}/sites/${fields.name}`}
+                className="list-row"
+              >
                 <div className="list-row-main">
-                  <Link
-                    to={`/projects/${user}/${project}/sites/${fields.name}`}
-                    className="list-row-name"
-                  >
-                    {fields.name}
-                  </Link>
+                  <span className="list-row-name">{fields.name}</span>
                   {fields.label && <span className="list-row-label">{fields.label}</span>}
                   {fields.dataset && <span className="list-row-meta">dataset: {fields.dataset}</span>}
                 </div>
-                <div className="list-row-actions">
-                  <button className="delete-btn" onClick={() => removeSite.mutate(fields.name)}>Delete</button>
-                </div>
-              </div>
+              </Link>
             ))}
           </div>
         )}
@@ -102,24 +89,33 @@ export default function ProjectDetail() {
         ) : (
           <div className="list">
             {datasets.map(([id, fields]) => (
-              <div key={id} className="list-row">
+              <Link
+                key={id}
+                to={`/projects/${user}/${project}/datasets/${fields.name}`}
+                className="list-row"
+              >
                 <div className="list-row-main">
-                  <Link
-                    to={`/projects/${user}/${project}/datasets/${fields.name}`}
-                    className="list-row-name"
-                  >
-                    {fields.name}
-                  </Link>
+                  <span className="list-row-name">{fields.name}</span>
                   {fields.label && <span className="list-row-label">{fields.label}</span>}
                   {fields.description && <span className="list-row-desc">{fields.description}</span>}
                 </div>
-                <div className="list-row-actions">
-                  <button className="delete-btn" onClick={() => removeDataset.mutate(fields.name)}>Delete</button>
-                </div>
-              </div>
+              </Link>
             ))}
           </div>
         )}
+      </section>
+
+      <section className="danger-zone">
+        <h3 className="danger-zone-heading">Danger zone</h3>
+        <div className="danger-row">
+          <div className="danger-row-info">
+            <strong>Delete this project</strong>
+            <p>All sites and datasets in this project will be permanently removed.</p>
+          </div>
+          <button className="delete-btn" onClick={() => removeProject.mutate()}>
+            Delete project
+          </button>
+        </div>
       </section>
     </>
   );
