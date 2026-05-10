@@ -1,6 +1,6 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getDataset, deleteDataset, getProject, listSites } from '../api.js';
+import { getDataset, deleteDataset, listSites } from '../api.js';
 
 export default function DatasetDetail() {
   const { user, project, name } = useParams();
@@ -10,11 +10,6 @@ export default function DatasetDetail() {
   const { data: dataset, isLoading, error } = useQuery({
     queryKey: ['dataset', user, project, name],
     queryFn: () => getDataset(user, project, name),
-  });
-
-  const { data: proj } = useQuery({
-    queryKey: ['project', user, project],
-    queryFn: () => getProject(user, project),
   });
 
   const { data: sites = [] } = useQuery({
@@ -37,14 +32,6 @@ export default function DatasetDetail() {
 
   return (
     <>
-      <div className="breadcrumb">
-        <Link to="/">Projects</Link>
-        {proj && (
-          <> / <Link to={`/projects/${user}/${project}`}>{proj.label || 'Unnamed'}</Link></>
-        )}
-        {' / '}<strong>{dataset.label || dataset.name || 'Unnamed'}</strong>
-      </div>
-
       <section className="detail-header">
         <h2>{dataset.label || 'Unnamed Dataset'}</h2>
         <p className="project-ns">{dataset.name || ''}</p>

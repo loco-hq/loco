@@ -1,8 +1,8 @@
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getSite, deleteSite, updateSite,
-  getProject, listDatasets, listCollections,
+  listDatasets, listCollections,
 } from '../api.js';
 
 export default function SiteDetail() {
@@ -15,11 +15,6 @@ export default function SiteDetail() {
   const { data: site, isLoading, error } = useQuery({
     queryKey: siteKey,
     queryFn: () => getSite(user, project, name),
-  });
-
-  const { data: proj } = useQuery({
-    queryKey: ['project', user, project],
-    queryFn: () => getProject(user, project),
   });
 
   const { data: datasets = [] } = useQuery({
@@ -59,14 +54,6 @@ export default function SiteDetail() {
 
   return (
     <>
-      <div className="breadcrumb">
-        <Link to="/">Projects</Link>
-        {proj && (
-          <> / <Link to={`/projects/${user}/${project}`}>{proj.label || 'Unnamed'}</Link></>
-        )}
-        {' / '}<strong>{site.label || site.name || 'Unnamed'}</strong>
-      </div>
-
       <section className="detail-header">
         <h2>{site.label || 'Unnamed Site'}</h2>
         <p className="project-ns">{site.name || ''}</p>

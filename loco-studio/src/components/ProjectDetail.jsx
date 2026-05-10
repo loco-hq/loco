@@ -90,10 +90,6 @@ export default function ProjectDetail() {
 
   return (
     <>
-      <div className="breadcrumb">
-        <Link to="/">Projects</Link> / <strong>{proj.label || 'Unnamed'}</strong>
-      </div>
-
       <section className="detail-header">
         <h2>{proj.label || 'Unnamed'}</h2>
         <p className="project-ns">{projectPath}</p>
