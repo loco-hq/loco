@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   getProject, deleteProject,
-  listSites, addSite, deleteSite,
-  listDatasets, addDataset, deleteDataset,
+  listSitesForProject, addSite, deleteSite,
+  listDatasetsForProject, addDataset, deleteDataset,
 } from '../api.js';
 
 export default function ProjectDetail() {
@@ -14,22 +14,24 @@ export default function ProjectDetail() {
   const [datasets, setDatasets] = useState([]);
   const [error, setError] = useState(null);
 
-  // "ben/crm/project" → "ben/crm/" / "ben/crm"
-  const nsPrefix = projectId.replace(/\/project$/, '/');
-  const projectPath = projectId.replace(/\/project$/, '');
+  // "ben/crm/project" → user "ben", project "crm", projectPath "ben/crm"
+  const [user, projectName] = projectId.split('/');
+  const projectPath = `${user}/${projectName}`;
 
   const load = useCallback(async () => {
     try {
-      const proj = await getProject(projectId);
+      const [proj, projectSites, projectDatasets] = await Promise.all([
+        getProject(projectId),
+        listSitesForProject(user, projectName),
+        listDatasetsForProject(user, projectName),
+      ]);
       setProject(proj);
-
-      const [allSites, allDatasets] = await Promise.all([listSites(), listDatasets()]);
-      setSites(allSites.filter(([id]) => id.startsWith(nsPrefix + 'sites/')));
-      setDatasets(allDatasets.filter(([id]) => id.startsWith(nsPrefix + 'datasets/')));
+      setSites(projectSites);
+      setDatasets(projectDatasets);
     } catch (err) {
       setError(err.message);
     }
-  }, [projectId, nsPrefix]);
+  }, [projectId, user, projectName]);
 
   useEffect(() => { load(); }, [load]);
 

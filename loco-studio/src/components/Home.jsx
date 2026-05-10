@@ -38,7 +38,7 @@ export default function Home() {
       </div>
       <form className="add-form" onSubmit={handleAdd}>
         <input name="label" placeholder="Project label" required />
-        <input name="project" placeholder="Project path (e.g. ben/crm)" required />
+        <input name="project" placeholder="Project name (e.g. crm)" required />
         <input name="description" placeholder="Description" />
         <button type="submit">Create Project</button>
       </form>

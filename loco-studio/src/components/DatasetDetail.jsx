@@ -1,42 +1,40 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getDataset, deleteDataset, listProjects, listSites } from '../api.js';
+import { getDataset, deleteDataset, getProject, listSitesForProject } from '../api.js';
 
 export default function DatasetDetail() {
   const { '*': datasetId } = useParams();
   const navigate = useNavigate();
   const [dataset, setDataset] = useState(null);
-  const [projectEntry, setProjectEntry] = useState(null);
+  const [project, setProject] = useState(null);
   const [linkedSites, setLinkedSites] = useState([]);
   const [error, setError] = useState(null);
 
-  // "ben/crm/datasets/acme" → projectConfigId "ben/crm/project", nsPrefix "ben/crm/"
-  const projectConfigId = datasetId.replace(/\/datasets\/.*$/, '/project');
-  const nsPrefix = datasetId.replace(/\/datasets\/.*$/, '/');
+  // "ben/crm/datasets/acme" → user="ben", projectName="crm"
+  const [user, projectName] = datasetId.split('/');
+  const projectConfigId = `${user}/${projectName}/project`;
 
   const load = useCallback(async () => {
     try {
       const d = await getDataset(datasetId);
       setDataset(d);
 
-      const [allProjects, allSites] = await Promise.all([listProjects(), listSites()]);
-
-      const proj = allProjects.find(([id]) => id === projectConfigId);
-      if (proj) setProjectEntry(proj);
-
-      setLinkedSites(allSites.filter(([id, fields]) =>
-        id.startsWith(nsPrefix + 'sites/') && fields.dataset === d.name
-      ));
+      const [proj, projectSites] = await Promise.all([
+        getProject(projectConfigId).catch(() => null),
+        listSitesForProject(user, projectName),
+      ]);
+      setProject(proj);
+      setLinkedSites(projectSites.filter(([, fields]) => fields.dataset === d.name));
     } catch (err) {
       setError(err.message);
     }
-  }, [datasetId, projectConfigId, nsPrefix]);
+  }, [datasetId, projectConfigId, user, projectName]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleDelete = async () => {
     await deleteDataset(datasetId);
-    navigate(projectEntry ? `/project/${projectEntry[0]}` : '/');
+    navigate(`/project/${projectConfigId}`);
   };
 
   if (error) return <p className="error">Error: {error}</p>;
@@ -46,8 +44,8 @@ export default function DatasetDetail() {
     <>
       <div className="breadcrumb">
         <Link to="/">Projects</Link>
-        {projectEntry && (
-          <> / <Link to={`/project/${projectEntry[0]}`}>{projectEntry[1].label || 'Unnamed'}</Link></>
+        {project && (
+          <> / <Link to={`/project/${projectConfigId}`}>{project.label || 'Unnamed'}</Link></>
         )}
         {' / '}<strong>{dataset.label || dataset.name || 'Unnamed'}</strong>
       </div>
@@ -56,10 +54,10 @@ export default function DatasetDetail() {
         <h2>{dataset.label || 'Unnamed Dataset'}</h2>
         <p className="project-ns">{dataset.name || ''}</p>
         {dataset.description && <p className="project-desc">{dataset.description}</p>}
-        {projectEntry && (
+        {project && (
           <p className="site-project-detail">
-            Project: <Link to={`/project/${projectEntry[0]}`} className="row-link">
-              {projectEntry[1].label || 'Unnamed'}
+            Project: <Link to={`/project/${projectConfigId}`} className="row-link">
+              {project.label || 'Unnamed'}
             </Link>
           </p>
         )}

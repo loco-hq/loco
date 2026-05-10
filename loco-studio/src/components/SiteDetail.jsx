@@ -1,67 +1,75 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getSite, deleteSite, updateSite, listProjects, listDatasets, getSiteCollections } from '../api.js';
+import {
+  getSite, deleteSite, updateSite,
+  getProject, listDatasetsForProject, listCollections,
+} from '../api.js';
 
 export default function SiteDetail() {
   const { '*': siteId } = useParams();
   const navigate = useNavigate();
   const [site, setSite] = useState(null);
-  const [projectEntry, setProjectEntry] = useState(null);
-  const [allDatasets, setAllDatasets] = useState([]);
-  const [schemaNamespaces, setSchemaNamespaces] = useState([]);
+  const [project, setProject] = useState(null);
+  const [datasets, setDatasets] = useState([]);
+  const [collections, setCollections] = useState([]);
   const [error, setError] = useState(null);
 
-  // "ben/crm/sites/acme" → projectConfigId "ben/crm/project", nsPrefix "ben/crm/"
-  const projectConfigId = siteId.replace(/\/sites\/.*$/, '/project');
-  const nsPrefix = siteId.replace(/\/sites\/.*$/, '/');
+  // "ben/crm/sites/acme" → user="ben", projectName="crm"
+  const [user, projectName] = siteId.split('/');
+  const projectConfigId = `${user}/${projectName}/project`;
 
   const load = useCallback(async () => {
     try {
       const s = await getSite(siteId);
       setSite(s);
 
-      const [allProjects, datasets] = await Promise.all([listProjects(), listDatasets()]);
+      const [proj, datasetEntries] = await Promise.all([
+        getProject(projectConfigId).catch(() => null),
+        listDatasetsForProject(user, projectName),
+      ]);
+      setProject(proj);
+      setDatasets(datasetEntries);
 
-      const proj = allProjects.find(([id]) => id === projectConfigId);
-      if (proj) setProjectEntry(proj);
-
-      setAllDatasets(datasets.filter(([id]) => id.startsWith(nsPrefix + 'datasets/')));
-
-      if (s.name) {
+      if (s.version) {
         try {
-          const projectId = siteId.replace(/\/sites\/.*$/, '');
-          setSchemaNamespaces(await getSiteCollections(projectId, s.name));
-        } catch { setSchemaNamespaces([]); }
+          setCollections(await listCollections(user, projectName, s.version));
+        } catch { setCollections([]); }
       }
     } catch (err) {
       setError(err.message);
     }
-  }, [siteId, projectConfigId, nsPrefix]);
+  }, [siteId, projectConfigId, user, projectName]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleDelete = async () => {
     await deleteSite(siteId);
-    navigate(projectEntry ? `/project/${projectEntry[0]}` : '/');
+    navigate(`/project/${projectConfigId}`);
   };
 
   const handleDatasetChange = async (e) => {
-    const newDataset = e.target.value;
-    await updateSite(siteId, { dataset: newDataset });
+    await updateSite(siteId, { dataset: e.target.value });
     load();
   };
 
   if (error) return <p className="error">Error: {error}</p>;
   if (!site) return <p>Loading...</p>;
 
-  const totalCollections = schemaNamespaces.reduce((sum, ns) => sum + ns.collections.length, 0);
+  // Group flat collection list by their owning project (mimics the prior
+  // namespace grouping — collections from dependency projects appear under
+  // their own header).
+  const collectionsByProject = collections.reduce((acc, col) => {
+    const ns = col.project || `${user}/${projectName}`;
+    (acc[ns] ||= []).push(col);
+    return acc;
+  }, {});
 
   return (
     <>
       <div className="breadcrumb">
         <Link to="/">Projects</Link>
-        {projectEntry && (
-          <> / <Link to={`/project/${projectEntry[0]}`}>{projectEntry[1].label || 'Unnamed'}</Link></>
+        {project && (
+          <> / <Link to={`/project/${projectConfigId}`}>{project.label || 'Unnamed'}</Link></>
         )}
         {' / '}<strong>{site.label || site.name || 'Unnamed'}</strong>
       </div>
@@ -69,54 +77,38 @@ export default function SiteDetail() {
       <section className="detail-header">
         <h2>{site.label || 'Unnamed Site'}</h2>
         <p className="project-ns">{site.name || ''}</p>
-        {site.project && <p className="site-ns-detail">Project: <code>{site.project}</code></p>}
+        <p className="site-ns-detail">Project: <code>{user}/{projectName}</code></p>
+        <p className="site-ns-detail">Version: <code>{site.version || ''}</code></p>
         <div className="site-dataset-detail">
           Dataset:{' '}
           <select value={site.dataset || ''} onChange={handleDatasetChange}>
             <option value="">None</option>
-            {allDatasets.map(([id, fields]) => (
+            {datasets.map(([id, fields]) => (
               <option key={id} value={fields.name || ''}>
                 {fields.label || fields.name}
               </option>
             ))}
           </select>
         </div>
-        {projectEntry && (
-          <p className="site-project-detail">
-            Project: <Link to={`/project/${projectEntry[0]}`} className="row-link">
-              {projectEntry[1].label || 'Unnamed'}
-            </Link>
-          </p>
-        )}
         <button className="delete-btn" onClick={handleDelete}>Delete Site</button>
       </section>
 
       <section>
-        <h3>Collections <span className="count">({totalCollections})</span></h3>
-        {schemaNamespaces.length === 0 && (
+        <h3>Collections <span className="count">({collections.length})</span></h3>
+        {collections.length === 0 && (
           <p className="empty-state">No collections found for this site.</p>
         )}
-        {schemaNamespaces.map((ns) => (
-          <div key={ns.namespace} className="namespace-section">
+        {Object.entries(collectionsByProject).map(([ns, cols]) => (
+          <div key={ns} className="namespace-section">
             <h4 className="ns-header">
-              <span className="ns-name">{ns.namespace}</span>
-              <span className="count">({ns.collections.length})</span>
+              <span className="ns-name">{ns}</span>
+              <span className="count">({cols.length})</span>
             </h4>
             <div className="collections-grid">
-              {ns.collections.map((col) => (
-                <div key={col.name} className="collection-card">
-                  <h4>{col.fields.label || col.name}</h4>
-                  <p className="ns">{ns.namespace}.{col.name}</p>
-                  <div className="fields-list">
-                    {col.collection_fields.length === 0 && (
-                      <span className="no-fields">No fields</span>
-                    )}
-                    {col.collection_fields.map(([, f]) => (
-                      <span key={f.name} className="field-tag">
-                        {f.name} <small>{f.type}</small>
-                      </span>
-                    ))}
-                  </div>
+              {cols.map((col) => (
+                <div key={`${col.project}/${col.name}`} className="collection-card">
+                  <h4>{col.label || col.name}</h4>
+                  <p className="ns">{ns}.{col.name}</p>
                 </div>
               ))}
             </div>
