@@ -2,6 +2,8 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createHashRouter, RouterProvider, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
 import { isLoggedIn } from './auth.js';
 import Layout from './components/Layout.jsx';
 import Login from './components/Login.jsx';
