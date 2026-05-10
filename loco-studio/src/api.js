@@ -36,13 +36,12 @@ async function request(path, options = {}) {
   return json.data;
 }
 
+const json = (method, body) => ({ method, body: JSON.stringify(body) });
+
 // --- Auth ---
 
 export async function login(username) {
-  const data = await request('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ username }),
-  });
+  const data = await request('/auth/login', json('POST', { username }));
   setSession(data.token);
   return data;
 }
@@ -52,123 +51,57 @@ export async function logout() {
   clearSession();
 }
 
-export async function getMe() {
-  return request('/auth/me');
-}
-
-// --- ID parsing ---
-//
-// The studio routes still carry full instance ids in the URL ("ben/crm/project",
-// "ben/crm/sites/acme"). The backend's REST routes take (user, project[, name])
-// as separate path segments, so we split here. PR 2 will move this into the
-// router params.
-
-function parseProjectId(id) {
-  // "ben/crm/project" → { user: "ben", project: "crm" }
-  const parts = id.split('/');
-  return { user: parts[0], project: parts[1] };
-}
-
-function parseChildId(id) {
-  // "ben/crm/sites/acme" or "ben/crm/datasets/acme" → { user, project, name }
-  const parts = id.split('/');
-  return { user: parts[0], project: parts[1], name: parts.slice(3).join('/') };
-}
+export const getMe = () => request('/auth/me');
 
 // --- Projects ---
 
-export async function listProjects() {
-  return request('/config/project/list');
-}
+export const listProjects = () =>
+  request('/config/project/list');
 
-export async function getProject(id) {
-  const { user, project } = parseProjectId(id);
-  return request(`/config/project/${user}/${project}`);
-}
+export const getProject = (user, project) =>
+  request(`/config/project/${user}/${project}`);
 
-export async function addProject({ project, label, description }) {
-  // Form input is the full path ("ben/crm" or just "crm"); the backend takes a
-  // single-segment name and infers user from the auth session.
-  const name = project.includes('/') ? project.split('/').pop() : project;
-  return request('/config/project', {
-    method: 'POST',
-    body: JSON.stringify({ name, label, description: description || '' }),
-  });
-}
+export const createProject = (body) =>
+  request('/config/project', json('POST', body));
 
-export async function deleteProject(id) {
-  const { user, project } = parseProjectId(id);
-  return request(`/config/project/${user}/${project}`, { method: 'DELETE' });
-}
+export const deleteProject = (user, project) =>
+  request(`/config/project/${user}/${project}`, { method: 'DELETE' });
 
 // --- Sites ---
 
-export async function listSitesForProject(user, project) {
-  return request(`/config/site/${user}/${project}/list`);
-}
+export const listSites = (user, project) =>
+  request(`/config/site/${user}/${project}/list`);
 
-export async function getSite(id) {
-  const { user, project, name } = parseChildId(id);
-  return request(`/config/site/${user}/${project}/${name}`);
-}
+export const getSite = (user, project, name) =>
+  request(`/config/site/${user}/${project}/${name}`);
 
-export async function addSite({ project, name, label, version, dataset }) {
-  const [user, projectName] = project.split('/');
-  const body = {
-    name,
-    label,
-    version: version || '0.0.1-dev',
-    dataset: dataset || '',
-  };
-  return request(`/config/site/${user}/${projectName}`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
+export const createSite = (user, project, body) =>
+  request(`/config/site/${user}/${project}`, json('POST', body));
 
-export async function updateSite(id, patch) {
-  const { user, project, name } = parseChildId(id);
-  return request(`/config/site/${user}/${project}/${name}`, {
-    method: 'PUT',
-    body: JSON.stringify(patch),
-  });
-}
+export const updateSite = (user, project, name, patch) =>
+  request(`/config/site/${user}/${project}/${name}`, json('PUT', patch));
 
-export async function deleteSite(id) {
-  const { user, project, name } = parseChildId(id);
-  return request(`/config/site/${user}/${project}/${name}`, { method: 'DELETE' });
-}
+export const deleteSite = (user, project, name) =>
+  request(`/config/site/${user}/${project}/${name}`, { method: 'DELETE' });
 
 // --- Datasets ---
 
-export async function listDatasetsForProject(user, project) {
-  return request(`/config/dataset/${user}/${project}/list`);
-}
+export const listDatasets = (user, project) =>
+  request(`/config/dataset/${user}/${project}/list`);
 
-export async function getDataset(id) {
-  const { user, project, name } = parseChildId(id);
-  return request(`/config/dataset/${user}/${project}/${name}`);
-}
+export const getDataset = (user, project, name) =>
+  request(`/config/dataset/${user}/${project}/${name}`);
 
-export async function addDataset({ project, name, label, description }) {
-  const [user, projectName] = project.split('/');
-  return request(`/config/dataset/${user}/${projectName}`, {
-    method: 'POST',
-    body: JSON.stringify({ name, label, description: description || '' }),
-  });
-}
+export const createDataset = (user, project, body) =>
+  request(`/config/dataset/${user}/${project}`, json('POST', body));
 
-export async function deleteDataset(id) {
-  const { user, project, name } = parseChildId(id);
-  return request(`/config/dataset/${user}/${project}/${name}`, { method: 'DELETE' });
-}
+export const deleteDataset = (user, project, name) =>
+  request(`/config/dataset/${user}/${project}/${name}`, { method: 'DELETE' });
 
 // --- Schema (versioned) ---
 
-export async function listCollections(user, project, version) {
-  return request(`/schema/${user}/${project}/${version}/collection/list`);
-}
+export const listCollections = (user, project, version) =>
+  request(`/schema/${user}/${project}/${version}/collection/list`);
 
-export async function listFields(user, project, version, collection) {
-  return request(`/schema/${user}/${project}/${version}/field/${collection}/list`);
-}
+export const listFields = (user, project, version, collection) =>
+  request(`/schema/${user}/${project}/${version}/field/${collection}/list`);

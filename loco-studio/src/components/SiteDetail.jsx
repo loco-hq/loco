@@ -1,65 +1,58 @@
-import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getSite, deleteSite, updateSite,
-  getProject, listDatasetsForProject, listCollections,
+  getProject, listDatasets, listCollections,
 } from '../api.js';
 
 export default function SiteDetail() {
-  const { '*': siteId } = useParams();
+  const { user, project, name } = useParams();
   const navigate = useNavigate();
-  const [site, setSite] = useState(null);
-  const [project, setProject] = useState(null);
-  const [datasets, setDatasets] = useState([]);
-  const [collections, setCollections] = useState([]);
-  const [error, setError] = useState(null);
+  const qc = useQueryClient();
 
-  // "ben/crm/sites/acme" → user="ben", projectName="crm"
-  const [user, projectName] = siteId.split('/');
-  const projectConfigId = `${user}/${projectName}/project`;
+  const siteKey = ['site', user, project, name];
 
-  const load = useCallback(async () => {
-    try {
-      const s = await getSite(siteId);
-      setSite(s);
+  const { data: site, isLoading, error } = useQuery({
+    queryKey: siteKey,
+    queryFn: () => getSite(user, project, name),
+  });
 
-      const [proj, datasetEntries] = await Promise.all([
-        getProject(projectConfigId).catch(() => null),
-        listDatasetsForProject(user, projectName),
-      ]);
-      setProject(proj);
-      setDatasets(datasetEntries);
+  const { data: proj } = useQuery({
+    queryKey: ['project', user, project],
+    queryFn: () => getProject(user, project),
+  });
 
-      if (s.version) {
-        try {
-          setCollections(await listCollections(user, projectName, s.version));
-        } catch { setCollections([]); }
-      }
-    } catch (err) {
-      setError(err.message);
-    }
-  }, [siteId, projectConfigId, user, projectName]);
+  const { data: datasets = [] } = useQuery({
+    queryKey: ['datasets', user, project],
+    queryFn: () => listDatasets(user, project),
+  });
 
-  useEffect(() => { load(); }, [load]);
+  const { data: collections = [] } = useQuery({
+    queryKey: ['collections', user, project, site?.version],
+    queryFn: () => listCollections(user, project, site.version),
+    enabled: !!site?.version,
+  });
 
-  const handleDelete = async () => {
-    await deleteSite(siteId);
-    navigate(`/project/${projectConfigId}`);
-  };
+  const remove = useMutation({
+    mutationFn: () => deleteSite(user, project, name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sites', user, project] });
+      navigate(`/projects/${user}/${project}`);
+    },
+  });
 
-  const handleDatasetChange = async (e) => {
-    await updateSite(siteId, { dataset: e.target.value });
-    load();
-  };
+  const setDataset = useMutation({
+    mutationFn: (dataset) => updateSite(user, project, name, { dataset }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: siteKey }),
+  });
 
-  if (error) return <p className="error">Error: {error}</p>;
-  if (!site) return <p>Loading...</p>;
+  if (error) return <p className="error">Error: {error.message}</p>;
+  if (isLoading) return <p>Loading...</p>;
 
-  // Group flat collection list by their owning project (mimics the prior
-  // namespace grouping — collections from dependency projects appear under
-  // their own header).
-  const collectionsByProject = collections.reduce((acc, col) => {
-    const ns = col.project || `${user}/${projectName}`;
+  // Group flat collection list by their owning project — collections inherited
+  // from dependency projects appear under their own header.
+  const groups = collections.reduce((acc, col) => {
+    const ns = col.project || `${user}/${project}`;
     (acc[ns] ||= []).push(col);
     return acc;
   }, {});
@@ -68,8 +61,8 @@ export default function SiteDetail() {
     <>
       <div className="breadcrumb">
         <Link to="/">Projects</Link>
-        {project && (
-          <> / <Link to={`/project/${projectConfigId}`}>{project.label || 'Unnamed'}</Link></>
+        {proj && (
+          <> / <Link to={`/projects/${user}/${project}`}>{proj.label || 'Unnamed'}</Link></>
         )}
         {' / '}<strong>{site.label || site.name || 'Unnamed'}</strong>
       </div>
@@ -77,11 +70,14 @@ export default function SiteDetail() {
       <section className="detail-header">
         <h2>{site.label || 'Unnamed Site'}</h2>
         <p className="project-ns">{site.name || ''}</p>
-        <p className="site-ns-detail">Project: <code>{user}/{projectName}</code></p>
+        <p className="site-ns-detail">Project: <code>{user}/{project}</code></p>
         <p className="site-ns-detail">Version: <code>{site.version || ''}</code></p>
         <div className="site-dataset-detail">
           Dataset:{' '}
-          <select value={site.dataset || ''} onChange={handleDatasetChange}>
+          <select
+            value={site.dataset || ''}
+            onChange={(e) => setDataset.mutate(e.target.value)}
+          >
             <option value="">None</option>
             {datasets.map(([id, fields]) => (
               <option key={id} value={fields.name || ''}>
@@ -90,7 +86,7 @@ export default function SiteDetail() {
             ))}
           </select>
         </div>
-        <button className="delete-btn" onClick={handleDelete}>Delete Site</button>
+        <button className="delete-btn" onClick={() => remove.mutate()}>Delete Site</button>
       </section>
 
       <section>
@@ -98,7 +94,7 @@ export default function SiteDetail() {
         {collections.length === 0 && (
           <p className="empty-state">No collections found for this site.</p>
         )}
-        {Object.entries(collectionsByProject).map(([ns, cols]) => (
+        {Object.entries(groups).map(([ns, cols]) => (
           <div key={ns} className="namespace-section">
             <h4 className="ns-header">
               <span className="ns-name">{ns}</span>

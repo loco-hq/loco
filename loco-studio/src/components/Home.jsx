@@ -1,35 +1,34 @@
-import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { listProjects, addProject } from '../api.js';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { listProjects, createProject } from '../api.js';
 
 export default function Home() {
-  const [projects, setProjects] = useState(null);
-  const [error, setError] = useState(null);
+  const qc = useQueryClient();
+  const { data: projects, isLoading, error } = useQuery({
+    queryKey: ['projects'],
+    queryFn: listProjects,
+  });
 
-  const load = useCallback(async () => {
-    try {
-      setProjects(await listProjects());
-    } catch (err) {
-      setError(err.message);
-    }
-  }, []);
+  const addProject = useMutation({
+    mutationFn: createProject,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['projects'] }),
+  });
 
-  useEffect(() => { load(); }, [load]);
-
-  const handleAdd = async (e) => {
+  const handleAdd = (e) => {
     e.preventDefault();
     const form = e.target;
-    await addProject({
-      project: form.elements.project.value,
-      label: form.elements.label.value,
-      description: form.elements.description.value,
-    });
-    form.reset();
-    load();
+    addProject.mutate(
+      {
+        name: form.elements.name.value,
+        label: form.elements.label.value,
+        description: form.elements.description.value,
+      },
+      { onSuccess: () => form.reset() },
+    );
   };
 
-  if (error) return <p className="error">Error: {error}</p>;
-  if (!projects) return <p>Loading...</p>;
+  if (error) return <p className="error">Error: {error.message}</p>;
+  if (isLoading) return <p>Loading...</p>;
 
   return (
     <section>
@@ -38,19 +37,27 @@ export default function Home() {
       </div>
       <form className="add-form" onSubmit={handleAdd}>
         <input name="label" placeholder="Project label" required />
-        <input name="project" placeholder="Project name (e.g. crm)" required />
+        <input name="name" placeholder="Project name (e.g. crm)" required />
         <input name="description" placeholder="Description" />
-        <button type="submit">Create Project</button>
+        <button type="submit" disabled={addProject.isPending}>Create Project</button>
       </form>
+      {addProject.error && <p className="error">{addProject.error.message}</p>}
       <div className="projects-grid">
         {projects.length === 0 && <p className="empty-state">No projects yet.</p>}
-        {projects.map(([id, fields]) => (
-          <Link key={id} to={`/project/${id}`} className="project-card">
-            <h3>{fields.label || 'Unnamed'}</h3>
-            <p className="project-ns">{fields.project || ''}</p>
-            <p className="project-desc">{fields.description || ''}</p>
-          </Link>
-        ))}
+        {projects.map(([, fields]) => {
+          const [user, project] = fields.project.split('/');
+          return (
+            <Link
+              key={fields.project}
+              to={`/projects/${user}/${project}`}
+              className="project-card"
+            >
+              <h3>{fields.label || 'Unnamed'}</h3>
+              <p className="project-ns">{fields.project}</p>
+              <p className="project-desc">{fields.description || ''}</p>
+            </Link>
+          );
+        })}
       </div>
     </section>
   );

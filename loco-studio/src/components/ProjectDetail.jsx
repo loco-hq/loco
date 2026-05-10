@@ -1,99 +1,104 @@
-import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getProject, deleteProject,
-  listSitesForProject, addSite, deleteSite,
-  listDatasetsForProject, addDataset, deleteDataset,
+  listSites, createSite, deleteSite,
+  listDatasets, createDataset, deleteDataset,
 } from '../api.js';
 
 export default function ProjectDetail() {
-  const { '*': projectId } = useParams();
+  const { user, project } = useParams();
   const navigate = useNavigate();
-  const [project, setProject] = useState(null);
-  const [sites, setSites] = useState([]);
-  const [datasets, setDatasets] = useState([]);
-  const [error, setError] = useState(null);
+  const qc = useQueryClient();
 
-  // "ben/crm/project" → user "ben", project "crm", projectPath "ben/crm"
-  const [user, projectName] = projectId.split('/');
-  const projectPath = `${user}/${projectName}`;
+  const { data: proj, isLoading, error } = useQuery({
+    queryKey: ['project', user, project],
+    queryFn: () => getProject(user, project),
+  });
 
-  const load = useCallback(async () => {
-    try {
-      const [proj, projectSites, projectDatasets] = await Promise.all([
-        getProject(projectId),
-        listSitesForProject(user, projectName),
-        listDatasetsForProject(user, projectName),
-      ]);
-      setProject(proj);
-      setSites(projectSites);
-      setDatasets(projectDatasets);
-    } catch (err) {
-      setError(err.message);
-    }
-  }, [projectId, user, projectName]);
+  const { data: sites = [] } = useQuery({
+    queryKey: ['sites', user, project],
+    queryFn: () => listSites(user, project),
+  });
 
-  useEffect(() => { load(); }, [load]);
+  const { data: datasets = [] } = useQuery({
+    queryKey: ['datasets', user, project],
+    queryFn: () => listDatasets(user, project),
+  });
 
-  const handleDelete = async () => {
-    await deleteProject(projectId);
-    navigate('/');
-  };
+  const invalidate = (key) => qc.invalidateQueries({ queryKey: [key, user, project] });
 
-  const handleAddSite = async (e) => {
+  const removeProject = useMutation({
+    mutationFn: () => deleteProject(user, project),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      navigate('/');
+    },
+  });
+
+  const addSite = useMutation({
+    mutationFn: (body) => createSite(user, project, body),
+    onSuccess: () => invalidate('sites'),
+  });
+
+  const removeSite = useMutation({
+    mutationFn: (name) => deleteSite(user, project, name),
+    onSuccess: () => invalidate('sites'),
+  });
+
+  const addDataset = useMutation({
+    mutationFn: (body) => createDataset(user, project, body),
+    onSuccess: () => invalidate('datasets'),
+  });
+
+  const removeDataset = useMutation({
+    mutationFn: (name) => deleteDataset(user, project, name),
+    onSuccess: () => invalidate('datasets'),
+  });
+
+  const handleAddSite = (e) => {
     e.preventDefault();
     const form = e.target;
-    const fields = {
-      project: projectPath,
-      name: form.elements.name.value,
-      label: form.elements.label.value,
-      version: form.elements.version.value || '0.0.1-dev',
-    };
-    if (form.elements.dataset.value) {
-      fields.dataset = form.elements.dataset.value;
-    }
-    await addSite(fields);
-    form.reset();
-    load();
+    addSite.mutate(
+      {
+        name: form.elements.name.value,
+        label: form.elements.label.value,
+        version: form.elements.version.value || '0.0.1-dev',
+        dataset: form.elements.dataset.value || '',
+      },
+      { onSuccess: () => form.reset() },
+    );
   };
 
-  const handleDeleteSite = async (id) => {
-    await deleteSite(id);
-    load();
-  };
-
-  const handleAddDataset = async (e) => {
+  const handleAddDataset = (e) => {
     e.preventDefault();
     const form = e.target;
-    await addDataset({
-      project: projectPath,
-      name: form.elements.name.value,
-      label: form.elements.label.value,
-      description: form.elements.description.value,
-    });
-    form.reset();
-    load();
+    addDataset.mutate(
+      {
+        name: form.elements.name.value,
+        label: form.elements.label.value,
+        description: form.elements.description.value || '',
+      },
+      { onSuccess: () => form.reset() },
+    );
   };
 
-  const handleDeleteDataset = async (id) => {
-    await deleteDataset(id);
-    load();
-  };
+  if (error) return <p className="error">Error: {error.message}</p>;
+  if (isLoading) return <p>Loading...</p>;
 
-  if (error) return <p className="error">Error: {error}</p>;
-  if (!project) return <p>Loading...</p>;
+  const projectPath = `${user}/${project}`;
 
   return (
     <>
       <div className="breadcrumb">
-        <Link to="/">Projects</Link> / <strong>{project.label || 'Unnamed'}</strong>
+        <Link to="/">Projects</Link> / <strong>{proj.label || 'Unnamed'}</strong>
       </div>
 
       <section className="detail-header">
-        <h2>{project.label || 'Unnamed'}</h2>
+        <h2>{proj.label || 'Unnamed'}</h2>
         <p className="project-ns">{projectPath}</p>
-        <p className="project-desc">{project.description || ''}</p>
-        <button className="delete-btn" onClick={handleDelete}>Delete Project</button>
+        <p className="project-desc">{proj.description || ''}</p>
+        <button className="delete-btn" onClick={() => removeProject.mutate()}>Delete Project</button>
       </section>
 
       <section>
@@ -102,7 +107,7 @@ export default function ProjectDetail() {
           <input name="name" placeholder="Site name (e.g. acme-prod)" required />
           <input name="label" placeholder="Site label" required />
           <input name="version" placeholder="Version" defaultValue="0.0.1-dev" required />
-          <select name="dataset">
+          <select name="dataset" defaultValue="">
             <option value="">No dataset</option>
             {datasets.map(([id, fields]) => (
               <option key={id} value={fields.name || ''}>
@@ -110,20 +115,21 @@ export default function ProjectDetail() {
               </option>
             ))}
           </select>
-          <button type="submit">Add Site</button>
+          <button type="submit" disabled={addSite.isPending}>Add Site</button>
         </form>
+        {addSite.error && <p className="error">{addSite.error.message}</p>}
         <div className="sites-list">
           {sites.length === 0 && <p className="empty-state">No sites yet.</p>}
           {sites.map(([id, fields]) => (
             <div key={id} className="site-row">
               <div>
-                <Link to={`/site/${id}`} className="row-link">
+                <Link to={`/projects/${user}/${project}/sites/${fields.name}`} className="row-link">
                   <strong>{fields.name || ''}</strong>
                 </Link>
                 <span className="site-name">{fields.label || ''}</span>
                 {fields.dataset && <span className="site-dataset">dataset: {fields.dataset}</span>}
               </div>
-              <button className="delete-btn" onClick={() => handleDeleteSite(id)}>delete</button>
+              <button className="delete-btn" onClick={() => removeSite.mutate(fields.name)}>delete</button>
             </div>
           ))}
         </div>
@@ -135,25 +141,25 @@ export default function ProjectDetail() {
           <input name="name" placeholder="Dataset name (e.g. acme-prod)" required />
           <input name="label" placeholder="Dataset label" required />
           <input name="description" placeholder="Description" />
-          <button type="submit">Add Dataset</button>
+          <button type="submit" disabled={addDataset.isPending}>Add Dataset</button>
         </form>
+        {addDataset.error && <p className="error">{addDataset.error.message}</p>}
         <div className="datasets-list">
           {datasets.length === 0 && <p className="empty-state">No datasets yet.</p>}
           {datasets.map(([id, fields]) => (
             <div key={id} className="site-row">
               <div>
-                <Link to={`/dataset/${id}`} className="row-link">
+                <Link to={`/projects/${user}/${project}/datasets/${fields.name}`} className="row-link">
                   <strong>{fields.name || ''}</strong>
                 </Link>
                 <span className="site-name">{fields.label || ''}</span>
                 {fields.description && <span className="site-dataset">{fields.description}</span>}
               </div>
-              <button className="delete-btn" onClick={() => handleDeleteDataset(id)}>delete</button>
+              <button className="delete-btn" onClick={() => removeDataset.mutate(fields.name)}>delete</button>
             </div>
           ))}
         </div>
       </section>
-
     </>
   );
 }

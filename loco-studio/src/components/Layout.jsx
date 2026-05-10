@@ -1,24 +1,13 @@
-import { useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { useAuth } from './AuthContext.jsx';
+import { useMe, useLogout } from '../auth.js';
 
 export default function Layout() {
-  const { user, loggedIn, logout, fetchUser } = useAuth();
   const navigate = useNavigate();
+  const { data: user } = useMe();
+  const logout = useLogout();
 
-  useEffect(() => {
-    if (!loggedIn) {
-      navigate('/login');
-      return;
-    }
-    if (!user) fetchUser();
-  }, [loggedIn, user, fetchUser, navigate]);
-
-  if (!loggedIn) return null;
-
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login');
+  const handleLogout = () => {
+    logout.mutate(undefined, { onSuccess: () => navigate('/login') });
   };
 
   return (
