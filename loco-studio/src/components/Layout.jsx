@@ -8,18 +8,14 @@ function Breadcrumb() {
   const [, user, project, section, name] = parts;
   return (
     <nav className="breadcrumb" aria-label="Breadcrumb">
-      <Link to="/">{user}</Link>
-      <span className="sep">/</span>
-      {name ? (
+      <Link to={`/projects/${user}/${project}`}>{user}/{project}</Link>
+      {section && (
         <>
-          <Link to={`/projects/${user}/${project}`}>{project}</Link>
           <span className="sep">/</span>
           <span className="crumb-muted">{section}</span>
           <span className="sep">/</span>
           <strong>{name}</strong>
         </>
-      ) : (
-        <strong>{project}</strong>
       )}
     </nav>
   );

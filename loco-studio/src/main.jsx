@@ -9,6 +9,9 @@ import Home from './components/Home.jsx';
 import ProjectDetail from './components/ProjectDetail.jsx';
 import SiteDetail from './components/SiteDetail.jsx';
 import DatasetDetail from './components/DatasetDetail.jsx';
+import NewProject from './components/NewProject.jsx';
+import NewSite from './components/NewSite.jsx';
+import NewDataset from './components/NewDataset.jsx';
 import './style.css';
 
 function RequireAuth({ children }) {
@@ -22,8 +25,11 @@ const router = createHashRouter([
     element: <RequireAuth><Layout /></RequireAuth>,
     children: [
       { index: true, element: <Home /> },
+      { path: 'projects/new', element: <NewProject /> },
       { path: 'projects/:user/:project', element: <ProjectDetail /> },
+      { path: 'projects/:user/:project/sites/new', element: <NewSite /> },
       { path: 'projects/:user/:project/sites/:name', element: <SiteDetail /> },
+      { path: 'projects/:user/:project/datasets/new', element: <NewDataset /> },
       { path: 'projects/:user/:project/datasets/:name', element: <DatasetDetail /> },
     ],
   },

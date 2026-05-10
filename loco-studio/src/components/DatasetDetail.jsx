@@ -34,26 +34,33 @@ export default function DatasetDetail() {
     <>
       <section className="detail-header">
         <h2>{dataset.label || 'Unnamed Dataset'}</h2>
-        <p className="project-ns">{dataset.name || ''}</p>
-        {dataset.description && <p className="project-desc">{dataset.description}</p>}
-        <button className="delete-btn" onClick={() => remove.mutate()}>Delete Dataset</button>
+        <p className="resource-id">{dataset.name}</p>
+        {dataset.description && <p className="resource-desc">{dataset.description}</p>}
+        <button className="delete-btn" onClick={() => remove.mutate()}>Delete dataset</button>
       </section>
 
       <section>
-        <h3>Linked Sites <span className="count">({linkedSites.length})</span></h3>
-        <div className="sites-list">
-          {linkedSites.length === 0 && <p className="empty-state">No sites use this dataset.</p>}
-          {linkedSites.map(([id, fields]) => (
-            <div key={id} className="site-row">
-              <div>
-                <Link to={`/projects/${user}/${project}/sites/${fields.name}`} className="row-link">
-                  <strong>{fields.name || ''}</strong>
-                </Link>
-                <span className="site-name">{fields.label || ''}</span>
-              </div>
-            </div>
-          ))}
+        <div className="section-heading">
+          <h3>Linked sites <span className="count">({linkedSites.length})</span></h3>
         </div>
+        {linkedSites.length === 0 ? (
+          <p className="empty-state">No sites use this dataset.</p>
+        ) : (
+          <div className="list">
+            {linkedSites.map(([id, fields]) => (
+              <Link
+                key={id}
+                to={`/projects/${user}/${project}/sites/${fields.name}`}
+                className="list-row"
+              >
+                <div className="list-row-main">
+                  <span className="list-row-name">{fields.name}</span>
+                  {fields.label && <span className="list-row-label">{fields.label}</span>}
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </section>
     </>
   );

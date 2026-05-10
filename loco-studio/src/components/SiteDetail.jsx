@@ -56,10 +56,10 @@ export default function SiteDetail() {
     <>
       <section className="detail-header">
         <h2>{site.label || 'Unnamed Site'}</h2>
-        <p className="project-ns">{site.name || ''}</p>
-        <p className="site-ns-detail">Project: <code>{user}/{project}</code></p>
-        <p className="site-ns-detail">Version: <code>{site.version || ''}</code></p>
-        <div className="site-dataset-detail">
+        <p className="resource-id">{site.name}</p>
+        <p className="detail-meta">Project: <code>{user}/{project}</code></p>
+        <p className="detail-meta">Version: <code>{site.version || ''}</code></p>
+        <div className="detail-dataset">
           Dataset:{' '}
           <select
             value={site.dataset || ''}
@@ -73,11 +73,13 @@ export default function SiteDetail() {
             ))}
           </select>
         </div>
-        <button className="delete-btn" onClick={() => remove.mutate()}>Delete Site</button>
+        <button className="delete-btn" onClick={() => remove.mutate()}>Delete site</button>
       </section>
 
       <section>
-        <h3>Collections <span className="count">({collections.length})</span></h3>
+        <div className="section-heading">
+          <h3>Collections <span className="count">({collections.length})</span></h3>
+        </div>
         {collections.length === 0 && (
           <p className="empty-state">No collections found for this site.</p>
         )}
@@ -87,11 +89,13 @@ export default function SiteDetail() {
               <span className="ns-name">{ns}</span>
               <span className="count">({cols.length})</span>
             </h4>
-            <div className="collections-grid">
+            <div className="list">
               {cols.map((col) => (
-                <div key={`${col.project}/${col.name}`} className="collection-card">
-                  <h4>{col.label || col.name}</h4>
-                  <p className="ns">{ns}.{col.name}</p>
+                <div key={`${col.project}/${col.name}`} className="list-row">
+                  <div className="list-row-main">
+                    <span className="list-row-name">{col.name}</span>
+                    {col.label && <span className="list-row-label">{col.label}</span>}
+                  </div>
                 </div>
               ))}
             </div>
