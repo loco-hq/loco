@@ -12,7 +12,7 @@ function Breadcrumb() {
       <Link to={`/projects/${user}/${project}`}>{user}/{project}</Link>
       {rest.map((part, i) => {
         const last = i === rest.length - 1;
-        const isSection = part === 'sites' || part === 'datasets';
+        const isSection = ['sites', 'datasets', 'versions', 'collections', 'fields'].includes(part);
         return (
           <Fragment key={i}>
             <span className="sep">/</span>

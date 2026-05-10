@@ -2,7 +2,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getProject, deleteProject,
-  listSites, listDatasets,
+  listSites, listDatasets, listVersions,
 } from '../api.js';
 
 export default function ProjectDetail() {
@@ -23,6 +23,11 @@ export default function ProjectDetail() {
   const { data: datasets = [] } = useQuery({
     queryKey: ['datasets', user, project],
     queryFn: () => listDatasets(user, project),
+  });
+
+  const { data: versions = [] } = useQuery({
+    queryKey: ['versions', user, project],
+    queryFn: () => listVersions(user, project),
   });
 
   const removeProject = useMutation({
@@ -47,6 +52,35 @@ export default function ProjectDetail() {
         </div>
         <p className="resource-id">{projectPath}</p>
         {proj.description && <p className="resource-desc">{proj.description}</p>}
+      </section>
+
+      <section>
+        <div className="section-heading">
+          <h3>Versions <span className="count">({versions.length})</span></h3>
+          <div className="section-heading-actions">
+            <Link to={`/projects/${user}/${project}/versions/new`} className="btn btn-primary">New version</Link>
+          </div>
+        </div>
+        {versions.length === 0 ? (
+          <p className="empty-state">No versions yet.</p>
+        ) : (
+          <div className="list">
+            {versions.map(([id, fields]) => (
+              <Link
+                key={id}
+                to={`/projects/${user}/${project}/versions/${fields.version}`}
+                className="list-row"
+              >
+                <div className="list-row-main">
+                  <span className="list-row-name">{fields.version}</span>
+                  {fields.dependencies.length > 0 && (
+                    <span className="list-row-meta">{fields.dependencies.length} deps</span>
+                  )}
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </section>
 
       <section>

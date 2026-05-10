@@ -17,6 +17,11 @@ import NewSite from './components/NewSite.jsx';
 import EditSite from './components/EditSite.jsx';
 import NewDataset from './components/NewDataset.jsx';
 import EditDataset from './components/EditDataset.jsx';
+import NewVersion from './components/NewVersion.jsx';
+import VersionDetail from './components/VersionDetail.jsx';
+import NewCollection from './components/NewCollection.jsx';
+import CollectionDetail from './components/CollectionDetail.jsx';
+import NewField from './components/NewField.jsx';
 import './style.css';
 
 function RequireAuth({ children }) {
@@ -39,6 +44,11 @@ const router = createHashRouter([
       { path: 'projects/:user/:project/datasets/new', element: <NewDataset /> },
       { path: 'projects/:user/:project/datasets/:name', element: <DatasetDetail /> },
       { path: 'projects/:user/:project/datasets/:name/edit', element: <EditDataset /> },
+      { path: 'projects/:user/:project/versions/new', element: <NewVersion /> },
+      { path: 'projects/:user/:project/versions/:version', element: <VersionDetail /> },
+      { path: 'projects/:user/:project/versions/:version/collections/new', element: <NewCollection /> },
+      { path: 'projects/:user/:project/versions/:version/collections/:name', element: <CollectionDetail /> },
+      { path: 'projects/:user/:project/versions/:version/collections/:name/fields/new', element: <NewField /> },
     ],
   },
 ]);

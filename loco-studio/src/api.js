@@ -104,10 +104,44 @@ export const updateDataset = (user, project, name, patch) =>
 export const deleteDataset = (user, project, name) =>
   request(`/config/dataset/${user}/${project}/${name}`, { method: 'DELETE' });
 
-// --- Schema (versioned) ---
+// --- Versions (a version is a manifest under a project) ---
+
+export const listVersions = (user, project) =>
+  request(`/config/version/${user}/${project}/list`);
+
+export const createVersion = (user, project, body) =>
+  request(`/config/version/${user}/${project}`, json('POST', body));
+
+export const deleteVersion = (user, project, version) =>
+  request(`/config/version/${user}/${project}/${version}`, { method: 'DELETE' });
+
+export const getManifest = (user, project, version) =>
+  request(`/schema/${user}/${project}/${version}/manifest`);
+
+export const updateManifest = (user, project, version, patch) =>
+  request(`/schema/${user}/${project}/${version}/manifest`, json('PUT', patch));
+
+// --- Collections (within a version) ---
 
 export const listCollections = (user, project, version) =>
   request(`/schema/${user}/${project}/${version}/collection/list`);
 
+export const getCollection = (user, project, version, name) =>
+  request(`/schema/${user}/${project}/${version}/collection/${name}`);
+
+export const createCollection = (user, project, version, body) =>
+  request(`/schema/${user}/${project}/${version}/collection`, json('POST', body));
+
+export const deleteCollection = (user, project, version, name) =>
+  request(`/schema/${user}/${project}/${version}/collection/${name}`, { method: 'DELETE' });
+
+// --- Fields (within a collection within a version) ---
+
 export const listFields = (user, project, version, collection) =>
   request(`/schema/${user}/${project}/${version}/field/${collection}/list`);
+
+export const createField = (user, project, version, body) =>
+  request(`/schema/${user}/${project}/${version}/field`, json('POST', body));
+
+export const deleteField = (user, project, version, collection, name) =>
+  request(`/schema/${user}/${project}/${version}/field/${collection}/${name}`, { method: 'DELETE' });
