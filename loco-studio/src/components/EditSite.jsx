@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getSite, updateSite, listDatasets } from '../api.js';
+import { getSite, updateSite, listDatasets, listVersions } from '../api.js';
 
 export default function EditSite() {
   const { user, project, name } = useParams();
@@ -16,6 +16,11 @@ export default function EditSite() {
   const { data: datasets = [] } = useQuery({
     queryKey: ['datasets', user, project],
     queryFn: () => listDatasets(user, project),
+  });
+
+  const { data: versions = [] } = useQuery({
+    queryKey: ['versions', user, project],
+    queryFn: () => listVersions(user, project),
   });
 
   const update = useMutation({
@@ -55,7 +60,14 @@ export default function EditSite() {
         </div>
         <div className="form-field">
           <label htmlFor="version">Version</label>
-          <input id="version" name="version" required defaultValue={site.version || ''} />
+          <select id="version" name="version" required defaultValue={site.version || ''}>
+            {versions.length === 0 && <option value="">No versions available</option>}
+            {versions.map(([id, fields]) => (
+              <option key={id} value={fields.version}>
+                {fields.version}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="form-field">
           <label htmlFor="dataset">Dataset</label>
