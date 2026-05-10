@@ -10,11 +10,15 @@ use crate::http::response::{
 };
 use crate::http::scope::VersionScope;
 use crate::server::AppState;
-use crate::{Collection, CollectionUpdate, Field, FieldUpdate};
+use crate::{Collection, CollectionUpdate, Field, FieldUpdate, ManifestUpdate};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{get, post};
     Router::new()
+        .route(
+            "/{user}/{project}/{version}/manifest",
+            get(get_manifest).put(update_manifest),
+        )
         .route("/{user}/{project}/{version}/collection", post(create_collection))
         .route(
             "/{user}/{project}/{version}/collection/list",
@@ -35,6 +39,26 @@ pub fn router() -> Router<Arc<AppState>> {
             "/{user}/{project}/{version}/field/{collection}/{name}",
             axum::routing::put(update_field).delete(delete_field),
         )
+}
+
+pub async fn get_manifest(scope: VersionScope) -> Response {
+    match scope.schema.manifest() {
+        Some(m) => ApiResponse::success(m).into_response(),
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "manifest not found for this version",
+        ),
+    }
+}
+
+pub async fn update_manifest(
+    scope: VersionScope,
+    Json(patch): Json<ManifestUpdate>,
+) -> Response {
+    match scope.schema.update_manifest(patch) {
+        Ok(m) => ApiResponse::success(m).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
 }
 
 pub async fn create_collection(

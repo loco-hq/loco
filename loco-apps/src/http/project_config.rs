@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use loco_schema_runtime::Error;
 
-use crate::{Dataset, DatasetUpdate, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate};
+use crate::{Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate};
 
 pub struct ProjectConfig {
     store: Arc<SchemaStore>,
@@ -171,5 +171,37 @@ impl ProjectConfig {
         self.store
             .sites()
             .delete(&Site::to_path(&self.project_id(), name))
+    }
+
+    // --- Version (manifest) ---
+
+    pub fn manifests(&self) -> Vec<(String, Arc<Manifest>)> {
+        let prefix = format!("{}/versions/", self.project_id());
+        self.store.manifests().list(&prefix)
+    }
+
+    pub fn manifest(&self, version: &str) -> Option<Arc<Manifest>> {
+        self.store
+            .manifests()
+            .get(&Manifest::to_path(&self.project_id(), version))
+    }
+
+    pub fn create_version(&self, version: String) -> Result<Arc<Manifest>, Error> {
+        let manifest = Manifest::new(self.project_id(), version, Vec::new());
+        self.store.manifests().create(manifest)
+    }
+
+    /// Delete a version: cascade-removes the manifest plus all collections
+    /// and fields scoped to that version.
+    pub fn delete_version(&self, version: &str) -> Result<(), Error> {
+        let manifest_path = Manifest::to_path(&self.project_id(), version);
+        if !self.store.manifests().has(&manifest_path) {
+            return Err(Error::NotFound(manifest_path));
+        }
+        let fields_prefix = format!("{}/versions/{version}/fields/", self.project_id());
+        let collections_prefix = format!("{}/versions/{version}/collections/", self.project_id());
+        let _ = self.store.fields().delete_by_prefix(&fields_prefix);
+        let _ = self.store.collections().delete_by_prefix(&collections_prefix);
+        self.store.manifests().delete(&manifest_path)
     }
 }

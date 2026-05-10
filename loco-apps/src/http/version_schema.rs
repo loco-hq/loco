@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use crate::http::authz::is_draft_version;
-use crate::{Collection, CollectionUpdate, Field, FieldUpdate, Manifest, SchemaStore};
+use crate::{Collection, CollectionUpdate, Field, FieldUpdate, Manifest, ManifestUpdate, SchemaStore};
 
 #[derive(Debug)]
 pub enum VersionSchemaError {
@@ -188,6 +188,15 @@ impl VersionSchema {
             )));
         }
         Ok(())
+    }
+
+    pub fn update_manifest(
+        &self,
+        patch: ManifestUpdate,
+    ) -> Result<Arc<Manifest>, VersionSchemaError> {
+        self.require_writable()?;
+        let key = Manifest::to_path(&self.project_id, &self.version);
+        Ok(self.store.manifests().update(&key, patch)?)
     }
 
     pub fn create_collection(

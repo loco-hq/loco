@@ -150,3 +150,8 @@ fn suite_data_validation_writes() {
 fn suite_data_validation_reads() {
     run_suite(&suites_dir().join("data_validation_reads"));
 }
+
+#[test]
+fn suite_version_lifecycle() {
+    run_suite(&suites_dir().join("version_lifecycle"));
+}

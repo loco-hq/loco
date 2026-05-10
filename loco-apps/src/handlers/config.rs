@@ -12,7 +12,7 @@ use crate::server::AppState;
 use crate::{Dataset, DatasetUpdate, ProjectUpdate, Site, SiteUpdate};
 
 pub fn router() -> Router<Arc<AppState>> {
-    use axum::routing::{get, post};
+    use axum::routing::{delete, get, post};
     Router::new()
         // project
         .route("/project", post(create_project))
@@ -35,6 +35,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/site/{user}/{project}/{name}",
             get(get_site).put(update_site).delete(delete_site),
         )
+        // version (read/edit of the manifest itself lives under /schema)
+        .route("/version/{user}/{project}", post(create_version))
+        .route("/version/{user}/{project}/list", get(list_versions))
+        .route("/version/{user}/{project}/{version}", delete(delete_version))
 }
 
 // --- project ---
@@ -231,6 +235,43 @@ pub async fn delete_site(
     Path((_, _, name)): Path<(String, String, String)>,
 ) -> Response {
     match scope.config.delete_site(&name) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+// --- version ---
+
+#[derive(Deserialize)]
+pub struct CreateVersionBody {
+    version: String,
+}
+
+pub async fn create_version(
+    scope: ConfigProjectScope,
+    Json(body): Json<CreateVersionBody>,
+) -> Response {
+    if body.version.is_empty() || body.version.contains('/') {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "version must be a single path segment",
+        );
+    }
+    match scope.config.create_version(body.version) {
+        Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
+        Err(e) => schema_error_to_response(e),
+    }
+}
+
+pub async fn list_versions(scope: ConfigProjectScope) -> Response {
+    ApiResponse::success(scope.config.manifests()).into_response()
+}
+
+pub async fn delete_version(
+    scope: ConfigProjectScope,
+    Path((_, _, version)): Path<(String, String, String)>,
+) -> Response {
+    match scope.config.delete_version(&version) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
     }
