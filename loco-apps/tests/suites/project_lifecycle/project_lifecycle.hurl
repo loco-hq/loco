@@ -68,6 +68,17 @@ jsonpath "$.data.label" == "New App Dev"
 jsonpath "$.data.version" == "0.0.1-dev"
 jsonpath "$.data.dataset" == "dev"
 
+# 4b. The default "0.0.1-dev" version (manifest) should have been auto-created
+GET http://127.0.0.1:{{port}}/schema/alice/newapp/0.0.1-dev/manifest
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data.version" == "0.0.1-dev"
+jsonpath "$.data.dependencies" count == 0
+
 # 5. Add an extra dataset and site so we can verify the cascade covers more than
 #    just the bootstrap pair.
 POST http://127.0.0.1:{{port}}/config/dataset/alice/newapp
@@ -136,6 +147,13 @@ X-Site-Id: cards
 HTTP 404
 
 GET http://127.0.0.1:{{port}}/config/dataset/alice/newapp/prod
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 404
+
+# 9b. The auto-bootstrapped manifest is gone too (project delete cascades versions)
+GET http://127.0.0.1:{{port}}/schema/alice/newapp/0.0.1-dev/manifest
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards

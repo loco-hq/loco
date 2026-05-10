@@ -82,11 +82,18 @@ impl ProjectConfig {
             .update(&Project::to_path(&self.project_id()), patch)
     }
 
-    /// Schema-level cascade: removes every dataset and site under this
+    /// Schema-level cascade: removes every version (manifest + its
+    /// collections + fields), every dataset, and every site under this
     /// project, then the project record itself. Returns the dataset names
     /// that were removed so callers can purge their records from the lake.
     pub fn delete_project(&self) -> Result<Vec<String>, Error> {
         let prefix = format!("{}/", self.project_id());
+        let versions_prefix = format!("{}/versions/", self.project_id());
+
+        // Cascade fields + collections + manifests for every version.
+        let _ = self.store.fields().delete_by_prefix(&versions_prefix);
+        let _ = self.store.collections().delete_by_prefix(&versions_prefix);
+        let _ = self.store.manifests().delete_by_prefix(&versions_prefix);
 
         let mut dataset_names = Vec::new();
         for (ds_id, ds) in self.store.datasets().list_all() {

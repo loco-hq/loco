@@ -68,8 +68,9 @@ pub async fn create_project(
         Err(e) => return schema_error_to_response(e),
     };
 
-    // Auto-bootstrap a default "dev" dataset + site for the new project.
+    // Auto-bootstrap a default version + dataset + site for the new project.
     let default_label = format!("{} Dev", body.label);
+    let _ = pc.create_version("0.0.1-dev".to_string());
     let _ = pc.create_dataset(Dataset::new(
         String::new(),
         "dev".to_string(),
