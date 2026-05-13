@@ -1,5 +1,6 @@
 import { Navigate, useNavigate } from 'react-router-dom';
 import { isLoggedIn, useLogin } from '../auth.js';
+import logoUrl from '../assets/logo.svg';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -16,7 +17,7 @@ export default function Login() {
   return (
     <div className="login-page">
       <div className="login-card">
-        <h1>Loco Studio</h1>
+        <img src={logoUrl} alt="Loco" className="login-logo" />
         <p className="subtitle">Sign in to manage your schemas</p>
         <form onSubmit={handleSubmit}>
           <input name="username" type="text" placeholder="Username" required />

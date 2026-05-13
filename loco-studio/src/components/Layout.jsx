@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useMe, useLogout } from '../auth.js';
+import logoUrl from '../assets/logo.svg';
 
 function Breadcrumb() {
   const { pathname } = useLocation();
@@ -56,7 +57,7 @@ export default function Layout() {
       <header className="app-header">
         <div className="header-left">
           <Link to="/" className="logo" aria-label="Home">
-            <span className="logo-mark">L</span>
+            <img src={logoUrl} alt="Loco" className="logo-mark" />
           </Link>
           <Breadcrumb />
         </div>
