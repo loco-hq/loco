@@ -132,6 +132,9 @@ export const getCollection = (user, project, version, name) =>
 export const createCollection = (user, project, version, body) =>
   request(`/schema/${user}/${project}/${version}/collection`, json('POST', body));
 
+export const updateCollection = (user, project, version, name, patch) =>
+  request(`/schema/${user}/${project}/${version}/collection/${name}`, json('PUT', patch));
+
 export const deleteCollection = (user, project, version, name) =>
   request(`/schema/${user}/${project}/${version}/collection/${name}`, { method: 'DELETE' });
 
@@ -142,6 +145,9 @@ export const listFields = (user, project, version, collection) =>
 
 export const createField = (user, project, version, body) =>
   request(`/schema/${user}/${project}/${version}/field`, json('POST', body));
+
+export const updateField = (user, project, version, collection, name, patch) =>
+  request(`/schema/${user}/${project}/${version}/field/${collection}/${name}`, json('PUT', patch));
 
 export const deleteField = (user, project, version, collection, name) =>
   request(`/schema/${user}/${project}/${version}/field/${collection}/${name}`, { method: 'DELETE' });
@@ -159,6 +165,9 @@ const siteHeaders = (projectId, siteName) => ({
 
 export const listRecords = (projectId, siteName, collection) =>
   request(`/data/${collection}/list`, { headers: siteHeaders(projectId, siteName) });
+
+export const getRecord = (projectId, siteName, collection, id) =>
+  request(`/data/${collection}/get/${id}`, { headers: siteHeaders(projectId, siteName) });
 
 export const addRecord = (projectId, siteName, collection, fields) =>
   request(`/data/${collection}/add`, {

@@ -22,7 +22,13 @@ import NewVersion from './components/NewVersion.jsx';
 import VersionDetail from './components/VersionDetail.jsx';
 import NewCollection from './components/NewCollection.jsx';
 import CollectionDetail from './components/CollectionDetail.jsx';
+import EditCollection from './components/EditCollection.jsx';
 import NewField from './components/NewField.jsx';
+import FieldDetail from './components/FieldDetail.jsx';
+import EditField from './components/EditField.jsx';
+import NewRecord from './components/NewRecord.jsx';
+import RecordDetail from './components/RecordDetail.jsx';
+import EditRecord from './components/EditRecord.jsx';
 import './style.css';
 
 function RequireAuth({ children }) {
@@ -50,7 +56,13 @@ const router = createHashRouter([
       { path: 'projects/:user/:project/versions/:version', element: <VersionDetail /> },
       { path: 'projects/:user/:project/versions/:version/collections/new', element: <NewCollection /> },
       { path: 'projects/:user/:project/versions/:version/collections/:name', element: <CollectionDetail /> },
+      { path: 'projects/:user/:project/versions/:version/collections/:name/edit', element: <EditCollection /> },
       { path: 'projects/:user/:project/versions/:version/collections/:name/fields/new', element: <NewField /> },
+      { path: 'projects/:user/:project/versions/:version/collections/:name/fields/:fieldName', element: <FieldDetail /> },
+      { path: 'projects/:user/:project/versions/:version/collections/:name/fields/:fieldName/edit', element: <EditField /> },
+      { path: 'projects/:user/:project/versions/:version/collections/:name/records/new', element: <NewRecord /> },
+      { path: 'projects/:user/:project/versions/:version/collections/:name/records/:recordId', element: <RecordDetail /> },
+      { path: 'projects/:user/:project/versions/:version/collections/:name/records/:recordId/edit', element: <EditRecord /> },
     ],
   },
 ]);

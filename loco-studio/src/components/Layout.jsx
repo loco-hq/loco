@@ -10,21 +10,33 @@ function Breadcrumb() {
   const [, user, project, ...rest] = parts;
 
   // Collapse `versions/<v>` into a single crumb linking to the version home.
+  // The collection name after `collections/<c>` links to the collection page.
   // `settings` is intentionally hidden — the project crumb itself links there.
   const crumbs = [];
+  let currentVersion = null;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === 'versions' && i + 1 < rest.length) {
       const v = rest[i + 1];
+      currentVersion = v;
       crumbs.push({
         text: v,
         section: false,
         href: `/projects/${user}/${project}/versions/${v}`,
       });
       i++;
+    } else if (rest[i] === 'collections' && i + 1 < rest.length && currentVersion) {
+      const c = rest[i + 1];
+      crumbs.push({ text: 'collections', section: true });
+      crumbs.push({
+        text: c,
+        section: false,
+        href: `/projects/${user}/${project}/versions/${currentVersion}/collections/${c}`,
+      });
+      i++;
     } else if (rest[i] === 'settings') {
       continue;
     } else {
-      const isSection = ['sites', 'datasets', 'collections', 'fields'].includes(rest[i]);
+      const isSection = ['sites', 'datasets', 'collections', 'fields', 'records'].includes(rest[i]);
       crumbs.push({ text: rest[i], section: isSection });
     }
   }

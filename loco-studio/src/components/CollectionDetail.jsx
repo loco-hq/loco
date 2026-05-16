@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getCollection, deleteCollection,
-  listFields, deleteField, listSites, listRecords,
+  listFields, listSites, listRecords,
 } from '../api.js';
 import RecordsTable from './RecordsTable.jsx';
 
@@ -40,8 +40,6 @@ export default function CollectionDetail() {
     return match ? match[1] : sitesForVersion[0][1];
   }, [sitesForVersion, selectedSiteName]);
 
-  const [addingRecord, setAddingRecord] = useState(false);
-
   const projectId = `${user}/${project}`;
   const { data: records = [] } = useQuery({
     queryKey: ['records', projectId, selectedSite?.name, name],
@@ -57,11 +55,6 @@ export default function CollectionDetail() {
     },
   });
 
-  const removeField = useMutation({
-    mutationFn: (fieldName) => deleteField(user, project, version, name, fieldName),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fields', user, project, version, name] }),
-  });
-
   if (error) return <p className="error">Error: {error.message}</p>;
   if (isLoading) return <p>Loading...</p>;
 
@@ -74,6 +67,12 @@ export default function CollectionDetail() {
       <section className="detail-header">
         <div className="detail-header-row">
           <h2>{collection.label || collection.name}</h2>
+          <Link
+            to={`/projects/${user}/${project}/versions/${version}/collections/${name}/edit`}
+            className="btn"
+          >
+            Edit
+          </Link>
         </div>
         <p className="resource-id">{collection.name}</p>
         {collection.label_plural && (
@@ -98,17 +97,16 @@ export default function CollectionDetail() {
         ) : (
           <div className="list">
             {own.map((f) => (
-              <div key={f.name} className="list-row">
+              <Link
+                key={f.name}
+                to={`/projects/${user}/${project}/versions/${version}/collections/${name}/fields/${f.name}`}
+                className="list-row"
+              >
                 <div className="list-row-main">
                   <span className="list-row-name">{f.name}</span>
                   <span className="list-row-meta">{f.type}</span>
                 </div>
-                <div className="list-row-actions">
-                  <button className="delete-btn" onClick={() => removeField.mutate(f.name)}>
-                    Delete
-                  </button>
-                </div>
-              </div>
+              </Link>
             ))}
           </div>
         )}
@@ -157,13 +155,13 @@ export default function CollectionDetail() {
                 ))}
               </select>
             )}
-            {sitesForVersion.length > 0 && allFields.length > 0 && !addingRecord && (
-              <button
+            {selectedSite && allFields.length > 0 && (
+              <Link
+                to={`/projects/${user}/${project}/versions/${version}/collections/${name}/records/new?site=${encodeURIComponent(selectedSite.name)}`}
                 className="btn btn-primary"
-                onClick={() => setAddingRecord(true)}
               >
                 New {collection.label || collection.name}
-              </button>
+              </Link>
             )}
           </div>
         </div>
@@ -179,12 +177,11 @@ export default function CollectionDetail() {
           </div>
         ) : (
           <RecordsTable
-            projectId={`${user}/${project}`}
+            projectId={projectId}
             siteName={selectedSite.name}
             collection={name}
             fields={allFields}
-            adding={addingRecord}
-            onCancelAdd={() => setAddingRecord(false)}
+            collectionPath={`/projects/${user}/${project}/versions/${version}/collections/${name}`}
           />
         )}
       </section>
