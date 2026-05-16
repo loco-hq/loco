@@ -10,7 +10,9 @@ function Breadcrumb() {
   const [, user, project, ...rest] = parts;
   return (
     <nav className="breadcrumb" aria-label="Breadcrumb">
-      <Link to={`/projects/${user}/${project}`}>{user}/{project}</Link>
+      <Link to="/">{user}</Link>
+      <span className="sep">/</span>
+      <Link to={`/projects/${user}/${project}`}>{project}</Link>
       {rest.map((part, i) => {
         const last = i === rest.length - 1;
         const isSection = ['sites', 'datasets', 'versions', 'collections', 'fields'].includes(part);

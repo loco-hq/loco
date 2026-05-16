@@ -273,13 +273,13 @@ button[type="submit"]:hover {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 18px;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 18px;
 }
 
 .logo {
