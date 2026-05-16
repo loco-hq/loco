@@ -402,6 +402,13 @@ h4 {
   margin: 0;
 }
 
+.section-heading-meta {
+  margin-left: 12px;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
 .section-heading-actions {
   display: flex;
   gap: 8px;
@@ -621,4 +628,71 @@ a.list-row:hover,
   color: var(--fg-muted);
   font-size: 13px;
   margin-top: 4px;
+}
+
+/* --- Records table --- */
+
+.records-table-wrap {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--canvas-default);
+  overflow: hidden;
+}
+
+.records-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.records-table th,
+.records-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-muted);
+  vertical-align: middle;
+}
+
+.records-table thead th {
+  background: var(--canvas-subtle);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--fg-default);
+}
+
+.records-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.records-table input[type="text"],
+.records-table input[type="number"] {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.records-table .cell-null {
+  color: var(--fg-subtle);
+}
+
+.records-table .row-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.records-table .row-actions button {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.records-table .row-actions-col {
+  width: 1%;
+}
+
+.records-table .records-empty {
+  text-align: center;
+  color: var(--fg-muted);
+  padding: 20px;
 }

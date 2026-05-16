@@ -145,3 +145,35 @@ export const createField = (user, project, version, body) =>
 
 export const deleteField = (user, project, version, collection, name) =>
   request(`/schema/${user}/${project}/${version}/field/${collection}/${name}`, { method: 'DELETE' });
+
+// --- Records (data) ---
+//
+// Data routes scope by request headers, not URL. So each call overrides
+// X-Project-Id and X-Site-Id to target the (project, site) being browsed
+// instead of the studio's own.
+
+const siteHeaders = (projectId, siteName) => ({
+  'X-Project-Id': projectId,
+  'X-Site-Id': siteName,
+});
+
+export const listRecords = (projectId, siteName, collection) =>
+  request(`/data/${collection}/list`, { headers: siteHeaders(projectId, siteName) });
+
+export const addRecord = (projectId, siteName, collection, fields) =>
+  request(`/data/${collection}/add`, {
+    ...json('POST', fields),
+    headers: siteHeaders(projectId, siteName),
+  });
+
+export const updateRecord = (projectId, siteName, collection, id, fields) =>
+  request(`/data/${collection}/update/${id}`, {
+    ...json('PUT', fields),
+    headers: siteHeaders(projectId, siteName),
+  });
+
+export const deleteRecord = (projectId, siteName, collection, id) =>
+  request(`/data/${collection}/delete/${id}`, {
+    method: 'DELETE',
+    headers: siteHeaders(projectId, siteName),
+  });

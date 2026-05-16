@@ -3,8 +3,9 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getCollection, deleteCollection,
-  listFields, deleteField, listSites,
+  listFields, deleteField, listSites, listRecords,
 } from '../api.js';
+import RecordsTable from './RecordsTable.jsx';
 
 export default function CollectionDetail() {
   const { user, project, version, name } = useParams();
@@ -38,6 +39,15 @@ export default function CollectionDetail() {
     const match = sitesForVersion.find(([, f]) => f.name === selectedSiteName);
     return match ? match[1] : sitesForVersion[0][1];
   }, [sitesForVersion, selectedSiteName]);
+
+  const [addingRecord, setAddingRecord] = useState(false);
+
+  const projectId = `${user}/${project}`;
+  const { data: records = [] } = useQuery({
+    queryKey: ['records', projectId, selectedSite?.name, name],
+    queryFn: () => listRecords(projectId, selectedSite.name, name),
+    enabled: !!selectedSite,
+  });
 
   const remove = useMutation({
     mutationFn: () => deleteCollection(user, project, version, name),
@@ -125,9 +135,17 @@ export default function CollectionDetail() {
 
       <section>
         <div className="section-heading">
-          <h3>Data</h3>
-          {sitesForVersion.length > 1 && (
-            <div className="section-heading-actions">
+          <h3>
+            Records {selectedSite && <span className="count">({records.length})</span>}
+            {selectedSite && (
+              <span className="section-heading-meta">
+                Site: <code>{selectedSite.name}</code> · Dataset:{' '}
+                <code>{selectedSite.dataset || 'none'}</code>
+              </span>
+            )}
+          </h3>
+          <div className="section-heading-actions">
+            {sitesForVersion.length > 1 && (
               <select
                 value={selectedSite?.name || ''}
                 onChange={(e) => setSelectedSiteName(e.target.value)}
@@ -138,8 +156,16 @@ export default function CollectionDetail() {
                   </option>
                 ))}
               </select>
-            </div>
-          )}
+            )}
+            {sitesForVersion.length > 0 && allFields.length > 0 && !addingRecord && (
+              <button
+                className="btn btn-primary"
+                onClick={() => setAddingRecord(true)}
+              >
+                New {collection.label || collection.name}
+              </button>
+            )}
+          </div>
         </div>
         {sitesForVersion.length === 0 ? (
           <div className="empty-state">
@@ -152,13 +178,14 @@ export default function CollectionDetail() {
             </Link>
           </div>
         ) : (
-          <>
-            <p className="detail-meta">
-              Site: <code>{selectedSite.name}</code> · Dataset:{' '}
-              <code>{selectedSite.dataset || 'none'}</code>
-            </p>
-            <p className="empty-state">Record browsing coming soon.</p>
-          </>
+          <RecordsTable
+            projectId={`${user}/${project}`}
+            siteName={selectedSite.name}
+            collection={name}
+            fields={allFields}
+            adding={addingRecord}
+            onCancelAdd={() => setAddingRecord(false)}
+          />
         )}
       </section>
 
