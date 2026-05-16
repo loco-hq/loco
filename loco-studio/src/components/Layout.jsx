@@ -9,12 +9,17 @@ function Breadcrumb() {
   if (parts[0] !== 'projects' || parts.length < 3) return null;
   const [, user, project, ...rest] = parts;
 
-  // Collapse `versions/<v>` into a single crumb showing just the version.
+  // Collapse `versions/<v>` into a single crumb linking to the version home.
   // `settings` is intentionally hidden — the project crumb itself links there.
   const crumbs = [];
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === 'versions' && i + 1 < rest.length) {
-      crumbs.push({ text: rest[i + 1], section: false });
+      const v = rest[i + 1];
+      crumbs.push({
+        text: v,
+        section: false,
+        href: `/projects/${user}/${project}/versions/${v}`,
+      });
       i++;
     } else if (rest[i] === 'settings') {
       continue;
@@ -43,6 +48,8 @@ function Breadcrumb() {
             <span className="sep">/</span>
             {last ? (
               <strong>{c.text}</strong>
+            ) : c.href ? (
+              <Link to={c.href}>{c.text}</Link>
             ) : (
               <span className={c.section ? 'crumb-muted' : undefined}>{c.text}</span>
             )}

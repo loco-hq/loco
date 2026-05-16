@@ -1,8 +1,9 @@
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getCollection, deleteCollection,
-  listFields, deleteField,
+  listFields, deleteField, listSites,
 } from '../api.js';
 
 export default function CollectionDetail() {
@@ -20,6 +21,23 @@ export default function CollectionDetail() {
     queryKey: ['fields', user, project, version, name],
     queryFn: () => listFields(user, project, version, name),
   });
+
+  const { data: allSites = [] } = useQuery({
+    queryKey: ['sites', user, project],
+    queryFn: () => listSites(user, project),
+  });
+
+  const sitesForVersion = useMemo(
+    () => allSites.filter(([, f]) => f.version === version),
+    [allSites, version],
+  );
+
+  const [selectedSiteName, setSelectedSiteName] = useState(null);
+  const selectedSite = useMemo(() => {
+    if (sitesForVersion.length === 0) return null;
+    const match = sitesForVersion.find(([, f]) => f.name === selectedSiteName);
+    return match ? match[1] : sitesForVersion[0][1];
+  }, [sitesForVersion, selectedSiteName]);
 
   const remove = useMutation({
     mutationFn: () => deleteCollection(user, project, version, name),
@@ -104,6 +122,45 @@ export default function CollectionDetail() {
           </div>
         </section>
       )}
+
+      <section>
+        <div className="section-heading">
+          <h3>Data</h3>
+          {sitesForVersion.length > 1 && (
+            <div className="section-heading-actions">
+              <select
+                value={selectedSite?.name || ''}
+                onChange={(e) => setSelectedSiteName(e.target.value)}
+              >
+                {sitesForVersion.map(([id, f]) => (
+                  <option key={id} value={f.name}>
+                    {f.label || f.name} → {f.dataset || 'no dataset'}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+        {sitesForVersion.length === 0 ? (
+          <div className="empty-state">
+            <p>No site connects this version to a dataset yet.</p>
+            <Link
+              to={`/projects/${user}/${project}/sites/new?version=${encodeURIComponent(version)}`}
+              className="btn btn-primary"
+            >
+              Create a site for this version
+            </Link>
+          </div>
+        ) : (
+          <>
+            <p className="detail-meta">
+              Site: <code>{selectedSite.name}</code> · Dataset:{' '}
+              <code>{selectedSite.dataset || 'none'}</code>
+            </p>
+            <p className="empty-state">Record browsing coming soon.</p>
+          </>
+        )}
+      </section>
 
       <section className="danger-zone">
         <h3 className="danger-zone-heading">Danger zone</h3>
