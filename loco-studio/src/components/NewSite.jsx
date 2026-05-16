@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createSite, listDatasets, listVersions } from '../api.js';
 
@@ -6,6 +6,8 @@ export default function NewSite() {
   const { user, project } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const prefilledVersion = searchParams.get('version') || '';
 
   const { data: datasets = [] } = useQuery({
     queryKey: ['datasets', user, project],
@@ -36,7 +38,7 @@ export default function NewSite() {
     });
   };
 
-  const projectPath = `/projects/${user}/${project}`;
+  const projectPath = `/projects/${user}/${project}/settings`;
 
   return (
     <div className="form-page">
@@ -53,7 +55,7 @@ export default function NewSite() {
         </div>
         <div className="form-field">
           <label htmlFor="version">Version</label>
-          <select id="version" name="version" required defaultValue="">
+          <select id="version" name="version" required defaultValue={prefilledVersion}>
             <option value="" disabled>Select a version…</option>
             {versions.map(([id, fields]) => (
               <option key={id} value={fields.version}>

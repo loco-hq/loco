@@ -9,6 +9,7 @@ import Layout from './components/Layout.jsx';
 import Login from './components/Login.jsx';
 import Home from './components/Home.jsx';
 import ProjectDetail from './components/ProjectDetail.jsx';
+import ProjectSettings from './components/ProjectSettings.jsx';
 import SiteDetail from './components/SiteDetail.jsx';
 import DatasetDetail from './components/DatasetDetail.jsx';
 import NewProject from './components/NewProject.jsx';
@@ -37,6 +38,7 @@ const router = createHashRouter([
       { index: true, element: <Home /> },
       { path: 'projects/new', element: <NewProject /> },
       { path: 'projects/:user/:project', element: <ProjectDetail /> },
+      { path: 'projects/:user/:project/settings', element: <ProjectSettings /> },
       { path: 'projects/:user/:project/edit', element: <EditProject /> },
       { path: 'projects/:user/:project/sites/new', element: <NewSite /> },
       { path: 'projects/:user/:project/sites/:name', element: <SiteDetail /> },

@@ -25,7 +25,7 @@ export default function NewDataset() {
     });
   };
 
-  const projectPath = `/projects/${user}/${project}`;
+  const projectPath = `/projects/${user}/${project}/settings`;
 
   return (
     <div className="form-page">

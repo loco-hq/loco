@@ -8,21 +8,43 @@ function Breadcrumb() {
   const parts = pathname.split('/').filter(Boolean);
   if (parts[0] !== 'projects' || parts.length < 3) return null;
   const [, user, project, ...rest] = parts;
+
+  // Collapse `versions/<v>` into a single crumb showing just the version.
+  // `settings` is intentionally hidden — the project crumb itself links there.
+  const crumbs = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === 'versions' && i + 1 < rest.length) {
+      crumbs.push({ text: rest[i + 1], section: false });
+      i++;
+    } else if (rest[i] === 'settings') {
+      continue;
+    } else {
+      const isSection = ['sites', 'datasets', 'collections', 'fields'].includes(rest[i]);
+      crumbs.push({ text: rest[i], section: isSection });
+    }
+  }
+
+  const projectIsTerminal = crumbs.length === 0;
+  const settingsPath = `/projects/${user}/${project}/settings`;
+
   return (
     <nav className="breadcrumb" aria-label="Breadcrumb">
       <Link to="/">{user}</Link>
       <span className="sep">/</span>
-      <Link to={`/projects/${user}/${project}`}>{project}</Link>
-      {rest.map((part, i) => {
-        const last = i === rest.length - 1;
-        const isSection = ['sites', 'datasets', 'versions', 'collections', 'fields'].includes(part);
+      {projectIsTerminal ? (
+        <strong>{project}</strong>
+      ) : (
+        <Link to={settingsPath}>{project}</Link>
+      )}
+      {crumbs.map((c, i) => {
+        const last = i === crumbs.length - 1;
         return (
           <Fragment key={i}>
             <span className="sep">/</span>
             {last ? (
-              <strong>{part}</strong>
+              <strong>{c.text}</strong>
             ) : (
-              <span className={isSection ? 'crumb-muted' : undefined}>{part}</span>
+              <span className={c.section ? 'crumb-muted' : undefined}>{c.text}</span>
             )}
           </Fragment>
         );

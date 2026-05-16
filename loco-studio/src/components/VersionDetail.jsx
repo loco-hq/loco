@@ -1,7 +1,8 @@
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getManifest, deleteVersion, listCollections,
+  getManifest, deleteVersion, listCollections, listSites,
 } from '../api.js';
 
 export default function VersionDetail() {
@@ -19,6 +20,11 @@ export default function VersionDetail() {
     queryFn: () => listCollections(user, project, version),
   });
 
+  const { data: allSites = [] } = useQuery({
+    queryKey: ['sites', user, project],
+    queryFn: () => listSites(user, project),
+  });
+
   const remove = useMutation({
     mutationFn: () => deleteVersion(user, project, version),
     onSuccess: () => {
@@ -26,6 +32,18 @@ export default function VersionDetail() {
       navigate(`/projects/${user}/${project}`);
     },
   });
+
+  const sitesForVersion = useMemo(
+    () => allSites.filter(([, f]) => f.version === version),
+    [allSites, version],
+  );
+
+  const [selectedSiteName, setSelectedSiteName] = useState(null);
+  const selectedSite = useMemo(() => {
+    if (sitesForVersion.length === 0) return null;
+    const match = sitesForVersion.find(([, f]) => f.name === selectedSiteName);
+    return match ? match[1] : sitesForVersion[0][1];
+  }, [sitesForVersion, selectedSiteName]);
 
   if (error) return <p className="error">Error: {error.message}</p>;
   if (isLoading) return <p>Loading...</p>;
@@ -39,8 +57,9 @@ export default function VersionDetail() {
       <section className="detail-header">
         <div className="detail-header-row">
           <h2>{version}</h2>
+          <Link to={`/projects/${user}/${project}/settings`} className="btn">Project settings</Link>
         </div>
-        <p className="resource-id">{ownNs} / versions / {version}</p>
+        <p className="resource-id">{ownNs}</p>
         {manifest.dependencies.length > 0 && (
           <p className="detail-meta">
             Dependencies:{' '}
@@ -55,7 +74,7 @@ export default function VersionDetail() {
 
       <section>
         <div className="section-heading">
-          <h3>Collections <span className="count">({own.length})</span></h3>
+          <h3>Schema <span className="count">({own.length})</span></h3>
           <div className="section-heading-actions">
             <Link
               to={`/projects/${user}/${project}/versions/${version}/collections/new`}
@@ -103,6 +122,49 @@ export default function VersionDetail() {
           </div>
         </section>
       )}
+
+      <section>
+        <div className="section-heading">
+          <h3>Data</h3>
+          {sitesForVersion.length > 1 && (
+            <div className="section-heading-actions">
+              <select
+                value={selectedSite?.name || ''}
+                onChange={(e) => setSelectedSiteName(e.target.value)}
+              >
+                {sitesForVersion.map(([id, f]) => (
+                  <option key={id} value={f.name}>
+                    {f.label || f.name} → {f.dataset || 'no dataset'}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+        {sitesForVersion.length === 0 ? (
+          <div className="empty-state">
+            <p>No site connects this version to a dataset yet.</p>
+            <Link
+              to={`/projects/${user}/${project}/sites/new?version=${encodeURIComponent(version)}`}
+              className="btn btn-primary"
+            >
+              Create a site for this version
+            </Link>
+          </div>
+        ) : (
+          <>
+            <p className="detail-meta">
+              Site: <code>{selectedSite.name}</code> · Dataset:{' '}
+              <code>{selectedSite.dataset || 'none'}</code>
+            </p>
+            {own.length === 0 ? (
+              <p className="empty-state">Add a collection above to start storing data.</p>
+            ) : (
+              <p className="empty-state">Record browsing coming soon.</p>
+            )}
+          </>
+        )}
+      </section>
 
       <section className="danger-zone">
         <h3 className="danger-zone-heading">Danger zone</h3>

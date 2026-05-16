@@ -6,13 +6,13 @@ export default function NewVersion() {
   const { user, project } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const projectPath = `/projects/${user}/${project}`;
+  const settingsPath = `/projects/${user}/${project}/settings`;
 
   const create = useMutation({
     mutationFn: (body) => createVersion(user, project, body),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['versions', user, project] });
-      navigate(`${projectPath}/versions/${data.version}`);
+      navigate(`/projects/${user}/${project}/versions/${data.version}`);
     },
   });
 
@@ -36,7 +36,7 @@ export default function NewVersion() {
         </div>
         {create.error && <p className="error">{create.error.message}</p>}
         <div className="form-actions">
-          <button type="button" onClick={() => navigate(projectPath)}>Cancel</button>
+          <button type="button" onClick={() => navigate(settingsPath)}>Cancel</button>
           <button type="submit" disabled={create.isPending}>Create version</button>
         </div>
       </form>
