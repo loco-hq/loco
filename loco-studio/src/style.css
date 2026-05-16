@@ -1,6 +1,8 @@
-/* GitHub Primer-inspired light mode. */
+/* GitHub Primer-inspired theme. Light by default, dark via prefers-color-scheme. */
 
 :root {
+  color-scheme: light dark;
+
   --canvas-default: #ffffff;
   --canvas-subtle: #f6f8fa;
   --canvas-inset: #eaeef2;
@@ -17,7 +19,39 @@
   --success-emphasis-hover: #1a7f37;
   --danger-fg: #d1242f;
   --danger-emphasis: #cf222e;
+  --danger-subtle: #ffebe9;
+  --danger-border: rgba(255, 129, 130, 0.4);
+  --button-border: rgba(31, 35, 40, 0.15);
+  --focus-ring: rgba(9, 105, 218, 0.3);
   --shadow-sm: 0 1px 0 rgba(31, 35, 40, 0.04);
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='%2359636e'%3E%3Cpath d='M12.78 6.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 7.28a.75.75 0 0 1 1.06-1.06L8 9.94l3.72-3.72a.75.75 0 0 1 1.06 0Z'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas-default: #0d1117;
+    --canvas-subtle: #161b22;
+    --canvas-inset: #010409;
+    --border-default: #30363d;
+    --border-muted: #21262d;
+    --fg-default: #e6edf3;
+    --fg-muted: #9198a1;
+    --fg-subtle: #6e7681;
+    --accent-fg: #4493f8;
+    --accent-emphasis: #1f6feb;
+    --accent-subtle: rgba(56, 139, 253, 0.15);
+    --success-fg: #3fb950;
+    --success-emphasis: #238636;
+    --success-emphasis-hover: #2ea043;
+    --danger-fg: #f85149;
+    --danger-emphasis: #da3633;
+    --danger-subtle: rgba(248, 81, 73, 0.15);
+    --danger-border: rgba(248, 81, 73, 0.4);
+    --button-border: rgba(240, 246, 252, 0.1);
+    --focus-ring: rgba(56, 139, 253, 0.4);
+    --shadow-sm: 0 0 transparent;
+    --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='%239198a1'%3E%3Cpath d='M12.78 6.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 7.28a.75.75 0 0 1 1.06-1.06L8 9.94l3.72-3.72a.75.75 0 0 1 1.06 0Z'/%3E%3C/svg%3E");
+  }
 }
 
 * {
@@ -130,7 +164,7 @@ input:focus,
 select:focus {
   outline: none;
   border-color: var(--accent-emphasis);
-  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.3);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 select {
@@ -138,7 +172,7 @@ select {
   -webkit-appearance: none;
   -moz-appearance: none;
   padding-right: 32px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='%2359636e'%3E%3Cpath d='M12.78 6.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 7.28a.75.75 0 0 1 1.06-1.06L8 9.94l3.72-3.72a.75.75 0 0 1 1.06 0Z'/%3E%3C/svg%3E");
+  background-image: var(--select-arrow);
   background-repeat: no-repeat;
   background-position: right 8px center;
   background-size: 16px 16px;
@@ -154,7 +188,7 @@ select:disabled {
 button,
 .btn {
   padding: 5px 16px;
-  border: 1px solid rgba(31, 35, 40, 0.15);
+  border: 1px solid var(--button-border);
   border-radius: 6px;
   background: var(--canvas-subtle);
   color: var(--fg-default);
@@ -184,7 +218,7 @@ button:disabled,
 button[type="submit"] {
   background: var(--success-emphasis);
   color: #fff;
-  border-color: rgba(31, 35, 40, 0.15);
+  border-color: var(--button-border);
 }
 
 .btn-primary:hover,
@@ -196,7 +230,7 @@ button[type="submit"]:hover {
 .delete-btn {
   background: var(--canvas-default);
   color: var(--danger-fg);
-  border-color: rgba(31, 35, 40, 0.15);
+  border-color: var(--button-border);
 }
 
 .delete-btn:hover {
@@ -348,8 +382,8 @@ h4 {
 .error {
   color: var(--danger-fg);
   padding: 12px 16px;
-  background: #ffebe9;
-  border: 1px solid rgba(255, 129, 130, 0.4);
+  background: var(--danger-subtle);
+  border: 1px solid var(--danger-border);
   border-radius: 6px;
   margin-bottom: 12px;
 }
@@ -572,7 +606,7 @@ a.list-row:hover,
   justify-content: space-between;
   gap: 16px;
   padding: 16px;
-  border: 1px solid rgba(207, 34, 46, 0.4);
+  border: 1px solid var(--danger-border);
   border-radius: 6px;
   background: var(--canvas-default);
 }
