@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getCollection, deleteCollection,
   listFields, listSites, listRecords,
+  listFieldsets, updateFieldset,
 } from '../api.js';
 import RecordsTable from './RecordsTable.jsx';
 
@@ -22,6 +23,42 @@ export default function CollectionDetail() {
     queryKey: ['fields', user, project, version, name],
     queryFn: () => listFields(user, project, version, name),
   });
+
+  const { data: fieldsets = [] } = useQuery({
+    queryKey: ['fieldsets', user, project, version, name],
+    queryFn: () => listFieldsets(user, project, version, name),
+  });
+
+  // The first auto_add fieldset is the canonical order target. Backend
+  // guarantees one exists once any field has been created; if a collection
+  // is bare we just hide the reorder controls until then.
+  const orderTarget = useMemo(
+    () => fieldsets.find((fs) => fs.auto_add) || null,
+    [fieldsets],
+  );
+
+  const reorder = useMutation({
+    mutationFn: (nextFields) =>
+      updateFieldset(user, project, version, name, orderTarget.name, {
+        fields: nextFields,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['fieldsets', user, project, version, name] });
+      qc.invalidateQueries({ queryKey: ['fields', user, project, version, name] });
+    },
+  });
+
+  const moveField = (fieldName, delta) => {
+    if (!orderTarget) return;
+    const current = orderTarget.fields;
+    const idx = current.indexOf(fieldName);
+    if (idx < 0) return;
+    const swap = idx + delta;
+    if (swap < 0 || swap >= current.length) return;
+    const next = current.slice();
+    [next[idx], next[swap]] = [next[swap], next[idx]];
+    reorder.mutate(next);
+  };
 
   const { data: allSites = [] } = useQuery({
     queryKey: ['sites', user, project],
@@ -96,18 +133,43 @@ export default function CollectionDetail() {
           <p className="empty-state">No fields yet.</p>
         ) : (
           <div className="list">
-            {own.map((f) => (
-              <Link
-                key={f.name}
-                to={`/projects/${user}/${project}/versions/${version}/collections/${name}/fields/${f.name}`}
-                className="list-row"
-              >
-                <div className="list-row-main">
-                  <span className="list-row-name">{f.name}</span>
-                  <span className="list-row-meta">{f.type}</span>
+            {own.map((f) => {
+              const orderIdx = orderTarget ? orderTarget.fields.indexOf(f.name) : -1;
+              const canMoveUp = orderIdx > 0;
+              const canMoveDown =
+                orderIdx >= 0 && orderIdx < orderTarget.fields.length - 1;
+              return (
+                <div key={f.name} className="list-row">
+                  <Link
+                    to={`/projects/${user}/${project}/versions/${version}/collections/${name}/fields/${f.name}`}
+                    className="list-row-main"
+                  >
+                    <span className="list-row-name">{f.name}</span>
+                    <span className="list-row-meta">{f.type}</span>
+                  </Link>
+                  {orderTarget && (
+                    <div className="list-row-actions">
+                      <button
+                        type="button"
+                        onClick={() => moveField(f.name, -1)}
+                        disabled={!canMoveUp || reorder.isPending}
+                        aria-label={`Move ${f.name} up`}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveField(f.name, 1)}
+                        disabled={!canMoveDown || reorder.isPending}
+                        aria-label={`Move ${f.name} down`}
+                      >
+                        ↓
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </Link>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

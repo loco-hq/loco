@@ -28,6 +28,9 @@ Thumbs.db
 # My personal notes
 NOTES.md
 
+# Playwright MCP session artifacts
+.playwright-mcp/
+
 # Local instance data — schema types are tracked, but instances are user-scoped
 # scratch data. Test suites have their own fixtures under tests/suites/.
 /loco-apps/schemas/instances/*

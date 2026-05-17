@@ -92,8 +92,12 @@ fn run_suite(suite_dir: &Path) {
     );
 
     // 6. Run hurl
+    // `--jobs 1`: hurl 5+ parallelizes by default in test mode, but our suites
+    // share one in-memory server, so parallel files race on schema state.
     let output = Command::new("hurl")
         .arg("--test")
+        .arg("--jobs")
+        .arg("1")
         .arg("--variable")
         .arg(format!("port={port}"))
         .args(&hurl_files)

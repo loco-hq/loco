@@ -152,6 +152,14 @@ export const updateField = (user, project, version, collection, name, patch) =>
 export const deleteField = (user, project, version, collection, name) =>
   request(`/schema/${user}/${project}/${version}/field/${collection}/${name}`, { method: 'DELETE' });
 
+// --- Fieldsets (ordered subsets of a collection's fields) ---
+
+export const listFieldsets = (user, project, version, collection) =>
+  request(`/schema/${user}/${project}/${version}/fieldset/${collection}/list`);
+
+export const updateFieldset = (user, project, version, collection, name, patch) =>
+  request(`/schema/${user}/${project}/${version}/fieldset/${collection}/${name}`, json('PUT', patch));
+
 // --- Records (data) ---
 //
 // Data routes scope by request headers, not URL. So each call overrides

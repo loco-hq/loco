@@ -22,7 +22,15 @@
 use std::sync::Arc;
 
 use crate::http::authz::is_draft_version;
-use crate::{Collection, CollectionUpdate, Field, FieldUpdate, Manifest, ManifestUpdate, SchemaStore};
+use crate::{
+    Collection, CollectionUpdate, Field, Fieldset, FieldsetUpdate, FieldUpdate, Manifest,
+    ManifestUpdate, SchemaStore,
+};
+
+/// Name of the fieldset auto-created when a collection is created. The boolean
+/// `auto_add` flag — not this name — is what marks a fieldset as "new fields
+/// land here"; the name is just a sensible default for the first one.
+const DEFAULT_FIELDSET_NAME: &str = "default";
 
 #[derive(Debug)]
 pub enum VersionSchemaError {
@@ -148,7 +156,56 @@ impl VersionSchema {
     /// Every field across self + direct deps that targets the given
     /// collection name. Deps may declare fields that extend a collection
     /// owned by another dep; those extensions are picked up here.
+    ///
+    /// Order is driven by `auto_add` fieldsets on this collection (concatenated
+    /// in fieldset-name order, dedup'd). Fields not named in any auto_add set
+    /// are appended in alphabetical-by-key fallback order. Unknown names in
+    /// a fieldset are silently skipped — that's how cascade-delete drift, and
+    /// in-flight half-applied writes, stay safe to read.
     pub fn fields(&self, collection: &str) -> Vec<Arc<Field>> {
+        let raw = self.fields_unordered(collection);
+
+        let mut by_name: std::collections::HashMap<String, Arc<Field>> = raw
+            .iter()
+            .map(|f| (f.name.clone(), f.clone()))
+            .collect();
+
+        let mut ordered: Vec<Arc<Field>> = Vec::with_capacity(raw.len());
+        let mut seen = std::collections::HashSet::new();
+
+        for fs in self.auto_add_fieldsets(collection) {
+            for name in &fs.fields {
+                if seen.insert(name.clone()) {
+                    if let Some(f) = by_name.remove(name) {
+                        ordered.push(f);
+                    }
+                }
+            }
+        }
+
+        // Fields not mentioned in any auto_add set — alphabetical fallback by
+        // the key the store already gave us (project, version, name).
+        for f in raw {
+            if !seen.contains(&f.name) {
+                ordered.push(f);
+            }
+        }
+
+        ordered
+    }
+
+    /// First field with the given `(collection, name)` across self + direct deps.
+    pub fn field(&self, collection: &str, name: &str) -> Option<Arc<Field>> {
+        self.dependencies.iter().find_map(|(project_id, version)| {
+            self.store
+                .fields()
+                .get(&Field::to_path(project_id, version, collection, name))
+        })
+    }
+
+    /// Raw field list (no fieldset ordering applied). Used as the input to
+    /// `fields()` and internally by create/delete cascade logic.
+    fn fields_unordered(&self, collection: &str) -> Vec<Arc<Field>> {
         self.dependencies
             .iter()
             .flat_map(|(project_id, version)| {
@@ -163,13 +220,44 @@ impl VersionSchema {
             .collect()
     }
 
-    /// First field with the given `(collection, name)` across self + direct deps.
-    pub fn field(&self, collection: &str, name: &str) -> Option<Arc<Field>> {
+    /// All fieldsets across self + direct deps for a given collection.
+    pub fn fieldsets(&self, collection: &str) -> Vec<Arc<Fieldset>> {
+        self.dependencies
+            .iter()
+            .flat_map(|(project_id, version)| {
+                let prefix =
+                    format!("{project_id}/versions/{version}/fieldsets/{collection}/");
+                self.store
+                    .fieldsets()
+                    .list(&prefix)
+                    .into_iter()
+                    .map(|(_, fs)| fs)
+            })
+            .collect()
+    }
+
+    /// First fieldset matching `(collection, name)` across self + direct deps.
+    pub fn fieldset(&self, collection: &str, name: &str) -> Option<Arc<Fieldset>> {
         self.dependencies.iter().find_map(|(project_id, version)| {
             self.store
-                .fields()
-                .get(&Field::to_path(project_id, version, collection, name))
+                .fieldsets()
+                .get(&Fieldset::to_path(project_id, version, collection, name))
         })
+    }
+
+    /// Auto-add fieldsets only, scoped to this project+version (deps don't
+    /// influence ordering — each project's fields land in its own sets).
+    fn auto_add_fieldsets(&self, collection: &str) -> Vec<Arc<Fieldset>> {
+        let prefix = format!(
+            "{}/versions/{}/fieldsets/{}/",
+            self.project_id, self.version, collection
+        );
+        self.store
+            .fieldsets()
+            .list(&prefix)
+            .into_iter()
+            .filter_map(|(_, fs)| if fs.auto_add { Some(fs) } else { None })
+            .collect()
     }
 
     // --- Writes: scoped to (self.project_id, self.version), draft-only ---
@@ -206,7 +294,22 @@ impl VersionSchema {
         self.require_writable()?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
-        Ok(self.store.collections().create(input)?)
+        let collection_name = input.name.clone();
+        let collection = self.store.collections().create(input)?;
+        // Eagerly materialize the default fieldset so the file is visible on
+        // disk from the start, rather than appearing the first time a field
+        // is added. Failures here are intentionally non-fatal — a missing
+        // default just falls back to alphabetical ordering until repaired.
+        let _ = self.store.fieldsets().create(Fieldset {
+            project: self.project_id.clone(),
+            version: self.version.clone(),
+            collection: collection_name,
+            name: DEFAULT_FIELDSET_NAME.to_string(),
+            label: String::new(),
+            fields: Vec::new(),
+            auto_add: true,
+        });
+        Ok(collection)
     }
 
     pub fn update_collection(
@@ -219,8 +322,9 @@ impl VersionSchema {
         Ok(self.store.collections().update(&key, patch)?)
     }
 
-    /// Deletes the collection AND every field belonging to it (in this
-    /// version). Field cascade matches the prior handler behavior.
+    /// Deletes the collection AND every field + fieldset belonging to it
+    /// (in this version). Field cascade matches the prior handler behavior;
+    /// fieldset cascade prevents orphaned ordering metadata.
     pub fn delete_collection(&self, name: &str) -> Result<(), VersionSchemaError> {
         self.require_writable()?;
         let field_prefix = format!(
@@ -228,6 +332,11 @@ impl VersionSchema {
             self.project_id, self.version, name
         );
         let _ = self.store.fields().delete_by_prefix(&field_prefix);
+        let fieldset_prefix = format!(
+            "{}/versions/{}/fieldsets/{}/",
+            self.project_id, self.version, name
+        );
+        let _ = self.store.fieldsets().delete_by_prefix(&fieldset_prefix);
         let key = Collection::to_path(&self.project_id, &self.version, name);
         Ok(self.store.collections().delete(&key)?)
     }
@@ -236,7 +345,11 @@ impl VersionSchema {
         self.require_writable()?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
-        Ok(self.store.fields().create(input)?)
+        let collection = input.collection.clone();
+        let name = input.name.clone();
+        let field = self.store.fields().create(input)?;
+        self.append_to_auto_add_sets(&collection, &name);
+        Ok(field)
     }
 
     pub fn update_field(
@@ -257,7 +370,127 @@ impl VersionSchema {
     ) -> Result<(), VersionSchemaError> {
         self.require_writable()?;
         let key = Field::to_path(&self.project_id, &self.version, collection, name);
-        Ok(self.store.fields().delete(&key)?)
+        self.store.fields().delete(&key)?;
+        // Best-effort cascade. The read path already tolerates dangling names
+        // by skipping unknowns, so a crash between these two writes leaves
+        // the system in a safe (if mildly stale) state.
+        self.remove_from_all_fieldsets(collection, name);
+        Ok(())
+    }
+
+    pub fn create_fieldset(
+        &self,
+        mut input: Fieldset,
+    ) -> Result<Arc<Fieldset>, VersionSchemaError> {
+        self.require_writable()?;
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.fieldsets().create(input)?)
+    }
+
+    pub fn update_fieldset(
+        &self,
+        collection: &str,
+        name: &str,
+        patch: FieldsetUpdate,
+    ) -> Result<Arc<Fieldset>, VersionSchemaError> {
+        self.require_writable()?;
+        let key = Fieldset::to_path(&self.project_id, &self.version, collection, name);
+        Ok(self.store.fieldsets().update(&key, patch)?)
+    }
+
+    pub fn delete_fieldset(
+        &self,
+        collection: &str,
+        name: &str,
+    ) -> Result<(), VersionSchemaError> {
+        self.require_writable()?;
+        let key = Fieldset::to_path(&self.project_id, &self.version, collection, name);
+        Ok(self.store.fieldsets().delete(&key)?)
+    }
+
+    /// Append `field_name` to every `auto_add` fieldset in this project+version
+    /// for the given collection. If none exists, lazy-create the default,
+    /// seeded with every existing field in this project+version so collections
+    /// that predate the feature don't end up with a partial default. The new
+    /// `field_name` is appended last regardless.
+    fn append_to_auto_add_sets(&self, collection: &str, field_name: &str) {
+        let auto_sets = self.auto_add_fieldsets(collection);
+        if auto_sets.is_empty() {
+            let prefix = format!(
+                "{}/versions/{}/fields/{}/",
+                self.project_id, self.version, collection
+            );
+            let mut seed: Vec<String> = self
+                .store
+                .fields()
+                .list(&prefix)
+                .into_iter()
+                .map(|(_, f)| f.name.clone())
+                .filter(|n| n != field_name)
+                .collect();
+            seed.push(field_name.to_string());
+            let _ = self.store.fieldsets().create(Fieldset {
+                project: self.project_id.clone(),
+                version: self.version.clone(),
+                collection: collection.to_string(),
+                name: DEFAULT_FIELDSET_NAME.to_string(),
+                label: String::new(),
+                fields: seed,
+                auto_add: true,
+            });
+            return;
+        }
+        for fs in auto_sets {
+            if fs.fields.iter().any(|n| n == field_name) {
+                continue;
+            }
+            let mut next = fs.fields.clone();
+            next.push(field_name.to_string());
+            let key = Fieldset::to_path(
+                &self.project_id,
+                &self.version,
+                collection,
+                &fs.name,
+            );
+            let _ = self.store.fieldsets().update(
+                &key,
+                FieldsetUpdate {
+                    label: None,
+                    fields: Some(next),
+                    auto_add: None,
+                },
+            );
+        }
+    }
+
+    /// Strip `field_name` from every fieldset in this project+version's view of
+    /// the collection. Touches only sets that actually reference the name.
+    fn remove_from_all_fieldsets(&self, collection: &str, field_name: &str) {
+        let prefix = format!(
+            "{}/versions/{}/fieldsets/{}/",
+            self.project_id, self.version, collection
+        );
+        let sets = self.store.fieldsets().list(&prefix);
+        for (key, fs) in sets {
+            if !fs.fields.iter().any(|n| n == field_name) {
+                continue;
+            }
+            let next: Vec<String> = fs
+                .fields
+                .iter()
+                .filter(|n| *n != field_name)
+                .cloned()
+                .collect();
+            let _ = self.store.fieldsets().update(
+                &key,
+                FieldsetUpdate {
+                    label: None,
+                    fields: Some(next),
+                    auto_add: None,
+                },
+            );
+        }
     }
 }
 

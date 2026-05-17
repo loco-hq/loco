@@ -1,0 +1,23 @@
+description: "An ordered, named subset of a collection's fields, for driving dynamic UIs"
+pathTemplate: "${project}/versions/${version}/fieldsets/${collection}/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  collection:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+  fields:
+    type: list
+    items: string
+  auto_add:
+    type: boolean

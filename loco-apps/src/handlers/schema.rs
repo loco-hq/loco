@@ -10,7 +10,9 @@ use crate::http::response::{
 };
 use crate::http::scope::VersionScope;
 use crate::server::AppState;
-use crate::{Collection, CollectionUpdate, Field, FieldUpdate, ManifestUpdate};
+use crate::{
+    Collection, CollectionUpdate, Field, Fieldset, FieldsetUpdate, FieldUpdate, ManifestUpdate,
+};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{get, post};
@@ -38,6 +40,20 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/{user}/{project}/{version}/field/{collection}/{name}",
             axum::routing::put(update_field).delete(delete_field),
+        )
+        .route(
+            "/{user}/{project}/{version}/fieldset",
+            post(create_fieldset),
+        )
+        .route(
+            "/{user}/{project}/{version}/fieldset/{collection}/list",
+            get(list_fieldsets),
+        )
+        .route(
+            "/{user}/{project}/{version}/fieldset/{collection}/{name}",
+            get(get_fieldset)
+                .put(update_fieldset)
+                .delete(delete_fieldset),
         )
 }
 
@@ -136,6 +152,54 @@ pub async fn delete_field(
     Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
 ) -> Response {
     match scope.schema.delete_field(&collection, &name) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn create_fieldset(scope: VersionScope, Json(input): Json<Fieldset>) -> Response {
+    match scope.schema.create_fieldset(input) {
+        Ok(fs) => (StatusCode::CREATED, ApiResponse::success(fs)).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn list_fieldsets(
+    scope: VersionScope,
+    Path((_, _, _, collection)): Path<(String, String, String, String)>,
+) -> Response {
+    ApiResponse::success(scope.schema.fieldsets(&collection)).into_response()
+}
+
+pub async fn get_fieldset(
+    scope: VersionScope,
+    Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
+) -> Response {
+    match scope.schema.fieldset(&collection, &name) {
+        Some(fs) => ApiResponse::success(fs).into_response(),
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            &format!("fieldset not found: {collection}/{name}"),
+        ),
+    }
+}
+
+pub async fn update_fieldset(
+    scope: VersionScope,
+    Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
+    Json(patch): Json<FieldsetUpdate>,
+) -> Response {
+    match scope.schema.update_fieldset(&collection, &name, patch) {
+        Ok(fs) => ApiResponse::success(fs).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn delete_fieldset(
+    scope: VersionScope,
+    Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
+) -> Response {
+    match scope.schema.delete_fieldset(&collection, &name) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => version_schema_error_to_response(e),
     }
