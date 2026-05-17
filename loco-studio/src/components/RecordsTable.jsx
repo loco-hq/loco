@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { listRecords } from '../api.js';
 import { displayValue } from './recordFields.jsx';
+import { encodeId } from '../shortId.js';
 
 function previewText(record, fields) {
   for (const f of fields) {
@@ -44,14 +45,15 @@ export default function RecordsTable({
           .slice(0, 3)
           .map((f) => `${f.name}: ${displayValue(f, rec.fields[f.name])}`)
           .join(' · ');
+        const shortId = encodeId(rec.id);
         return (
           <Link
             key={rec.id}
-            to={`${collectionPath}/records/${rec.id}?site=${siteParam}`}
+            to={`${collectionPath}/records/${shortId}?site=${siteParam}`}
             className="list-row"
           >
             <div className="list-row-main">
-              <span className="list-row-name">{rec.id}</span>
+              <span className="list-row-name">{shortId}</span>
               {preview && <span className="list-row-label">{preview}</span>}
               <span className="list-row-meta">{summary}</span>
             </div>

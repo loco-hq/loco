@@ -2,9 +2,18 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRecord, deleteRecord, listFields } from '../api.js';
 import { displayValue } from './recordFields.jsx';
+import { encodeId, decodeId } from '../shortId.js';
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
 
 export default function RecordDetail() {
-  const { user, project, version, name: collection, recordId } = useParams();
+  const { user, project, version, name: collection, recordId: shortId } = useParams();
+  const recordId = decodeId(shortId);
   const [searchParams] = useSearchParams();
   const siteName = searchParams.get('site');
   const navigate = useNavigate();
@@ -42,12 +51,12 @@ export default function RecordDetail() {
     <>
       <section className="detail-header">
         <div className="detail-header-row">
-          <h2>{record.id}</h2>
-          <Link to={`${collectionPath}/records/${record.id}/edit${siteParam}`} className="btn">
+          <h2>{encodeId(record.id)}</h2>
+          <Link to={`${collectionPath}/records/${encodeId(record.id)}/edit${siteParam}`} className="btn">
             Edit
           </Link>
         </div>
-        <p className="resource-id">{record.id}</p>
+        <p className="resource-id">{encodeId(record.id)}</p>
         <p className="detail-meta">Site: <code>{siteName}</code></p>
       </section>
 
@@ -80,14 +89,14 @@ export default function RecordDetail() {
           <div className="list-row">
             <div className="list-row-main">
               <span className="list-row-name">created</span>
-              <span className="list-row-label">{record.created_at}</span>
+              <span className="list-row-label" title={record.created_at}>{formatDate(record.created_at)}</span>
               <span className="list-row-meta">by {record.created_by}</span>
             </div>
           </div>
           <div className="list-row">
             <div className="list-row-main">
               <span className="list-row-name">updated</span>
-              <span className="list-row-label">{record.updated_at}</span>
+              <span className="list-row-label" title={record.updated_at}>{formatDate(record.updated_at)}</span>
               <span className="list-row-meta">by {record.updated_by}</span>
             </div>
           </div>
