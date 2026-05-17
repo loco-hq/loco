@@ -558,6 +558,102 @@ a.list-row-main:hover {
   opacity: 0.5;
 }
 
+/* --- Records table --- */
+
+.records-table-wrap {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: auto;
+  background: var(--canvas-default);
+}
+
+.records-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.records-table thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: var(--canvas-subtle);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-muted);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.records-table thead th:last-child {
+  border-right: none;
+}
+
+.records-table tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-muted);
+  border-right: 1px solid var(--border-muted);
+  color: var(--fg-default);
+  vertical-align: top;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.records-table tbody td:last-child {
+  border-right: none;
+}
+
+.records-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.records-row {
+  cursor: pointer;
+}
+
+.records-row:hover td {
+  background: var(--canvas-subtle);
+}
+
+.records-th-id,
+.records-td-id {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.records-id-link {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent-fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.records-id-link:hover {
+  text-decoration: underline;
+}
+
+.records-td-integer,
+.records-td-float {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.records-td-boolean {
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.records-td-empty {
+  color: var(--fg-subtle);
+}
+
 /* --- Collections grouped by namespace --- */
 
 .namespace-section {

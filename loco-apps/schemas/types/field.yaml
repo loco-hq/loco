@@ -16,3 +16,5 @@ properties:
     createOnly: true
   type:
     type: string
+  label:
+    type: string

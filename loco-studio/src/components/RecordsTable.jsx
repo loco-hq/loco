@@ -1,18 +1,8 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { listRecords } from '../api.js';
 import { displayValue } from './recordFields.jsx';
 import { encodeId } from '../shortId.js';
-
-function previewText(record, fields) {
-  for (const f of fields) {
-    if (f.type === 'string' || f.type === 'list') {
-      const v = record.fields[f.name];
-      if (v !== null && v !== undefined && v !== '') return String(v);
-    }
-  }
-  return null;
-}
 
 export default function RecordsTable({
   projectId,
@@ -21,6 +11,7 @@ export default function RecordsTable({
   fields,
   collectionPath,
 }) {
+  const navigate = useNavigate();
   const { data: records = [], isLoading, error } = useQuery({
     queryKey: ['records', projectId, siteName, collection],
     queryFn: () => listRecords(projectId, siteName, collection),
@@ -38,28 +29,58 @@ export default function RecordsTable({
   const siteParam = encodeURIComponent(siteName);
 
   return (
-    <div className="list">
-      {records.map((rec) => {
-        const preview = previewText(rec, fields);
-        const summary = fields
-          .slice(0, 3)
-          .map((f) => `${f.name}: ${displayValue(f, rec.fields[f.name])}`)
-          .join(' · ');
-        const shortId = encodeId(rec.id);
-        return (
-          <Link
-            key={rec.id}
-            to={`${collectionPath}/records/${shortId}?site=${siteParam}`}
-            className="list-row"
-          >
-            <div className="list-row-main">
-              <span className="list-row-name">{shortId}</span>
-              {preview && <span className="list-row-label">{preview}</span>}
-              <span className="list-row-meta">{summary}</span>
-            </div>
-          </Link>
-        );
-      })}
+    <div className="records-table-wrap">
+      <table className="records-table">
+        <thead>
+          <tr>
+            <th className="records-th-id">ID</th>
+            {fields.map((f) => (
+              <th key={f.name} title={f.label || f.name}>
+                {f.label || f.name}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((rec) => {
+            const shortId = encodeId(rec.id);
+            const href = `${collectionPath}/records/${shortId}?site=${siteParam}`;
+            return (
+              <tr
+                key={rec.id}
+                onClick={() => navigate(href)}
+                className="records-row"
+              >
+                <td className="records-td-id">
+                  <Link
+                    to={href}
+                    onClick={(e) => e.stopPropagation()}
+                    className="records-id-link"
+                  >
+                    {shortId}
+                  </Link>
+                </td>
+                {fields.map((f) => {
+                  const v = rec.fields[f.name];
+                  const rendered = displayValue(f, v);
+                  const isEmpty = rendered === '—';
+                  return (
+                    <td
+                      key={f.name}
+                      className={`records-td records-td-${f.type}${
+                        isEmpty ? ' records-td-empty' : ''
+                      }`}
+                      title={isEmpty ? '' : rendered}
+                    >
+                      {rendered}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -145,6 +145,7 @@ export default function CollectionDetail() {
                     className="list-row-main"
                   >
                     <span className="list-row-name">{f.name}</span>
+                    {f.label && <span className="list-row-label">{f.label}</span>}
                     <span className="list-row-meta">{f.type}</span>
                   </Link>
                   {orderTarget && (
@@ -184,6 +185,7 @@ export default function CollectionDetail() {
               <div key={`${f.project}/${f.version}/${f.name}`} className="list-row">
                 <div className="list-row-main">
                   <span className="list-row-name">{f.name}</span>
+                  {f.label && <span className="list-row-label">{f.label}</span>}
                   <span className="list-row-meta">{f.type}</span>
                   <span className="list-row-meta">{f.project}@{f.version}</span>
                 </div>

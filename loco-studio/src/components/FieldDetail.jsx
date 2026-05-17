@@ -42,7 +42,7 @@ export default function FieldDetail() {
     <>
       <section className="detail-header">
         <div className="detail-header-row">
-          <h2>{field.name}</h2>
+          <h2>{field.label || field.name}</h2>
           <Link
             to={`/projects/${user}/${project}/versions/${version}/collections/${collection}/fields/${fieldName}/edit`}
             className="btn"

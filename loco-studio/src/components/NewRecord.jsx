@@ -54,7 +54,7 @@ export default function NewRecord() {
       <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         {fields.map((f) => (
           <div key={f.name} className="form-field">
-            <label htmlFor={f.name}>{f.name}</label>
+            <label htmlFor={f.name}>{f.label || f.name}</label>
             <FieldInput
               field={f}
               value={draft[f.name]}

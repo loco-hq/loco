@@ -25,6 +25,7 @@ export default function NewField() {
       collection,
       name: f.name.value,
       type: f.type.value,
+      label: f.label.value,
     });
   };
 
@@ -36,6 +37,10 @@ export default function NewField() {
         <div className="form-field">
           <label htmlFor="name">Name</label>
           <input id="name" name="name" required pattern="[a-z][a-z0-9_]*" placeholder="e.g. title" />
+        </div>
+        <div className="form-field">
+          <label htmlFor="label">Label</label>
+          <input id="label" name="label" placeholder="e.g. Title" />
         </div>
         <div className="form-field">
           <label htmlFor="type">Type</label>

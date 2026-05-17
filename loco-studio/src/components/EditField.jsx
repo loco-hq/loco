@@ -26,7 +26,7 @@ export default function EditField() {
   const handleSubmit = (e) => {
     e.preventDefault();
     const f = e.target.elements;
-    update.mutate({ type: f.type.value });
+    update.mutate({ type: f.type.value, label: f.label.value });
   };
 
   if (error) return <p className="error">Error: {error.message}</p>;
@@ -44,11 +44,15 @@ export default function EditField() {
   return (
     <div className="form-page">
       <h2>Edit field</h2>
-      <p className="form-help">Field name is immutable. Update the type.</p>
+      <p className="form-help">Field name is immutable. Update the label or type.</p>
       <form onSubmit={handleSubmit}>
         <div className="form-field">
           <label htmlFor="name">Name</label>
           <input id="name" value={field.name} disabled />
+        </div>
+        <div className="form-field">
+          <label htmlFor="label">Label</label>
+          <input id="label" name="label" defaultValue={field.label || ''} placeholder="e.g. Title" />
         </div>
         <div className="form-field">
           <label htmlFor="type">Type</label>
