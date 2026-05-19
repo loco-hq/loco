@@ -13,8 +13,7 @@ use crate::shortid;
 #[derive(Serialize)]
 pub struct RecordView {
     pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dataset_id: Option<String>,
+    pub dataset_id: String,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,

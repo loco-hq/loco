@@ -94,7 +94,7 @@ impl DataAdapter for SqliteAdapter {
                     serde_json::from_str(&fields_json).unwrap_or_default();
                 Ok(Record {
                     id: row.get(0)?,
-                    dataset_id: Some(dataset_id.to_string()),
+                    dataset_id: dataset_id.to_string(),
                     created_at: row.get(1)?,
                     created_by: row.get(2)?,
                     updated_at: row.get(3)?,
@@ -179,7 +179,7 @@ impl DataAdapter for SqliteAdapter {
                     serde_json::from_str(&fields_json).unwrap_or_default();
                 Ok(Record {
                     id: row.get(0)?,
-                    dataset_id: Some(dataset_id.to_string()),
+                    dataset_id: dataset_id.to_string(),
                     created_at: row.get(1)?,
                     created_by: row.get(2)?,
                     updated_at: row.get(3)?,

@@ -7,8 +7,7 @@ use crate::value::Value;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Record {
     pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dataset_id: Option<String>,
+    pub dataset_id: String,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,
@@ -38,7 +37,7 @@ impl Record {
         let now = chrono::Utc::now().to_rfc3339();
         Record {
             id: uuid::Uuid::new_v4().to_string(),
-            dataset_id: Some(dataset_id.to_string()),
+            dataset_id: dataset_id.to_string(),
             created_at: now.clone(),
             created_by: req.user.clone(),
             updated_at: now,
