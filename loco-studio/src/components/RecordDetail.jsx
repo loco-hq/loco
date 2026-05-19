@@ -2,7 +2,6 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRecord, deleteRecord, listFields } from '../api.js';
 import { displayValue } from './recordFields.jsx';
-import { encodeId, decodeId } from '../shortId.js';
 
 function formatDate(iso) {
   if (!iso) return '';
@@ -12,8 +11,7 @@ function formatDate(iso) {
 }
 
 export default function RecordDetail() {
-  const { user, project, version, name: collection, recordId: shortId } = useParams();
-  const recordId = decodeId(shortId);
+  const { user, project, version, name: collection, recordId } = useParams();
   const [searchParams] = useSearchParams();
   const siteName = searchParams.get('site');
   const navigate = useNavigate();
@@ -51,12 +49,12 @@ export default function RecordDetail() {
     <>
       <section className="detail-header">
         <div className="detail-header-row">
-          <h2>{encodeId(record.id)}</h2>
-          <Link to={`${collectionPath}/records/${encodeId(record.id)}/edit${siteParam}`} className="btn">
+          <h2>{record.id}</h2>
+          <Link to={`${collectionPath}/records/${record.id}/edit${siteParam}`} className="btn">
             Edit
           </Link>
         </div>
-        <p className="resource-id">{encodeId(record.id)}</p>
+        <p className="resource-id">{record.id}</p>
         <p className="detail-meta">Site: <code>{siteName}</code></p>
       </section>
 

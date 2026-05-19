@@ -3,11 +3,9 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRecord, updateRecord, listFields } from '../api.js';
 import { FieldInput, buildPayload } from './recordFields.jsx';
-import { encodeId, decodeId } from '../shortId.js';
 
 export default function EditRecord() {
-  const { user, project, version, name: collection, recordId: shortId } = useParams();
-  const recordId = decodeId(shortId);
+  const { user, project, version, name: collection, recordId } = useParams();
   const [searchParams] = useSearchParams();
   const siteName = searchParams.get('site');
   const navigate = useNavigate();
@@ -15,7 +13,7 @@ export default function EditRecord() {
   const projectId = `${user}/${project}`;
   const collectionPath = `/projects/${user}/${project}/versions/${version}/collections/${collection}`;
   const siteParam = siteName ? `?site=${encodeURIComponent(siteName)}` : '';
-  const recordPath = `${collectionPath}/records/${shortId}${siteParam}`;
+  const recordPath = `${collectionPath}/records/${recordId}${siteParam}`;
 
   const { data: record, isLoading, error } = useQuery({
     queryKey: ['record', projectId, siteName, collection, recordId],
@@ -55,7 +53,7 @@ export default function EditRecord() {
   return (
     <div className="form-page">
       <h2>Edit record</h2>
-      <p className="form-help">Site: <code>{siteName}</code> · ID: <code>{encodeId(record.id)}</code></p>
+      <p className="form-help">Site: <code>{siteName}</code> · ID: <code>{record.id}</code></p>
       <form onSubmit={(e) => { e.preventDefault(); update.mutate(); }}>
         {fields.map((f) => (
           <div key={f.name} className="form-field">

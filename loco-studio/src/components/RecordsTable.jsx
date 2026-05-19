@@ -2,7 +2,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { listRecords } from '../api.js';
 import { displayValue } from './recordFields.jsx';
-import { encodeId } from '../shortId.js';
 
 export default function RecordsTable({
   projectId,
@@ -43,8 +42,7 @@ export default function RecordsTable({
         </thead>
         <tbody>
           {records.map((rec) => {
-            const shortId = encodeId(rec.id);
-            const href = `${collectionPath}/records/${shortId}?site=${siteParam}`;
+            const href = `${collectionPath}/records/${rec.id}?site=${siteParam}`;
             return (
               <tr
                 key={rec.id}
@@ -57,7 +55,7 @@ export default function RecordsTable({
                     onClick={(e) => e.stopPropagation()}
                     className="records-id-link"
                   >
-                    {shortId}
+                    {rec.id}
                   </Link>
                 </td>
                 {fields.map((f) => {

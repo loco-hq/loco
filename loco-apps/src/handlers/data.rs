@@ -8,6 +8,7 @@ use axum::{Json, Router};
 
 use loco_lake::{InsertRequest, UpdatePatch, Value};
 
+use crate::http::record_view::RecordView;
 use crate::http::response::{
     ApiResponse, error_response, lake_error_to_response, validation_error_response,
 };
@@ -43,7 +44,9 @@ pub async fn add(
         .data_adapter
         .insert(&scope.dataset_id(), &scope.collection_key, req)
     {
-        Ok(rec) => (StatusCode::CREATED, ApiResponse::success(rec)).into_response(),
+        Ok(rec) => {
+            (StatusCode::CREATED, ApiResponse::success(RecordView::from(rec))).into_response()
+        }
         Err(e) => lake_error_to_response(e),
     }
 }
@@ -54,11 +57,14 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
         .list(&scope.dataset_id(), &scope.collection_key)
     {
         Ok(records) => {
+            let views: Vec<RecordView> = records.into_iter().map(RecordView::from).collect();
+            // Validate using the wire-form id so diagnostic paths match what
+            // clients see in the response body.
             let report = scope.validate_records(
-                records.iter().map(|r| (r.id.as_str(), &r.fields)),
+                views.iter().map(|v| (v.id.as_str(), &v.fields)),
                 ValidationMode::Read,
             );
-            ApiResponse::success_with_diagnostics(records, report.diagnostics).into_response()
+            ApiResponse::success_with_diagnostics(views, report.diagnostics).into_response()
         }
         Err(e) => lake_error_to_response(e),
     }
@@ -71,7 +77,8 @@ pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Resp
     {
         Ok(Some(record)) => {
             let report = scope.validate(&record.fields, ValidationMode::Read);
-            ApiResponse::success_with_diagnostics(record, report.diagnostics).into_response()
+            ApiResponse::success_with_diagnostics(RecordView::from(record), report.diagnostics)
+                .into_response()
         }
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
         Err(e) => lake_error_to_response(e),
@@ -106,7 +113,7 @@ pub async fn update(
         .data_adapter
         .update(&scope.dataset_id(), scope.collection_key(), &scope.id, patch)
     {
-        Ok(rec) => ApiResponse::success(rec).into_response(),
+        Ok(rec) => ApiResponse::success(RecordView::from(rec)).into_response(),
         Err(e) => lake_error_to_response(e),
     }
 }
