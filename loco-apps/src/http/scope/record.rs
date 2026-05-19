@@ -8,7 +8,6 @@ use serde::Deserialize;
 
 use crate::auth::AuthUser;
 use crate::server::AppState;
-use crate::shortid;
 use crate::validation::{ValidationMode, ValidationReport};
 
 use loco_lake::Value;
@@ -62,8 +61,6 @@ impl FromRequestParts<Arc<AppState>> for RecordScope {
     ) -> Result<Self, Self::Rejection> {
         let collection = CollectionScope::from_request_parts(parts, state).await?;
         let RecordPathParams { id } = read_path_params(parts, state).await?;
-        // URLs carry short-ids; lake stores canonical hyphenated UUIDs.
-        let id = shortid::decode(&id);
         Ok(RecordScope { collection, id })
     }
 }

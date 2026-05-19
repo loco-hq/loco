@@ -7,7 +7,6 @@ pub mod auth;
 pub mod handlers;
 pub mod http;
 pub mod server;
-pub mod shortid;
 pub mod validation;
 
 #[cfg(test)]

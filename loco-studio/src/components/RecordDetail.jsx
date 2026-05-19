@@ -2,6 +2,7 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRecord, deleteRecord, listFields } from '../api.js';
 import { displayValue } from './recordFields.jsx';
+import RecordId from './RecordId.jsx';
 
 function formatDate(iso) {
   if (!iso) return '';
@@ -49,12 +50,11 @@ export default function RecordDetail() {
     <>
       <section className="detail-header">
         <div className="detail-header-row">
-          <h2>{record.id}</h2>
+          <h2>Record <RecordId id={record.id} /></h2>
           <Link to={`${collectionPath}/records/${record.id}/edit${siteParam}`} className="btn">
             Edit
           </Link>
         </div>
-        <p className="resource-id">{record.id}</p>
         <p className="detail-meta">Site: <code>{siteName}</code></p>
       </section>
 

@@ -1,7 +1,8 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { listRecords } from '../api.js';
 import { displayValue } from './recordFields.jsx';
+import RecordId from './RecordId.jsx';
 
 export default function RecordsTable({
   projectId,
@@ -50,13 +51,7 @@ export default function RecordsTable({
                 className="records-row"
               >
                 <td className="records-td-id">
-                  <Link
-                    to={href}
-                    onClick={(e) => e.stopPropagation()}
-                    className="records-id-link"
-                  >
-                    {rec.id}
-                  </Link>
+                  <RecordId id={rec.id} />
                 </td>
                 {fields.map((f) => {
                   const v = rec.fields[f.name];

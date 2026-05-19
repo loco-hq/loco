@@ -3,6 +3,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRecord, updateRecord, listFields } from '../api.js';
 import { FieldInput, buildPayload } from './recordFields.jsx';
+import RecordId from './RecordId.jsx';
 
 export default function EditRecord() {
   const { user, project, version, name: collection, recordId } = useParams();
@@ -53,7 +54,7 @@ export default function EditRecord() {
   return (
     <div className="form-page">
       <h2>Edit record</h2>
-      <p className="form-help">Site: <code>{siteName}</code> · ID: <code>{record.id}</code></p>
+      <p className="form-help">Site: <code>{siteName}</code> · ID: <RecordId id={record.id} /></p>
       <form onSubmit={(e) => { e.preventDefault(); update.mutate(); }}>
         {fields.map((f) => (
           <div key={f.name} className="form-field">

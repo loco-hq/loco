@@ -627,16 +627,54 @@ a.list-row-main:hover {
   white-space: nowrap;
 }
 
-.records-id-link {
+.record-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--accent-fg);
   font-weight: 600;
-  text-decoration: none;
+  color: var(--fg-muted);
+  background: var(--canvas-subtle);
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  line-height: 1.5;
 }
 
-.records-id-link:hover {
-  text-decoration: underline;
+.record-id:hover {
+  background: var(--canvas-inset);
+  color: var(--fg-default);
+}
+
+.record-id:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.record-id-copied,
+.record-id-copied:hover {
+  color: var(--success-fg);
+  border-color: var(--success-fg);
+  background: var(--canvas-default);
+}
+
+.record-id-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-subtle);
+}
+
+.record-id:hover .record-id-icon {
+  color: var(--fg-muted);
+}
+
+.record-id-copied .record-id-icon,
+.record-id-copied:hover .record-id-icon {
+  color: var(--success-fg);
 }
 
 .records-td-integer,
