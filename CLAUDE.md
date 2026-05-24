@@ -98,6 +98,16 @@ All frontend apps use the same stack:
 ### Frontend locations
 
 - `loco-studio/` — Schema management UI (port 5174)
+- `loco-ui/` — Reusable component library (no build; consumed via npm workspaces). Playground at port 5175 (`npm run dev -w loco-ui`).
+
+### loco-ui
+
+Field components for rendering schema metadata. Two layers:
+
+- **Primitives** — `TextField`, `NumberField`, `CheckboxField`, `ToggleField`. Uniform shell props: `id`, `label`, `description`, `error`, `required`, `disabled`, `value`, `onChange`, plus type-specific props.
+- **Dispatcher** — `<Field field={meta} variant?="..." />` picks a primitive from a hardcoded `type → variant → component` registry. `variant` can come from field metadata or be overridden at the call site.
+
+Styling is plain CSS via `.module.css` files co-located with each component. Shared design tokens (`--loco-*` CSS variables) live in `src/_shell/tokens.css` and must be imported once by the consumer (`import 'loco-ui/tokens.css'`).
 
 ## Rust Edition
 
