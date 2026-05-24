@@ -1,0 +1,25 @@
+{
+  "name": "loco-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./tokens.css": "./src/_shell/tokens.css"
+  },
+  "scripts": {
+    "dev": "vite --config playground/vite.config.js",
+    "build": "vite build --config playground/vite.config.js"
+  },
+  "peerDependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "vite": "^8.0.1"
+  }
+}

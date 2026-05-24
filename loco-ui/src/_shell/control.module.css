@@ -1,0 +1,38 @@
+.input {
+  font-family: var(--loco-font);
+  font-size: var(--loco-font-size);
+  line-height: var(--loco-line-height);
+  color: var(--loco-color-text);
+  background: var(--loco-color-bg);
+  border: 1px solid var(--loco-color-border);
+  border-radius: var(--loco-radius);
+  padding: 0 var(--loco-space-3);
+  height: var(--loco-control-height);
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+
+.input:hover:not(:disabled) {
+  border-color: var(--loco-color-border-strong);
+}
+
+.input:focus {
+  border-color: var(--loco-color-accent);
+  box-shadow: var(--loco-focus-ring);
+}
+
+.input:disabled {
+  background: var(--loco-color-disabled-bg);
+  color: var(--loco-color-disabled-text);
+  cursor: not-allowed;
+}
+
+.invalid {
+  border-color: var(--loco-color-danger-border);
+}
+
+.invalid:focus {
+  box-shadow: 0 0 0 3px rgba(209, 36, 47, 0.3);
+}

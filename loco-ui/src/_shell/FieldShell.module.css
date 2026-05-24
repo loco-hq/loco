@@ -1,0 +1,35 @@
+.shell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--loco-space-1);
+  font-family: var(--loco-font);
+  font-size: var(--loco-font-size);
+  line-height: var(--loco-line-height);
+  color: var(--loco-color-text);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--loco-space-2);
+}
+
+.label {
+  font-weight: 600;
+  color: var(--loco-color-text);
+}
+
+.required {
+  color: var(--loco-color-text-danger);
+  margin-left: 2px;
+}
+
+.description {
+  color: var(--loco-color-text-muted);
+  font-size: 12px;
+}
+
+.error {
+  color: var(--loco-color-text-danger);
+  font-size: 12px;
+}

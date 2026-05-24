@@ -1,0 +1,28 @@
+:root {
+  --loco-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --loco-font-size: 14px;
+  --loco-line-height: 1.4;
+
+  --loco-color-text: #1f2328;
+  --loco-color-text-muted: #59636e;
+  --loco-color-text-danger: #d1242f;
+  --loco-color-bg: #ffffff;
+  --loco-color-bg-subtle: #f6f8fa;
+  --loco-color-border: #d1d9e0;
+  --loco-color-border-strong: #818b98;
+  --loco-color-accent: #0969da;
+  --loco-color-accent-emphasis: #0550ae;
+  --loco-color-danger-border: #d1242f;
+  --loco-color-disabled-bg: #f6f8fa;
+  --loco-color-disabled-text: #818b98;
+
+  --loco-space-1: 4px;
+  --loco-space-2: 8px;
+  --loco-space-3: 12px;
+  --loco-space-4: 16px;
+
+  --loco-radius: 6px;
+  --loco-control-height: 32px;
+
+  --loco-focus-ring: 0 0 0 3px rgba(9, 105, 218, 0.3);
+}

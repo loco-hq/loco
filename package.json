@@ -1,0 +1,8 @@
+{
+  "name": "loco",
+  "private": true,
+  "workspaces": [
+    "loco-studio",
+    "loco-ui"
+  ]
+}

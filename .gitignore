@@ -1,5 +1,7 @@
 # Build artifacts
 target/
+node_modules/
+dist/
 
 # Cargo.lock is typically committed for binaries but ignored for libraries.
 # Since this is a workspace with both, we commit it — but noting for reference.

@@ -1,0 +1,60 @@
+body {
+  margin: 0;
+  padding: 32px;
+  background: var(--loco-color-bg);
+  font-family: var(--loco-font);
+  color: var(--loco-color-text);
+}
+
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.page h1 {
+  font-size: 24px;
+  margin: 0 0 24px;
+}
+
+.section {
+  margin-bottom: 40px;
+}
+
+.section h2 {
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--loco-color-text-muted);
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--loco-color-border);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 24px;
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cell-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--loco-color-text-muted);
+}
+
+.payload {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--loco-color-bg-subtle);
+  border-radius: var(--loco-radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre;
+}
