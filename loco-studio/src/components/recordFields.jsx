@@ -29,35 +29,6 @@ export function buildPayload(fields, draft) {
   return out;
 }
 
-export function FieldInput({ field, value, onChange }) {
-  if (field.type === 'boolean') {
-    return (
-      <input
-        type="checkbox"
-        checked={!!value}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    );
-  }
-  if (field.type === 'integer' || field.type === 'float') {
-    return (
-      <input
-        type="number"
-        step={field.type === 'integer' ? '1' : 'any'}
-        value={value ?? ''}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    );
-  }
-  return (
-    <input
-      type="text"
-      value={value ?? ''}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
-}
-
 export function displayValue(field, value) {
   if (value === null || value === undefined) return '—';
   if (field.type === 'boolean') return value ? '✓' : '✗';

@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listFields, addRecord, getCollection } from '../api.js';
-import { FieldInput, initialDraft, buildPayload } from './recordFields.jsx';
+import { Field } from 'loco-ui';
+import { initialDraft, buildPayload } from './recordFields.jsx';
 
 export default function NewRecord() {
   const { user, project, version, name: collection } = useParams();
@@ -54,8 +55,7 @@ export default function NewRecord() {
       <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         {fields.map((f) => (
           <div key={f.name} className="form-field">
-            <label htmlFor={f.name}>{f.label || f.name}</label>
-            <FieldInput
+            <Field
               field={f}
               value={draft[f.name]}
               onChange={(v) => setDraft({ ...draft, [f.name]: v })}

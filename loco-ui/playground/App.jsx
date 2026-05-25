@@ -5,7 +5,16 @@ import {
   NumberField,
   CheckboxField,
   ToggleField,
+  SelectField,
 } from 'loco-ui';
+
+const FIELD_TYPES = [
+  { value: 'string', label: 'string' },
+  { value: 'integer', label: 'integer' },
+  { value: 'float', label: 'float' },
+  { value: 'boolean', label: 'boolean' },
+  { value: 'list', label: 'list' },
+];
 
 function Section({ title, children }) {
   return (
@@ -127,6 +136,41 @@ export function App() {
         </Cell>
         <Cell label="Disabled">
           <ToggleField label="Locked" value={true} onChange={() => {}} disabled />
+        </Cell>
+      </Section>
+
+      <Section title="SelectField">
+        <Cell label="Default">
+          <SelectField label="Type" value="string" onChange={() => {}} options={FIELD_TYPES} />
+        </Cell>
+        <Cell label="With placeholder (empty)">
+          <SelectField
+            label="Dataset"
+            value=""
+            onChange={() => {}}
+            placeholder="None"
+            options={[
+              { value: 'dev', label: 'Dev' },
+              { value: 'prod', label: 'Prod' },
+            ]}
+          />
+        </Cell>
+        <Cell label="Required + error">
+          <SelectField
+            label="Version"
+            required
+            value=""
+            onChange={() => {}}
+            placeholder="Select a version…"
+            error="Version is required"
+            options={[
+              { value: '0.0.1', label: '0.0.1' },
+              { value: '0.0.2', label: '0.0.2' },
+            ]}
+          />
+        </Cell>
+        <Cell label="Disabled">
+          <SelectField label="Locked" value="string" onChange={() => {}} options={FIELD_TYPES} disabled />
         </Cell>
       </Section>
 

@@ -1,16 +1,18 @@
+import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
+import { TextField } from 'loco-ui';
 import { isLoggedIn, useLogin } from '../auth.js';
 import logoUrl from '../assets/logo.svg';
 
 export default function Login() {
   const navigate = useNavigate();
   const login = useLogin();
+  const [username, setUsername] = useState('');
 
   if (isLoggedIn()) return <Navigate to="/" replace />;
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    const username = e.target.elements.username.value;
     login.mutate(username, { onSuccess: () => navigate('/') });
   };
 
@@ -20,7 +22,12 @@ export default function Login() {
         <img src={logoUrl} alt="Loco" className="login-logo" />
         <p className="subtitle">Sign in to manage your schemas</p>
         <form onSubmit={handleSubmit}>
-          <input name="username" type="text" placeholder="Username" required />
+          <TextField
+            placeholder="Username"
+            required
+            value={username}
+            onChange={setUsername}
+          />
           <button type="submit" disabled={login.isPending}>Sign in</button>
         </form>
         {login.error && <p className="error">{login.error.message}</p>}

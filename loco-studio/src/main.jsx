@@ -4,6 +4,7 @@ import { createHashRouter, RouterProvider, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
+import 'loco-ui/tokens.css';
 import { isLoggedIn } from './auth.js';
 import Layout from './components/Layout.jsx';
 import Login from './components/Login.jsx';
