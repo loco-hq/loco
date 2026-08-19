@@ -23,13 +23,13 @@ Loco is a low-code backend for structured data — think Salesforce or Airtable,
 
 ## Next
 
-In order. Do not start later items until the one above is something you can trust.
+In order. Detail and PR slices live in [`HANDOFF.md`](HANDOFF.md). The identity target model is [`docs/identity.md`](docs/identity.md).
 
-1. **Finish the schema → form loop.** Collection fields need `description`, `required`, and maybe `variant`. Validate required fields on create/update. Drive record forms (and keep tables) from the `auto_add` fieldset. Register `SelectField` on the dispatcher. Stop offering `list` as a record field type until the validator and a control exist.
+1. **Identity PR stack.** Global Loco identities, person/org accounts, project `developer`/`editor` membership. Replaces site-scoped users, `METADATA_EDITOR_SITES`, and `require_can_edit_user`. Then public `/data` policy, schema read vs write, and a cross-origin proof page. Do not start from “add a site flag” — capability is on the member, not the site.
 
-2. **Make auth real enough to build on.** Password on login (the adapter already accepts one). Replace the hardcoded editor-site list with something declared — even a simple "this site may edit metadata" flag. Then API keys are actually useful for a CLI or MCP.
+2. **Finish the schema → form loop.** Collection fields need `description`, `required`, and maybe `variant`. Validate required fields on create/update. Drive record forms (and keep tables) from the `auto_add` fieldset. Register `SelectField` on the dispatcher. Stop offering `list` as a record field type until the validator and a control exist. Orthogonal to identity; if one person, do this after membership (identity PR 2).
 
-3. **Then interfaces.** MCP tools and a `loco` CLI on top of the same API. Not before (1) and (2).
+3. **Then interfaces.** MCP tools and a `loco` CLI on top of the same API. Not before membership is trustworthy. Surfaces sketched in `FUTURE_IDEAS.md`.
 
 ## Later
 

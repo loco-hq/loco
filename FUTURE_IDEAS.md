@@ -75,6 +75,8 @@ Command-line tool for humans and agents, talking to the same API.
 
 ## Security model
 
+Target identity model (person/org accounts, project membership, no application-user table) is in [`docs/identity.md`](docs/identity.md). The following is still later.
+
 ### Authentication adapters
 
 `AuthAdapter` and the local filesystem adapter exist. Future adapters:
