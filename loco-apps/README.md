@@ -1,86 +1,88 @@
 # loco-apps
 
-Axum web server that serves generated types via a multi-tenant REST API backed by loco-lake.
+Axum server that exposes generated schema types and a schemaless record lake over HTTP.
 
 ## Running
 
 ```bash
-cd loco-apps && cargo run
+cargo run -p loco-apps
 ```
 
-The server listens on `http://localhost:3000`.
+Listens on `http://localhost:3000`. Studio on `:5174` proxies `/api` here.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LOCO_ADAPTER` | `sqlite` | `sqlite` or `memory` |
-| `LOCO_DB_PATH` | `loco.db` | Path to SQLite database file |
+| `LOCO_DB_PATH` | `loco.db` | SQLite file path |
+| `LOCO_AUTH_ADAPTER` | `local` | Only `local` exists |
 
-## Tenants
+## How it boots
 
-Each tenant is a YAML file in `tenants/`:
+1. `build.rs` generates Rust types from `schemas/types/` via `loco_gen_schema::build::generate`
+2. `lib.rs` includes `$OUT_DIR/loco_generated.rs`
+3. `server::build_app()` loads instances from `schemas/instances/` into `SchemaStore`
+4. A lake adapter (`sqlite` / `memory`) and the local auth adapter (`auth/`) are constructed
+5. Routes are nested: `/data`, `/schema`, `/config`, `/auth`
 
-```yaml
-# tenants/acme.yaml
-name: "Acme Corp"
-```
+Instances are not compiled in. Changing a type definition requires a rebuild; changing an instance YAML is picked up on the next process start (or immediately, if the write went through the API).
 
-The filename (without `.yaml`) is the tenant ID used in requests.
+## Request identity
 
-Tenant is resolved from requests in this order:
-1. `X-Tenant-Id` header
-2. `?tenant=` query parameter
+There is no tenant header. A request names a **site**:
 
-Requests without a valid tenant receive a `400 Bad Request`.
+- `X-Project-Id: {user}/{project}`
+- `X-Site-Id: {site}`
+- `Authorization: Bearer <session or api key>` (optional)
 
-## Schemas
+`SiteScope` resolves the site, pins the lake to that site's dataset, and builds a read-only `VersionSchema` for the site's version. Missing auth becomes the synthetic `public` user.
 
-Type definitions and instances live in `schemas/`:
+`/schema` and `/config` writes additionally require:
+
+- a real session
+- the site to be on the metadata-editor allowlist (`loco/studio/studio`, `loco/cards/cards`)
+- the session username to match the `{user}` in the path
+- a draft version (name contains `-`) for `/schema` mutations
+
+## Routes
+
+### `/data/{collection}/…`
+
+Record CRUD against the site's dataset. Body for add/update is a JSON field map (not wrapped). Writes run `validation.rs` in create/update mode and reject errors. Reads attach diagnostics as warnings when stored data has drifted from the schema.
+
+Lake collection keys are `{user}/{project}.{name}`.
+
+### `/schema/{user}/{project}/{version}/…`
+
+Versioned metadata: manifest, collections, fields, fieldsets. Handlers go through `VersionScope` → `VersionSchema`.
+
+### `/config/…`
+
+Unversioned config: projects, datasets, sites, version create/list/delete. Creating a project bootstraps `0.0.1-dev` + `dev` dataset + `dev` site. Deleting a project cascades schema files and returns dataset names so the lake can be purged.
+
+### `/auth/…`
+
+`POST /login` (`{ "username" }` only), `POST /logout`, `GET /me`, users, API keys. Persistence is `auth/{user}/{project}/{site}/` (gitignored).
+
+## Schemas on disk
 
 ```
 schemas/
-├── types/              # Type definitions (collection.yaml, field.yaml)
-└── instances/          # Instance data organized by namespace
-    ├── loco/core/      # Framework collections (user)
-    └── ben/crm/        # App-specific collections (account, contact, opportunity)
+├── types/                 # Type definitions (rebuild to change)
+└── instances/
+    └── loco/              # Committed: core, studio, cards
+        ├── core/
+        ├── studio/
+        └── cards/
 ```
 
-Adding or modifying schema files requires a rebuild (`cargo build`) since codegen runs at build time via `build.rs`.
+`schemas/instances/*` other than `loco/` is gitignored. Hurl fixtures live under `tests/suites/*/fixtures/`.
 
-## API Endpoints
-
-Data endpoints take the qualified project from `X-Project-Id` and the site from `X-Site-Id`
-(or `?site=` query param as a fallback).
+## Tests
 
 ```bash
-# Insert a record
-curl -X POST 'http://localhost:3000/data/account/add' \
-  -H "X-Project-Id: ben/crm" -H "X-Site-Id: dev" \
-  -H "Content-Type: application/json" \
-  -d '{"fields": {"company": "Acme Corp", "active": true}, "owner": "alice"}'
-
-# List records
-curl 'http://localhost:3000/data/account/list' \
-  -H "X-Project-Id: ben/crm" -H "X-Site-Id: dev"
-
-# Get a record
-curl 'http://localhost:3000/data/account/get/{id}' \
-  -H "X-Project-Id: ben/crm" -H "X-Site-Id: dev"
-
-# Delete a record
-curl -X DELETE 'http://localhost:3000/data/account/delete/{id}' \
-  -H "X-Project-Id: ben/crm" -H "X-Site-Id: dev"
-
-# List type metadata
-curl 'http://localhost:3000/meta/ben/crm/collection/list'
+cargo test -p loco-apps
 ```
 
-## How It Boots
-
-1. `build.rs` generates Rust code from `schemas/` via `loco_gen_schema::build::generate`
-2. `main.rs` includes the generated code and calls `server::build_app()`
-3. `build_app()` loads tenants from `tenants/*.yaml`
-4. Generated `Collection::load_all_instances()` and `Field::load_all_instances()` provide metadata
-5. The selected data adapter (SQLite or in-memory) is initialized
-6. Axum routes are wired up with shared `AppState`
+`tests/hurl_runner.rs` builds the app against a tempdir (real `schemas/types/` + the suite's `fixtures/`) and runs every `.hurl` file in that suite.

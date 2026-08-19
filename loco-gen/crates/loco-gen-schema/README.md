@@ -1,14 +1,24 @@
 # loco-gen-schema
 
-YAML schema parsing, instance loading, and Rust code generation.
+YAML type parsing and Rust code generation. Runtime instance storage lives in `loco-schema-runtime`; this crate produces the types that crate stores.
 
-## What It Does
+## What it does
 
 1. Parses YAML type definitions into `TypeDef` structs
-2. Generates Rust source code — per-type structs with constructors and accessors, plus a `SchemaStore` with typed CRUD methods over a `SchemaRegistry`
-3. At runtime, loads instance YAML files from disk, validates them against their type definitions, and serves CRUD operations from a thread-safe in-memory registry
+2. Generates Rust source — per-type structs with constructors, accessors, `to_path` / `from_path` / `from_yaml`, an `Update` patch type, and a `SchemaInstance` impl
+3. Emits a `SchemaStore` that owns one `loco_schema_runtime::InstanceStore<T>` per type, each backed by `YamlFsAdapter`
 
-## Type Definitions
+Call it from a crate's `build.rs`:
+
+```rust
+fn main() {
+    loco_gen_schema::build::generate("schemas/types");
+}
+```
+
+That writes `$OUT_DIR/loco_generated.rs`. Instances are not scanned at build time.
+
+## Type definitions
 
 Type files live in `schemas/types/` and define a type's properties and on-disk layout:
 
@@ -49,98 +59,35 @@ properties:
 - `createOnly: true` — field is immutable after creation.
 - Every `${var}` in `pathTemplate` **must** be declared as a property with `type: slug` and `createOnly: true`. Parse fails otherwise.
 
-## Instance Files
+## Instance files
 
-Instances live under `schemas/instances/` at paths matching their type's `pathTemplate`, with `.yaml` appended:
+Instances live under `schemas/instances/` at paths matching their type's `pathTemplate`, with `.yaml` appended. Template-variable fields are extracted from the file path — don't repeat them in the YAML body.
 
-```yaml
-# schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml
-label: "Account"
-label_plural: "Accounts"
-```
+An instance's key **is** its path relative to `instances_dir` with `.yaml` stripped.
 
-Template-variable fields (`project`, `version`, `name` above) are extracted from the file path — don't repeat them in the YAML body.
+Loading and persistence are `SchemaStore::load` / `InstanceStore` in the generated code, backed by `loco_schema_runtime`. This crate no longer has a `SchemaRegistry`.
 
-### Namespace
-
-An instance's namespace IS its path relative to `instances_dir` with `.yaml` stripped:
-
-- `ben/crm/project.yaml` → `ben/crm/project`
-- `ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
-
-## Public API
-
-### Parsing
-
-```rust
-let type_def = parser::parse_schema(yaml_str, "collection")?;
-let type_def = parser::parse_schema_file(path)?;
-```
-
-### Instance scanning (low-level)
-
-```rust
-let instances = instance::scan_all(instances_dir, &type_defs)?;
-```
-
-Most consumers won't call this directly — it's wrapped by `SchemaRegistry::load`.
-
-### Registry (runtime)
-
-`SchemaRegistry` is the thread-safe in-memory store, backed by `RwLock<HashMap<...>>`. The generated `SchemaStore` wraps it; you rarely construct one directly.
-
-```rust
-let registry = registry::SchemaRegistry::load(instances_dir, &type_defs)?;
-registry.list_all_instances("collection");
-registry.get_instance("collection", "ben/crm/versions/0.0.1/collections/account");
-registry.create_instance("collection", key, fields)?;
-registry.update_instance("collection", key, fields)?;
-registry.delete_instance("collection", key)?;
-registry.delete_instances_by_prefix("field", prefix)?;
-```
-
-Mutating calls write the instance YAML back to disk.
-
-### Code generation
-
-```rust
-let code = codegen::generate_all(&type_defs);
-```
-
-## Generated Code
+## Generated code
 
 For each `TypeDef` named e.g. `Collection`, codegen emits:
 
-- `pub struct Collection { ... }` deriving `Debug, Clone, PartialEq, serde::Serialize`
+- `pub struct Collection { ... }` deriving `Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize`
 - `Collection::new(...)` — constructor taking all fields in declaration order
-- Field accessors returning `&str` / `i64` / `f64` / `bool` / `&[T]`
+- Field accessors
+- `to_path` / `from_path` / `from_yaml`
+- `CollectionUpdate` patch type
+- `impl SchemaInstance for Collection`
+- `type CollectionStore = InstanceStore<Collection>`
 
-Plus, on a single shared `SchemaStore`:
-
-- `SchemaStore::load(instances_dir) -> Result<Self, Error>` — scan and load all instances
-- One per-type accessor returning a borrowed sub-store, e.g. `schema.collections() -> CollectionStore<'_>`
-
-Each per-type store (shown here for `CollectionStore`) exposes typed CRUD over its own type only:
-
-- `get(key) -> Option<Collection>`
-- `has(key) -> bool`
-- `list(prefix) -> Vec<(String, Collection)>`
-- `list_all() -> Vec<(String, Collection)>`
-- `create(key, fields) -> Result<..>`
-- `update(key, fields) -> Result<..>`
-- `delete(key) -> Result<()>`
-- `delete_by_prefix(prefix) -> Result<Vec<String>>`
+Plus a shared `SchemaStore` with `load(instances_dir)` and per-type accessors (`schema.collections()`, …). Each store exposes typed CRUD: `get`, `has`, `list`, `list_all`, `create`, `update`, `delete`, `delete_by_prefix`.
 
 Rust keyword escaping is handled automatically (e.g. `type` → `r#type`).
 
-## Key Types
+## Key types
 
 - `TypeDef` — parsed type definition (name, description, `path_template`, properties)
 - `Property` — name, `FieldType`, `create_only` flag
 - `FieldType` — `String`, `Integer`, `Float`, `Boolean`, `Slug { segments }`, `List(Box<FieldType>)`
-- `FieldValue` — matching value variant used by `Instance`
-- `Instance` — validated instance (type_name, namespace, values)
-- `SchemaRegistry` — runtime instance store (thread-safe, on-disk backed)
 - `Error` — crate error type
 
 ## Tests

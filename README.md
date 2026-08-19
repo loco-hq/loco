@@ -1,108 +1,168 @@
 # Loco
 
-Schema-driven code generation system that turns YAML type definitions into type-safe Rust structs at build time, paired with a multi-tenant data layer and REST API server.
+Schema-driven backend for structured data. YAML type definitions become Rust structs at build time. Projects, collections, and fields are versioned YAML instances loaded at runtime. Records live in a schemaless data lake and are validated against the site's schema: **strict on write, warnings on read**.
+
+Studio (`loco-studio`) is a React app for editing schemas and records. It is itself a Loco site.
 
 ## Quick Start
 
 ```bash
-# Run the web server
-cd loco-apps && cargo run
+# API server — http://localhost:3000
+cargo run -p loco-apps
 
-# Run all tests
+# Studio — http://localhost:5174  (proxies /api to :3000)
+npm run dev -w loco-studio
+
+# Field-component playground — http://localhost:5175
+npm run dev -w loco-ui
+
+# Tests / lint
 cargo test
-
-# Lint
 cargo clippy --workspace
 ```
 
-The server starts on `http://localhost:3000`.
+Studio login is username-only right now. The local auth adapter stores users and sessions under `loco-apps/auth/` (gitignored).
 
 ## Architecture
 
 ```
 loco/
-├── loco-gen/crates/
-│   └── loco-gen-schema/           # YAML parsing, instance scanning, Rust codegen, build.rs helper
-├── loco-lake/crates/loco-lake/    # DataAdapter trait + adapters (in-memory, SQLite)
-└── loco-apps/                     # Axum web server consuming generated types
+├── loco-gen/crates/loco-gen-schema/           # YAML type parsing + Rust codegen
+├── loco-schema/crates/loco-schema-runtime/    # InstanceStore + YAML filesystem adapter
+├── loco-lake/crates/loco-lake/                # DataAdapter (SQLite, in-memory)
+├── loco-apps/                                 # Axum server: /data /schema /config /auth
+├── loco-studio/                               # Schema + record editor (port 5174)
+└── loco-ui/                                   # Field primitives consumed by studio
 ```
 
-### Dependency Flow
+**Build time:** `loco-apps/build.rs` → `loco_gen_schema::build::generate("schemas/types")`
 
-**Build time:** `loco-apps/build.rs` → `loco_gen_schema::build::generate`
+**Runtime:** `SchemaStore::load("schemas/instances")`, then Axum with a lake adapter and an auth adapter.
 
-**Runtime:** `loco-apps` → `loco-gen-runtime` + `loco-lake`
+There is no tenant registry. Isolation is **dataset** (where records live) plus **site** (which version and dataset a request is pinned to).
 
-## How It Works
+## Core concepts
 
-1. **Define types** in `schemas/types/*.yaml` — each file describes a type with typed properties (string, integer, float, boolean).
+| Concept | What it is |
+|---------|------------|
+| **Project** | A namespace, `{user}/{project}` (e.g. `ben/pets`, `loco/studio`) |
+| **Version** | A snapshot of that project's schema. Drafts have a `-` in the name (`0.0.1-dev`); only drafts are writable |
+| **Manifest** | Per-version file listing direct dependencies (`{user}/{project}@{version}`) |
+| **Collection / field / fieldset** | Schema for a kind of record, its columns, and named ordered subsets of those columns |
+| **Dataset** | A lake partition. Records are keyed `(dataset_id, collection, id)` |
+| **Site** | An app identity. Pins a `version` + `dataset`. Requests name it with `X-Project-Id` + `X-Site-Id` |
 
-2. **Define instances** in `schemas/instances/{user}/{project}/{type}/*.yaml` — these are validated against their type definition at build time.
-
-3. **Build** — `build.rs` parses schemas and instances, generates Rust structs with constructors, accessors, and baked-in instance loaders to `$OUT_DIR/loco_generated.rs`.
-
-4. **Run** — the Axum server loads generated types, exposes a REST API for CRUD operations backed by a pluggable data adapter (SQLite by default).
-
-## Multi-Tenancy
-
-Data is isolated per tenant. Tenants are defined as YAML files in `loco-apps/tenants/`:
-
-```yaml
-# tenants/acme.yaml
-name: "Acme Corp"
+```
+ben/pets
+├── project.yaml
+├── datasets/dev.yaml          # lake partition
+├── sites/dev.yaml             # pins version 0.0.1-dev + dataset dev
+└── versions/0.0.1-dev/
+    ├── manifest.yaml
+    ├── collections/pet.yaml
+    ├── fields/pet/{name,age,breed}.yaml
+    └── fieldsets/pet/default.yaml
 ```
 
-The filename (minus `.yaml`) is the tenant ID. Tenant is specified per-request via:
+Shipped projects (committed under `schemas/instances/loco/`):
 
-- `X-Tenant-Id` header (for API clients)
-- `?tenant=` query parameter (for browser testing)
+- `loco/core` — framework collections (`user`)
+- `loco/studio` — the editor site (`studio`)
+- `loco/cards` — another metadata-editor site
 
-## Namespaces
+User-scoped instances (`ben/…`) are gitignored scratch data. Test suites carry their own fixtures.
 
-Instances are organized into namespaces: `{user}/{project}`. For example:
+## How schema loading works
 
-- `loco/core` — framework-level collections (user, etc.)
-- `ben/crm` — application-specific collections (account, contact, opportunity)
+1. Type definitions in `loco-apps/schemas/types/*.yaml` are parsed at **build** time.
+2. Codegen writes `$OUT_DIR/loco_generated.rs` — one struct per type, plus `SchemaStore`.
+3. `main.rs` includes that file. Instances are **not** compiled in.
+4. On boot, `SchemaStore::load` walks `schemas/instances/`, matches each YAML file against the type's `pathTemplate`, and fills per-type `InstanceStore`s. Writes go back to disk via `YamlFsAdapter`.
+
+An instance's key **is** its path relative to `schemas/instances/` with `.yaml` stripped. That key must match the type's `pathTemplate` with variables filled in.
 
 ## REST API
 
-All data endpoints require a tenant ID.
+The server listens on `:3000`. Studio rewrites `/api/…` to these paths.
+
+Every request that needs a site sends:
+
+- `X-Project-Id: {user}/{project}`
+- `X-Site-Id: {site}`
+- `Authorization: Bearer <token>` when authenticated
+
+Missing auth becomes a synthetic `public` user. Writes that require a real session return `401`. `/schema` and `/config` writes also require the site to be on the metadata-editor allowlist (`loco/studio/studio`, `loco/cards/cards`) and the session user to match the `{user}` in the path.
+
+### `/data` — records (scoped by the site's dataset + version)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/{user}/{project}/collection/{name}/add` | Insert a record |
-| GET | `/{user}/{project}/collection/{name}/list` | List all records |
-| GET | `/{user}/{project}/collection/{name}/get/{id}` | Get a record by ID |
-| DELETE | `/{user}/{project}/collection/{name}/delete/{id}` | Delete a record |
+| POST | `/data/{collection}/add` | Insert. Body is the field map. Validated strictly. |
+| GET | `/data/{collection}/list` | List. Schema drift comes back as `diagnostics` warnings. |
+| GET | `/data/{collection}/get/{id}` | Get one |
+| PUT | `/data/{collection}/update/{id}` | Patch fields. Validated strictly. |
+| DELETE | `/data/{collection}/delete/{id}` | Delete |
 
-### Response Format
+Studio overrides `X-Project-Id` / `X-Site-Id` on these calls so it can edit records in the site you are browsing, not only `loco/studio`.
+
+### `/schema` — versioned metadata (path is `{user}/{project}/{version}`)
+
+Collections, fields, fieldsets, and the version manifest. Writable only on draft versions.
+
+### `/config` — unversioned project config
+
+Projects, datasets, sites, and version create/list/delete. Creating a project bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
+
+### `/auth`
+
+Login (username only), logout, `/me`, users, API keys. Sessions and keys are stored by the local filesystem auth adapter under `loco-apps/auth/{user}/{project}/{site}/`.
+
+### Response shape
 
 ```json
 {
   "ok": true,
-  "data": { ... },
-  "error": null
+  "data": { },
+  "error": null,
+  "diagnostics": null
 }
 ```
+
+`diagnostics` is present on reads that found schema drift, and on failed writes (`400`, `error: "validation failed"`).
 
 ### Example
 
 ```bash
-# Insert a user
-curl -X POST 'http://localhost:3000/loco/core/collection/user/add?tenant=acme' \
-  -H "Content-Type: application/json" \
-  -d '{"fields": {"name": "Alice", "email": "alice@acme.com", "role": "admin"}}'
+# List pets in ben/pets's dev site
+curl 'http://localhost:3000/data/pet/list' \
+  -H 'X-Project-Id: ben/pets' \
+  -H 'X-Site-Id: dev' \
+  -H 'Authorization: Bearer <token>'
 
-# List users
-curl 'http://localhost:3000/loco/core/collection/user/list?tenant=acme'
+# Insert
+curl -X POST 'http://localhost:3000/data/pet/add' \
+  -H 'X-Project-Id: ben/pets' -H 'X-Site-Id: dev' \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "Mochi", "age": 3, "breed": "mutt"}'
 ```
 
 ## Configuration
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `LOCO_ADAPTER` | `sqlite` | Data adapter: `sqlite` or `memory` |
-| `LOCO_DB_PATH` | `loco.db` | SQLite database file path |
+| `LOCO_DB_PATH` | `loco.db` | SQLite file (created next to the process cwd) |
+| `LOCO_AUTH_ADAPTER` | `local` | Auth adapter. Only `local` exists. |
+
+## Frontends
+
+- **loco-studio** (5174) — project / version / collection / field / record UI. API client is `src/api.js`; session token in `localStorage`.
+- **loco-ui** (5175 playground) — field primitives (`TextField`, `NumberField`, `CheckboxField`, `ToggleField`, `SelectField`) plus a `<Field field={meta} />` dispatcher. Consumed by studio as an npm workspace package.
+
+## Tests
+
+Workspace unit tests live next to their modules. API coverage is Hurl suites under `loco-apps/tests/suites/` (authorization, data CRUD, validation reads/writes, project/version lifecycle, schema CRUD + introspect). `cargo test -p loco-apps` spins up a server per suite against that suite's fixtures.
 
 ## Rust Edition
 

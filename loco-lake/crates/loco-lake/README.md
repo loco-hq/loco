@@ -1,26 +1,29 @@
 # loco-lake
 
-Multi-tenant data layer providing a pluggable storage abstraction for CRUD operations on schemaless records.
+Schemaless record store. All methods are scoped by `dataset_id`, then `collection`. Validation, versions, and sites live in `loco-apps` — this crate does not know about schemas.
 
-## DataAdapter Trait
-
-The core abstraction. All methods are scoped by `tenant_id` first, then `collection`:
+## DataAdapter
 
 ```rust
 pub trait DataAdapter: Send + Sync {
-    fn insert(&self, tenant_id: &str, collection: &str, record: Record) -> Result<Record, Error>;
-    fn get(&self, tenant_id: &str, collection: &str, id: &str) -> Result<Option<Record>, Error>;
-    fn update(&self, tenant_id: &str, collection: &str, id: &str, record: Record) -> Result<Record, Error>;
-    fn delete(&self, tenant_id: &str, collection: &str, id: &str) -> Result<(), Error>;
-    fn list(&self, tenant_id: &str, collection: &str) -> Result<Vec<Record>, Error>;
+    fn insert(&self, dataset_id: &str, collection: &str, req: InsertRequest) -> Result<Record, Error>;
+    fn get(&self, dataset_id: &str, collection: &str, id: &str) -> Result<Option<Record>, Error>;
+    fn update(&self, dataset_id: &str, collection: &str, id: &str, patch: UpdatePatch) -> Result<Record, Error>;
+    fn delete(&self, dataset_id: &str, collection: &str, id: &str) -> Result<(), Error>;
+    fn list(&self, dataset_id: &str, collection: &str) -> Result<Vec<Record>, Error>;
+    fn delete_dataset(&self, dataset_id: &str) -> Result<(), Error>;
 }
 ```
+
+`InsertRequest` / `UpdatePatch` carry `user` + `fields`. The adapter stamps `id`, timestamps, `created_by` / `updated_by` / `owner`.
+
+`dataset_id` is typically `{user}/{project}/{dataset_name}` (see `SiteScope::dataset_id` in loco-apps). This crate treats it as an opaque string.
 
 ## Adapters
 
 ### InMemoryAdapter
 
-Hash map-based storage using `RwLock<HashMap<String, HashMap<String, Record>>>`. Tenant isolation via composite key (`{tenant_id}::{collection}`). Data does not survive restarts.
+`RwLock<HashMap<…>>`. Data does not survive restarts. Used by the Hurl suites (`LOCO_ADAPTER=memory`).
 
 ```rust
 let adapter = InMemoryAdapter::new();
@@ -28,7 +31,7 @@ let adapter = InMemoryAdapter::new();
 
 ### SqliteAdapter
 
-Persistent storage backed by a single SQLite file. Uses a `records` table with a composite primary key of `(tenant_id, collection, id)`. The `fields` column stores the record's field map as JSON. Thread-safe via `Mutex<Connection>`.
+One SQLite file. `records` table with primary key `(dataset_id, collection, id)`. `fields` is JSON. Thread-safe via `Mutex<Connection>`.
 
 ```rust
 let adapter = SqliteAdapter::new(Path::new("loco.db"))?;
@@ -39,7 +42,7 @@ let adapter = SqliteAdapter::new(Path::new("loco.db"))?;
 ```rust
 pub struct Record {
     pub id: String,
-    pub tenant_id: Option<String>,
+    pub dataset_id: String,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,
@@ -67,7 +70,7 @@ pub enum Value {
 pub enum Error {
     NotFound,
     AlreadyExists,
-    InvalidTenant(String),
+    InvalidDataset(String),
     Internal(String),
 }
 ```
@@ -78,4 +81,4 @@ pub enum Error {
 cargo test -p loco-lake
 ```
 
-Both adapters have identical test suites covering CRUD operations and tenant isolation.
+Both adapters have matching CRUD + dataset-isolation suites.
