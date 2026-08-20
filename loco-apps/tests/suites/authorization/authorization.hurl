@@ -4,25 +4,42 @@
 # Fixture: alice owns alice/testapp, bob owns bob/myapp
 # Both use "cards" site (config-editing site)
 
-# Login as alice
+# Login is global — no site headers, and AuthUser is not site-scoped.
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"username": "alice"}
 HTTP 200
 [Captures]
 alice_token: jsonpath "$.data.token"
+[Asserts]
+jsonpath "$.data.user.username" == "alice"
+jsonpath "$.data.user.account_type" == "person"
+jsonpath "$.data.user.site_id" not exists
 
-# Login as bob
+# Login as bob (also no site headers)
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"username": "bob"}
 HTTP 200
 [Captures]
 bob_token: jsonpath "$.data.token"
+
+# Org accounts cannot log in
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{"username": "loco"}
+HTTP 401
+
+# Wrong password is rejected; omitting password is the test-only bypass
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{"username": "alice", "password": "wrong"}
+HTTP 401
+
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{"username": "alice", "password": "password"}
+HTTP 200
 
 # 1. Alice can create a collection on her own project
 POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection

@@ -1,10 +1,8 @@
 # Schema CRUD integration test
 # Verifies: create collection, list, create field, list fields, get collection
 
-# Login as alice on a config-editing site
+# Login as alice (global identity — site headers are for later schema writes)
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"username": "alice"}
 HTTP 200

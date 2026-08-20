@@ -7,10 +7,8 @@
 # survive the cascade. The project under test is alice/newapp, which does
 # not exist at startup.
 
-# Login as alice via the loco/cards/cards editor site
+# Login as alice (global). Schema/config writes still send loco/cards headers.
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"username": "alice"}
 HTTP 200

@@ -125,7 +125,7 @@ Handlers sit on request extractors in `http/scope/`:
 
 Metadata-editor allowlist is currently hardcoded in `http/scope/site.rs`: `loco/studio/studio`, `loco/cards/cards`.
 
-Login (`POST /auth/login`) accepts `{ "username" }` only — password is passed as `None`. Sessions and API keys both work as `Authorization: Bearer …`.
+Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the user. Body is `{ "username" }` plus optional `"password"`. Seeded identities (`alice`, `bob`) have password `password`; omitting password is a test-only bypass. Org accounts (`loco`) cannot log in. Sessions and API keys hang off the identity and both work as `Authorization: Bearer …`.
 
 ### Validation
 

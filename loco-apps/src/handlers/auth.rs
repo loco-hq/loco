@@ -12,7 +12,6 @@ use crate::auth::{
     UpdateUserRequest,
 };
 use crate::http::response::ApiResponse;
-use crate::http::scope::SiteScope;
 use crate::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -31,21 +30,22 @@ pub fn router() -> Router<Arc<AppState>> {
 #[derive(Deserialize)]
 pub struct LoginRequest {
     username: String,
+    #[serde(default)]
+    password: Option<String>,
 }
 
+/// Global login. Does not use `SiteScope` — identity is not site-scoped.
+/// Site headers on this request are ignored.
 pub async fn login(
-    scope: SiteScope,
     State(state): State<Arc<AppState>>,
     Json(body): Json<LoginRequest>,
 ) -> Response {
-    let qualified_site_id = scope.qualified_site_id();
     let credentials = LoginCredentials {
         username: body.username,
-        password: None,
-        site_id: qualified_site_id.clone(),
+        password: body.password,
     };
 
-    match state.auth_adapter.login(&qualified_site_id, &credentials) {
+    match state.auth_adapter.login(&credentials) {
         Ok(session) => ApiResponse::success(session).into_response(),
         Err(e) => auth_error_to_response(e),
     }
@@ -67,29 +67,28 @@ pub struct CreateUserHttpRequest {
     username: String,
     name: String,
     #[serde(default)]
-    role: Option<String>,
+    password: Option<String>,
 }
 
 pub async fn create_user(
-    user: AuthenticatedUser,
+    _user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateUserHttpRequest>,
 ) -> Response {
     let req = CreateUserRequest {
         username: body.username,
         name: body.name,
-        role: body.role,
-        password: None,
+        password: body.password,
     };
 
-    match state.auth_adapter.create_user(&user.0.user.site_id, &req) {
+    match state.auth_adapter.create_user(&req) {
         Ok(new_user) => (StatusCode::CREATED, ApiResponse::success(new_user)).into_response(),
         Err(e) => auth_error_to_response(e),
     }
 }
 
-pub async fn list_users(user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
-    match state.auth_adapter.list_users(&user.0.user.site_id) {
+pub async fn list_users(_user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
+    match state.auth_adapter.list_users() {
         Ok(users) => ApiResponse::success(users).into_response(),
         Err(e) => auth_error_to_response(e),
     }
@@ -99,36 +98,28 @@ pub async fn list_users(user: AuthenticatedUser, State(state): State<Arc<AppStat
 pub struct UpdateUserHttpRequest {
     #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
-    role: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
 }
 
 pub async fn update_user(
-    user: AuthenticatedUser,
+    _user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(body): Json<UpdateUserHttpRequest>,
 ) -> Response {
-    let updates = UpdateUserRequest {
-        name: body.name,
-        role: body.role,
-        status: body.status,
-    };
+    let updates = UpdateUserRequest { name: body.name };
 
-    match state.auth_adapter.update_user(&user.0.user.site_id, &id, &updates) {
+    match state.auth_adapter.update_user(&id, &updates) {
         Ok(updated) => ApiResponse::success(updated).into_response(),
         Err(e) => auth_error_to_response(e),
     }
 }
 
 pub async fn delete_user(
-    user: AuthenticatedUser,
+    _user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.auth_adapter.delete_user(&user.0.user.site_id, &id) {
+    match state.auth_adapter.delete_user(&id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => auth_error_to_response(e),
     }
@@ -146,7 +137,7 @@ pub async fn create_api_key(
 ) -> Response {
     match state
         .auth_adapter
-        .create_api_key(&user.0.user.site_id, &user.0.user.id, &body.label)
+        .create_api_key(&user.0.user.id, &body.label)
     {
         Ok(key) => (StatusCode::CREATED, ApiResponse::success(key)).into_response(),
         Err(e) => auth_error_to_response(e),
@@ -154,10 +145,7 @@ pub async fn create_api_key(
 }
 
 pub async fn list_api_keys(user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
-    match state
-        .auth_adapter
-        .list_api_keys(&user.0.user.site_id, &user.0.user.id)
-    {
+    match state.auth_adapter.list_api_keys(&user.0.user.id) {
         Ok(keys) => ApiResponse::success(keys).into_response(),
         Err(e) => auth_error_to_response(e),
     }
@@ -168,7 +156,7 @@ pub async fn revoke_api_key(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.auth_adapter.revoke_api_key(&user.0.user.site_id, &id) {
+    match state.auth_adapter.revoke_api_key(&user.0.user.id, &id) {
         Ok(()) => ApiResponse::success("revoked").into_response(),
         Err(e) => auth_error_to_response(e),
     }

@@ -41,29 +41,46 @@ impl fmt::Display for AuthError {
 
 // --- Data types ---
 
+/// Known password for seeded identities and auto-created test users.
+/// Login still accepts a missing password as a test-only bypass (removed in PR 2).
+pub const TEST_PASSWORD: &str = "password";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountType {
+    Person,
+    Org,
+}
+
+impl AccountType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AccountType::Person => "person",
+            AccountType::Org => "org",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthSession {
     pub token: String,
     pub user: AuthUser,
 }
 
-/// Reserved username for unauthenticated requests. Apps can attach permissions
-/// to this user the same way they would to any other.
+/// Reserved username for unauthenticated requests.
 pub const PUBLIC_USERNAME: &str = "public";
 
 impl AuthSession {
     /// Synthetic session used when a request arrives with no auth token.
-    /// `qualified_site_id` is `{user}/{project}/{site}`.
-    pub fn public(qualified_site_id: &str) -> Self {
+    /// `public` is a principal, not an account — it has no site and no password.
+    pub fn public() -> Self {
         AuthSession {
             token: String::new(),
             user: AuthUser {
                 id: PUBLIC_USERNAME.to_string(),
-                site_id: qualified_site_id.to_string(),
                 username: PUBLIC_USERNAME.to_string(),
                 name: "Public".to_string(),
-                role: PUBLIC_USERNAME.to_string(),
-                status: "active".to_string(),
+                account_type: PUBLIC_USERNAME.to_string(),
                 created_at: "1970-01-01T00:00:00Z".to_string(),
                 last_login_at: None,
             },
@@ -71,14 +88,15 @@ impl AuthSession {
     }
 }
 
+/// A logged-in identity. `username` is the person-account handle (and the
+/// identity handle). This is who you are — not the site named by request
+/// headers.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthUser {
     pub id: String,
-    pub site_id: String,
     pub username: String,
     pub name: String,
-    pub role: String,
-    pub status: String,
+    pub account_type: String,
     pub created_at: String,
     pub last_login_at: Option<String>,
 }
@@ -86,20 +104,16 @@ pub struct AuthUser {
 pub struct LoginCredentials {
     pub username: String,
     pub password: Option<String>,
-    pub site_id: String,
 }
 
 pub struct CreateUserRequest {
     pub username: String,
     pub name: String,
-    pub role: Option<String>,
     pub password: Option<String>,
 }
 
 pub struct UpdateUserRequest {
     pub name: Option<String>,
-    pub role: Option<String>,
-    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -122,19 +136,19 @@ pub struct ApiKeyInfo {
 // --- Trait ---
 
 pub trait AuthAdapter: Send + Sync {
-    fn login(&self, site_id: &str, credentials: &LoginCredentials) -> Result<AuthSession, AuthError>;
+    fn login(&self, credentials: &LoginCredentials) -> Result<AuthSession, AuthError>;
     fn validate_session(&self, token: &str) -> Result<AuthSession, AuthError>;
     fn logout(&self, token: &str) -> Result<(), AuthError>;
-    fn revoke_all_sessions(&self, site_id: &str, user_id: &str) -> Result<(), AuthError>;
-    fn get_user(&self, site_id: &str, user_id: &str) -> Result<Option<AuthUser>, AuthError>;
-    fn list_users(&self, site_id: &str) -> Result<Vec<AuthUser>, AuthError>;
-    fn create_user(&self, site_id: &str, user: &CreateUserRequest) -> Result<AuthUser, AuthError>;
-    fn update_user(&self, site_id: &str, user_id: &str, updates: &UpdateUserRequest) -> Result<AuthUser, AuthError>;
-    fn delete_user(&self, site_id: &str, user_id: &str) -> Result<(), AuthError>;
-    fn create_api_key(&self, site_id: &str, user_id: &str, label: &str) -> Result<ApiKey, AuthError>;
+    fn revoke_all_sessions(&self, identity_id: &str) -> Result<(), AuthError>;
+    fn get_user(&self, user_id: &str) -> Result<Option<AuthUser>, AuthError>;
+    fn list_users(&self) -> Result<Vec<AuthUser>, AuthError>;
+    fn create_user(&self, user: &CreateUserRequest) -> Result<AuthUser, AuthError>;
+    fn update_user(&self, user_id: &str, updates: &UpdateUserRequest) -> Result<AuthUser, AuthError>;
+    fn delete_user(&self, user_id: &str) -> Result<(), AuthError>;
+    fn create_api_key(&self, identity_id: &str, label: &str) -> Result<ApiKey, AuthError>;
     fn validate_api_key(&self, key: &str) -> Result<AuthSession, AuthError>;
-    fn revoke_api_key(&self, site_id: &str, key_id: &str) -> Result<(), AuthError>;
-    fn list_api_keys(&self, site_id: &str, user_id: &str) -> Result<Vec<ApiKeyInfo>, AuthError>;
+    fn revoke_api_key(&self, identity_id: &str, key_id: &str) -> Result<(), AuthError>;
+    fn list_api_keys(&self, identity_id: &str) -> Result<Vec<ApiKeyInfo>, AuthError>;
 }
 
 // --- Extractor ---

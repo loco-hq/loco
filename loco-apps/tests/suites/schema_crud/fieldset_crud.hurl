@@ -2,8 +2,6 @@
 # create, cascade-remove on field delete, and explicit reorder via PUT.
 
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"username": "alice"}
 HTTP 200

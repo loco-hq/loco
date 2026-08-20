@@ -24,8 +24,8 @@ const METADATA_EDITOR_SITES: &[&str] = &["loco/studio/studio", "loco/cards/cards
 pub struct SiteScope {
     pub project: ProjectScope,
     pub site: Arc<Site>,
-    /// Always populated — synthesized as `AuthSession::public(...)` when no
-    /// token is provided. So every scope has a user.
+    /// Always populated — synthesized as `AuthSession::public()` when no
+    /// token is provided. So every scope has a principal.
     pub auth: AuthSession,
     /// Read-only scoped schema view — bounded by this site's project+version
     /// plus its installed dependencies. Use this instead of `state.schema`
@@ -36,7 +36,8 @@ pub struct SiteScope {
 }
 
 impl SiteScope {
-    /// `{user}/{project}/{site_name}` — matches `AuthUser.site_id`.
+    /// `{account}/{project}/{site_name}` — the site named by request headers,
+    /// not the logged-in identity.
     pub fn qualified_site_id(&self) -> String {
         format!("{}/{}", self.project.project_id(), self.site.name())
     }
@@ -138,11 +139,10 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
                 )
             })?;
 
-        let qualified = format!("{project_id}/{site_name}");
         let auth = AuthenticatedUser::from_request_parts(parts, state)
             .await
             .map(|AuthenticatedUser(s)| s)
-            .unwrap_or_else(|_| AuthSession::public(&qualified));
+            .unwrap_or_else(|_| AuthSession::public());
 
         let version = site.version().to_string();
         let schema = VersionSchema::new_read_only(state.schema.clone(), &project_id, &version);

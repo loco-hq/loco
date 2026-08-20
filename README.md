@@ -21,7 +21,7 @@ cargo test
 cargo clippy --workspace
 ```
 
-Studio login is username-only right now. The local auth adapter stores users and sessions under `loco-apps/auth/` (gitignored).
+Studio login is a global Loco identity (username, optional password). The local auth adapter stores accounts, identities, sessions, and API keys under `loco-apps/auth/` (gitignored) — not under a site path.
 
 ## Architecture
 
@@ -115,7 +115,7 @@ Projects, datasets, sites, and version create/list/delete. Creating a project bo
 
 ### `/auth`
 
-Login (username only), logout, `/me`, users, API keys. Sessions and keys are stored by the local filesystem auth adapter under `loco-apps/auth/{user}/{project}/{site}/`.
+Login (global identity; `{ "username" }` plus optional `"password"`), logout, `/me`, users, API keys. Sessions and keys hang off the identity and are stored under `loco-apps/auth/{accounts,identities,sessions,api_keys}/`.
 
 ### Response shape
 

@@ -11,10 +11,8 @@
 # account + user). For acme/crm, only account + user. Field lists per
 # collection should resolve across the dependency closure.
 
-# Login as acme on the metadata-editor site (loco/cards/cards is allowlisted)
+# Login as acme (global). Schema reads/writes still send loco/cards headers.
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"username": "acme"}
 HTTP 200

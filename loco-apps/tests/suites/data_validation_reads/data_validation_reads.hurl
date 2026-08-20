@@ -7,11 +7,8 @@
 # change a field's type) to simulate the data going stale relative to a
 # newer schema. Reads should surface diagnostics as warnings — never fail.
 
-# Login as `testuser` via the `loco/cards` editor site so we have a token
-# allowed to mutate `testuser/testapp` schema mid-test.
+# Login as `testuser`. Schema writes later still use the loco/cards editor site.
 POST http://127.0.0.1:{{port}}/auth/login
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"username": "testuser"}
 HTTP 200
