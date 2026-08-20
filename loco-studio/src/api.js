@@ -25,6 +25,12 @@ async function request(path, options = {}) {
   if (session) headers['Authorization'] = `Bearer ${session}`;
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
   const json = await res.json();
+  if (res.status === 401 && session && path !== '/auth/login') {
+    clearSession();
+    if (window.location.hash !== '#/login') {
+      window.location.hash = '#/login';
+    }
+  }
   if (!json.ok) throw new Error(json.error || 'Unknown error');
   return json.data;
 }
@@ -40,8 +46,11 @@ export async function login({ username, password }) {
 }
 
 export async function logout() {
-  await request('/auth/logout', { method: 'POST' });
-  clearSession();
+  try {
+    await request('/auth/logout', { method: 'POST' });
+  } finally {
+    clearSession();
+  }
 }
 
 export const getMe = () => request('/auth/me');
