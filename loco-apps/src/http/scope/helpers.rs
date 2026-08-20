@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use axum::extract::{FromRequestParts, Path};
-use axum::http::StatusCode;
 use axum::http::request::Parts;
+use axum::http::StatusCode;
 use axum::response::Response;
 use serde::de::DeserializeOwned;
 

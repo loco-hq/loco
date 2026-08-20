@@ -1,10 +1,5 @@
 const BASE = '/api';
 
-// The studio is itself a loco site — every authed request identifies the
-// editor session via these headers (gates `/schema` + `/config` writes).
-const STUDIO_PROJECT = 'loco/studio';
-const STUDIO_SITE = 'studio';
-
 function getSession() {
   return localStorage.getItem('loco_session');
 }
@@ -24,8 +19,6 @@ export function isLoggedIn() {
 async function request(path, options = {}) {
   const headers = {
     'Content-Type': 'application/json',
-    'X-Project-Id': STUDIO_PROJECT,
-    'X-Site-Id': STUDIO_SITE,
     ...options.headers,
   };
   const session = getSession();
@@ -40,8 +33,8 @@ const json = (method, body) => ({ method, body: JSON.stringify(body) });
 
 // --- Auth ---
 
-export async function login(username) {
-  const data = await request('/auth/login', json('POST', { username }));
+export async function login({ username, password }) {
+  const data = await request('/auth/login', json('POST', { username, password }));
   setSession(data.token);
   return data;
 }

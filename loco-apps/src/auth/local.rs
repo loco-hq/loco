@@ -5,8 +5,9 @@ use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AccountType, ApiKey, ApiKeyInfo, AuthAdapter, AuthError, AuthSession, AuthUser,
-    CreateUserRequest, LoginCredentials, UpdateUserRequest, PUBLIC_USERNAME, TEST_PASSWORD,
+    Account, AccountType, ApiKey, ApiKeyInfo, AuthAdapter, AuthError, AuthSession, AuthUser,
+    CreateUserRequest, LoginCredentials, OrgMember, OrgRole, ProjectMember, ProjectRole,
+    UpdateUserRequest, PUBLIC_USERNAME, TEST_PASSWORD,
 };
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -47,6 +48,22 @@ struct StoredApiKey {
     revoked: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct StoredOrgMember {
+    org: String,
+    handle: String,
+    role: OrgRole,
+    created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct StoredProjectMember {
+    project: String,
+    handle: String,
+    role: ProjectRole,
+    created_at: String,
+}
+
 /// Filesystem layout (global, not site-scoped):
 ///
 /// ```text
@@ -54,6 +71,8 @@ struct StoredApiKey {
 /// {base}/identities/{handle}.json
 /// {base}/sessions/{token}.json
 /// {base}/api_keys/{id}.json
+/// {base}/org_members/{org}/{handle}.json
+/// {base}/project_members/{account}/{project}/{handle}.json
 /// ```
 pub struct LocalAuthAdapter {
     base_dir: PathBuf,
@@ -61,6 +80,8 @@ pub struct LocalAuthAdapter {
     identities: RwLock<HashMap<String, StoredIdentity>>, // handle → identity
     sessions: RwLock<HashMap<String, StoredSession>>,    // token → session
     api_keys: RwLock<HashMap<String, StoredApiKey>>,     // id → key
+    org_members: RwLock<HashMap<(String, String), StoredOrgMember>>, // (org, handle)
+    project_members: RwLock<HashMap<(String, String), StoredProjectMember>>, // (project, handle)
 }
 
 impl LocalAuthAdapter {
@@ -71,6 +92,8 @@ impl LocalAuthAdapter {
             identities: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
             api_keys: RwLock::new(HashMap::new()),
+            org_members: RwLock::new(HashMap::new()),
+            project_members: RwLock::new(HashMap::new()),
         };
         adapter.load_from_disk();
         adapter.seed_defaults();
@@ -99,9 +122,59 @@ impl LocalAuthAdapter {
         self.load_json_dir("api_keys", |this, key: StoredApiKey| {
             this.api_keys.write().unwrap().insert(key.id.clone(), key);
         });
+        self.load_member_tree("org_members", |this, member: StoredOrgMember| {
+            this.org_members
+                .write()
+                .unwrap()
+                .insert((member.org.clone(), member.handle.clone()), member);
+        });
+        self.load_member_tree("project_members", |this, member: StoredProjectMember| {
+            this.project_members
+                .write()
+                .unwrap()
+                .insert((member.project.clone(), member.handle.clone()), member);
+        });
     }
 
-    fn load_json_dir<T: for<'de> Deserialize<'de>>(&self, dirname: &str, insert: impl Fn(&Self, T)) {
+    fn load_member_tree<T: for<'de> Deserialize<'de>>(
+        &self,
+        dirname: &str,
+        insert: impl Fn(&Self, T),
+    ) {
+        let dir = self.base_dir.join(dirname);
+        Self::walk_json_files(&dir, |path| {
+            let Ok(contents) = std::fs::read_to_string(path) else {
+                return;
+            };
+            if let Ok(value) = serde_json::from_str::<T>(&contents) {
+                insert(self, value);
+            }
+        });
+    }
+
+    fn walk_json_files(dir: &Path, visit: impl FnMut(&Path)) {
+        let mut visit = visit;
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(current) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&current) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    visit(&path);
+                }
+            }
+        }
+    }
+
+    fn load_json_dir<T: for<'de> Deserialize<'de>>(
+        &self,
+        dirname: &str,
+        insert: impl Fn(&Self, T),
+    ) {
         let dir = self.base_dir.join(dirname);
         let Ok(entries) = std::fs::read_dir(&dir) else {
             return;
@@ -186,8 +259,16 @@ impl LocalAuthAdapter {
     }
 
     fn delete_identity_files(&self, handle: &str) {
-        let _ = std::fs::remove_file(self.base_dir.join("accounts").join(format!("{handle}.json")));
-        let _ = std::fs::remove_file(self.base_dir.join("identities").join(format!("{handle}.json")));
+        let _ = std::fs::remove_file(
+            self.base_dir
+                .join("accounts")
+                .join(format!("{handle}.json")),
+        );
+        let _ = std::fs::remove_file(
+            self.base_dir
+                .join("identities")
+                .join(format!("{handle}.json")),
+        );
     }
 
     fn persist_session(&self, session: &StoredSession) {
@@ -207,6 +288,71 @@ impl LocalAuthAdapter {
         std::fs::create_dir_all(&dir).ok();
         let path = dir.join(format!("{}.json", key.id));
         std::fs::write(path, serde_json::to_string_pretty(key).unwrap()).ok();
+    }
+
+    fn persist_org_member(&self, member: &StoredOrgMember) {
+        let dir = self.base_dir.join("org_members").join(&member.org);
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join(format!("{}.json", member.handle));
+        std::fs::write(path, serde_json::to_string_pretty(member).unwrap()).ok();
+    }
+
+    fn delete_org_member_file(&self, org: &str, handle: &str) {
+        let path = self
+            .base_dir
+            .join("org_members")
+            .join(org)
+            .join(format!("{handle}.json"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn persist_project_member(&self, member: &StoredProjectMember) {
+        let dir = self.base_dir.join("project_members").join(&member.project);
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join(format!("{}.json", member.handle));
+        std::fs::write(path, serde_json::to_string_pretty(member).unwrap()).ok();
+    }
+
+    fn delete_project_member_file(&self, project_id: &str, handle: &str) {
+        let path = self
+            .base_dir
+            .join("project_members")
+            .join(project_id)
+            .join(format!("{handle}.json"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn to_account(account: &StoredAccount) -> Account {
+        Account {
+            handle: account.handle.clone(),
+            account_type: account.account_type,
+            created_at: account.created_at.clone(),
+        }
+    }
+
+    fn member_pending(&self, handle: &str) -> bool {
+        !self.identities.read().unwrap().contains_key(handle)
+    }
+
+    fn account_type(&self, handle: &str) -> Option<AccountType> {
+        self.accounts
+            .read()
+            .unwrap()
+            .get(handle)
+            .map(|a| a.account_type)
+    }
+
+    fn is_valid_handle(handle: &str) -> bool {
+        !handle.is_empty()
+            && handle != PUBLIC_USERNAME
+            && !handle.contains('/')
+            && handle
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
+            && handle
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
     }
 
     fn to_auth_user(identity: &StoredIdentity) -> AuthUser {
@@ -230,11 +376,7 @@ impl LocalAuthAdapter {
     }
 
     fn password_ok(stored: &str, provided: Option<&str>) -> bool {
-        match provided {
-            // Test-only bypass — login body may omit password. Removed in PR 2.
-            None => true,
-            Some(password) => password == stored,
-        }
+        provided == Some(stored)
     }
 
     /// First login of an unknown handle creates a person account + identity.
@@ -244,7 +386,7 @@ impl LocalAuthAdapter {
         handle: &str,
         password: Option<&str>,
     ) -> Result<StoredIdentity, AuthError> {
-        if handle.is_empty() || handle == PUBLIC_USERNAME {
+        if !Self::is_valid_handle(handle) {
             return Err(AuthError::InvalidCredentials);
         }
         {
@@ -405,7 +547,7 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn create_user(&self, req: &CreateUserRequest) -> Result<AuthUser, AuthError> {
-        if req.username.is_empty() || req.username == PUBLIC_USERNAME {
+        if !Self::is_valid_handle(&req.username) {
             return Err(AuthError::InvalidCredentials);
         }
         if self.accounts.read().unwrap().contains_key(&req.username) {
@@ -553,6 +695,216 @@ impl AuthAdapter for LocalAuthAdapter {
             })
             .collect())
     }
+
+    fn get_account(&self, handle: &str) -> Result<Option<Account>, AuthError> {
+        Ok(self
+            .accounts
+            .read()
+            .unwrap()
+            .get(handle)
+            .map(Self::to_account))
+    }
+
+    fn create_org(&self, handle: &str, creator_handle: &str) -> Result<Account, AuthError> {
+        if !Self::is_valid_handle(handle) {
+            return Err(AuthError::InvalidCredentials);
+        }
+        if !self.identities.read().unwrap().contains_key(creator_handle) {
+            return Err(AuthError::UserNotFound);
+        }
+        if self.accounts.read().unwrap().contains_key(handle) {
+            return Err(AuthError::UserAlreadyExists);
+        }
+
+        let account = StoredAccount {
+            handle: handle.to_string(),
+            account_type: AccountType::Org,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        self.persist_account(&account);
+        self.accounts
+            .write()
+            .unwrap()
+            .insert(handle.to_string(), account.clone());
+        self.add_org_member(handle, creator_handle, OrgRole::Owner)?;
+        Ok(Self::to_account(&account))
+    }
+
+    fn project_access(
+        &self,
+        identity_handle: &str,
+        project_id: &str,
+    ) -> Result<Option<ProjectRole>, AuthError> {
+        let Some((account, _)) = project_id.split_once('/') else {
+            return Ok(None);
+        };
+
+        if self
+            .org_members
+            .read()
+            .unwrap()
+            .get(&(account.to_string(), identity_handle.to_string()))
+            .is_some_and(|m| m.role == OrgRole::Owner)
+        {
+            return Ok(Some(ProjectRole::Developer));
+        }
+
+        if let Some(member) = self
+            .project_members
+            .read()
+            .unwrap()
+            .get(&(project_id.to_string(), identity_handle.to_string()))
+        {
+            return Ok(Some(member.role));
+        }
+
+        if self.account_type(account) == Some(AccountType::Person) && identity_handle == account {
+            return Ok(Some(ProjectRole::Developer));
+        }
+
+        Ok(None)
+    }
+
+    fn add_project_member(
+        &self,
+        project_id: &str,
+        handle: &str,
+        role: ProjectRole,
+    ) -> Result<ProjectMember, AuthError> {
+        if !Self::is_valid_handle(handle) || project_id.split_once('/').is_none() {
+            return Err(AuthError::InvalidCredentials);
+        }
+        let key = (project_id.to_string(), handle.to_string());
+        if self.project_members.read().unwrap().contains_key(&key) {
+            return Err(AuthError::UserAlreadyExists);
+        }
+        let member = StoredProjectMember {
+            project: project_id.to_string(),
+            handle: handle.to_string(),
+            role,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        self.persist_project_member(&member);
+        self.project_members
+            .write()
+            .unwrap()
+            .insert(key, member.clone());
+        Ok(ProjectMember {
+            project: member.project,
+            handle: member.handle,
+            role: member.role,
+            pending: self.member_pending(handle),
+        })
+    }
+
+    fn update_project_member(
+        &self,
+        project_id: &str,
+        handle: &str,
+        role: ProjectRole,
+    ) -> Result<ProjectMember, AuthError> {
+        let key = (project_id.to_string(), handle.to_string());
+        let member = {
+            let mut members = self.project_members.write().unwrap();
+            let member = members.get_mut(&key).ok_or(AuthError::UserNotFound)?;
+            member.role = role;
+            member.clone()
+        };
+        self.persist_project_member(&member);
+        Ok(ProjectMember {
+            project: member.project,
+            handle: member.handle,
+            role: member.role,
+            pending: self.member_pending(handle),
+        })
+    }
+
+    fn remove_project_member(&self, project_id: &str, handle: &str) -> Result<(), AuthError> {
+        let key = (project_id.to_string(), handle.to_string());
+        self.project_members
+            .write()
+            .unwrap()
+            .remove(&key)
+            .ok_or(AuthError::UserNotFound)?;
+        self.delete_project_member_file(project_id, handle);
+        Ok(())
+    }
+
+    fn list_project_members(&self, project_id: &str) -> Result<Vec<ProjectMember>, AuthError> {
+        let members = self.project_members.read().unwrap();
+        Ok(members
+            .values()
+            .filter(|m| m.project == project_id)
+            .map(|m| ProjectMember {
+                project: m.project.clone(),
+                handle: m.handle.clone(),
+                role: m.role,
+                pending: self.member_pending(&m.handle),
+            })
+            .collect())
+    }
+
+    fn add_org_member(
+        &self,
+        org: &str,
+        handle: &str,
+        role: OrgRole,
+    ) -> Result<OrgMember, AuthError> {
+        if !Self::is_valid_handle(handle) || !Self::is_valid_handle(org) {
+            return Err(AuthError::InvalidCredentials);
+        }
+        match self.account_type(org) {
+            Some(AccountType::Org) => {}
+            Some(AccountType::Person) => return Err(AuthError::Unauthorized),
+            None => return Err(AuthError::UserNotFound),
+        }
+        let key = (org.to_string(), handle.to_string());
+        if self.org_members.read().unwrap().contains_key(&key) {
+            return Err(AuthError::UserAlreadyExists);
+        }
+        let member = StoredOrgMember {
+            org: org.to_string(),
+            handle: handle.to_string(),
+            role,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        self.persist_org_member(&member);
+        self.org_members
+            .write()
+            .unwrap()
+            .insert(key, member.clone());
+        Ok(OrgMember {
+            org: member.org,
+            handle: member.handle,
+            role: member.role,
+            pending: self.member_pending(handle),
+        })
+    }
+
+    fn remove_org_member(&self, org: &str, handle: &str) -> Result<(), AuthError> {
+        let key = (org.to_string(), handle.to_string());
+        self.org_members
+            .write()
+            .unwrap()
+            .remove(&key)
+            .ok_or(AuthError::UserNotFound)?;
+        self.delete_org_member_file(org, handle);
+        Ok(())
+    }
+
+    fn list_org_members(&self, org: &str) -> Result<Vec<OrgMember>, AuthError> {
+        let members = self.org_members.read().unwrap();
+        Ok(members
+            .values()
+            .filter(|m| m.org == org)
+            .map(|m| OrgMember {
+                org: m.org.clone(),
+                handle: m.handle.clone(),
+                role: m.role,
+                pending: self.member_pending(&m.handle),
+            })
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -575,12 +927,22 @@ mod tests {
             .unwrap()
     }
 
+    fn login_ok(adapter: &LocalAuthAdapter, username: &str) -> AuthSession {
+        login(adapter, username, Some(TEST_PASSWORD))
+    }
+
     #[test]
     fn seed_creates_alice_bob_persons_and_loco_org() {
         let (_dir, adapter) = adapter();
         let accounts = adapter.accounts.read().unwrap();
-        assert_eq!(accounts.get("alice").unwrap().account_type, AccountType::Person);
-        assert_eq!(accounts.get("bob").unwrap().account_type, AccountType::Person);
+        assert_eq!(
+            accounts.get("alice").unwrap().account_type,
+            AccountType::Person
+        );
+        assert_eq!(
+            accounts.get("bob").unwrap().account_type,
+            AccountType::Person
+        );
         assert_eq!(accounts.get("loco").unwrap().account_type, AccountType::Org);
         assert!(adapter.identities.read().unwrap().contains_key("alice"));
         assert!(adapter.identities.read().unwrap().contains_key("bob"));
@@ -590,7 +952,7 @@ mod tests {
     #[test]
     fn login_does_not_need_a_site() {
         let (_dir, adapter) = adapter();
-        let session = login(&adapter, "alice", None);
+        let session = login_ok(&adapter, "alice");
         assert_eq!(session.user.username, "alice");
         assert_eq!(session.user.account_type, "person");
         assert!(!session.token.is_empty());
@@ -623,6 +985,18 @@ mod tests {
         let err = adapter
             .login(&LoginCredentials {
                 username: "loco".to_string(),
+                password: Some(TEST_PASSWORD.to_string()),
+            })
+            .unwrap_err();
+        assert!(matches!(err, AuthError::InvalidCredentials));
+    }
+
+    #[test]
+    fn login_without_password_fails() {
+        let (_dir, adapter) = adapter();
+        let err = adapter
+            .login(&LoginCredentials {
+                username: "alice".to_string(),
                 password: None,
             })
             .unwrap_err();
@@ -632,7 +1006,7 @@ mod tests {
     #[test]
     fn login_unknown_handle_creates_person() {
         let (_dir, adapter) = adapter();
-        let session = login(&adapter, "testuser", None);
+        let session = login_ok(&adapter, "testuser");
         assert_eq!(session.user.username, "testuser");
         assert_eq!(session.user.account_type, "person");
         let accounts = adapter.accounts.read().unwrap();
@@ -645,7 +1019,7 @@ mod tests {
     #[test]
     fn session_hangs_off_identity_and_reloads() {
         let (dir, adapter) = adapter();
-        let session = login(&adapter, "alice", None);
+        let session = login_ok(&adapter, "alice");
         let token = session.token.clone();
         let identity_id = session.user.id.clone();
 
@@ -663,10 +1037,8 @@ mod tests {
     #[test]
     fn api_key_hangs_off_identity() {
         let (_dir, adapter) = adapter();
-        let session = login(&adapter, "alice", None);
-        let key = adapter
-            .create_api_key(&session.user.id, "ci")
-            .unwrap();
+        let session = login_ok(&adapter, "alice");
+        let key = adapter.create_api_key(&session.user.id, "ci").unwrap();
         let via_key = adapter.validate_api_key(&key.key).unwrap();
         assert_eq!(via_key.user.username, "alice");
         assert_eq!(via_key.user.id, session.user.id);
@@ -681,5 +1053,69 @@ mod tests {
         assert_eq!(session.user.username, PUBLIC_USERNAME);
         let json = serde_json::to_value(&session.user).unwrap();
         assert!(json.get("site_id").is_none());
+    }
+
+    #[test]
+    fn person_is_implicit_developer_of_own_projects() {
+        let (_dir, adapter) = adapter();
+        assert_eq!(
+            adapter.project_access("alice", "alice/testapp").unwrap(),
+            Some(ProjectRole::Developer)
+        );
+        assert_eq!(
+            adapter.project_access("bob", "alice/testapp").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn org_owner_is_developer_on_every_org_project() {
+        let (_dir, adapter) = adapter();
+        adapter.create_org("acme", "alice").unwrap();
+        assert_eq!(
+            adapter.project_access("alice", "acme/crm").unwrap(),
+            Some(ProjectRole::Developer)
+        );
+        assert_eq!(adapter.project_access("bob", "acme/crm").unwrap(), None);
+    }
+
+    #[test]
+    fn project_editor_cannot_develop() {
+        let (_dir, adapter) = adapter();
+        adapter
+            .add_project_member("alice/testapp", "bob", ProjectRole::Editor)
+            .unwrap();
+        assert_eq!(
+            adapter.project_access("bob", "alice/testapp").unwrap(),
+            Some(ProjectRole::Editor)
+        );
+        assert!(!adapter
+            .project_access("bob", "alice/testapp")
+            .unwrap()
+            .unwrap()
+            .can_develop());
+        assert!(adapter
+            .project_access("bob", "alice/testapp")
+            .unwrap()
+            .unwrap()
+            .can_edit_data());
+    }
+
+    #[test]
+    fn invite_unknown_handle_is_pending() {
+        let (_dir, adapter) = adapter();
+        let member = adapter
+            .add_project_member("alice/testapp", "carol", ProjectRole::Editor)
+            .unwrap();
+        assert!(member.pending);
+        let listed = adapter.list_project_members("alice/testapp").unwrap();
+        assert!(listed.iter().any(|m| m.handle == "carol" && m.pending));
+    }
+
+    #[test]
+    fn create_org_rejects_taken_handle() {
+        let (_dir, adapter) = adapter();
+        let err = adapter.create_org("alice", "bob").unwrap_err();
+        assert!(matches!(err, AuthError::UserAlreadyExists));
     }
 }

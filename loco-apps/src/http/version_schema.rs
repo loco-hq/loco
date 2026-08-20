@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::http::authz::is_draft_version;
 use crate::{
-    Collection, CollectionUpdate, Field, Fieldset, FieldsetUpdate, FieldUpdate, Manifest,
+    Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest,
     ManifestUpdate, SchemaStore,
 };
 
@@ -165,10 +165,8 @@ impl VersionSchema {
     pub fn fields(&self, collection: &str) -> Vec<Arc<Field>> {
         let raw = self.fields_unordered(collection);
 
-        let mut by_name: std::collections::HashMap<String, Arc<Field>> = raw
-            .iter()
-            .map(|f| (f.name.clone(), f.clone()))
-            .collect();
+        let mut by_name: std::collections::HashMap<String, Arc<Field>> =
+            raw.iter().map(|f| (f.name.clone(), f.clone())).collect();
 
         let mut ordered: Vec<Arc<Field>> = Vec::with_capacity(raw.len());
         let mut seen = std::collections::HashSet::new();
@@ -209,8 +207,7 @@ impl VersionSchema {
         self.dependencies
             .iter()
             .flat_map(|(project_id, version)| {
-                let prefix =
-                    format!("{project_id}/versions/{version}/fields/{collection}/");
+                let prefix = format!("{project_id}/versions/{version}/fields/{collection}/");
                 self.store
                     .fields()
                     .list(&prefix)
@@ -225,8 +222,7 @@ impl VersionSchema {
         self.dependencies
             .iter()
             .flat_map(|(project_id, version)| {
-                let prefix =
-                    format!("{project_id}/versions/{version}/fieldsets/{collection}/");
+                let prefix = format!("{project_id}/versions/{version}/fieldsets/{collection}/");
                 self.store
                     .fieldsets()
                     .list(&prefix)
@@ -363,11 +359,7 @@ impl VersionSchema {
         Ok(self.store.fields().update(&key, patch)?)
     }
 
-    pub fn delete_field(
-        &self,
-        collection: &str,
-        name: &str,
-    ) -> Result<(), VersionSchemaError> {
+    pub fn delete_field(&self, collection: &str, name: &str) -> Result<(), VersionSchemaError> {
         self.require_writable()?;
         let key = Field::to_path(&self.project_id, &self.version, collection, name);
         self.store.fields().delete(&key)?;
@@ -399,11 +391,7 @@ impl VersionSchema {
         Ok(self.store.fieldsets().update(&key, patch)?)
     }
 
-    pub fn delete_fieldset(
-        &self,
-        collection: &str,
-        name: &str,
-    ) -> Result<(), VersionSchemaError> {
+    pub fn delete_fieldset(&self, collection: &str, name: &str) -> Result<(), VersionSchemaError> {
         self.require_writable()?;
         let key = Fieldset::to_path(&self.project_id, &self.version, collection, name);
         Ok(self.store.fieldsets().delete(&key)?)
@@ -447,12 +435,7 @@ impl VersionSchema {
             }
             let mut next = fs.fields.clone();
             next.push(field_name.to_string());
-            let key = Fieldset::to_path(
-                &self.project_id,
-                &self.version,
-                collection,
-                &fs.name,
-            );
+            let key = Fieldset::to_path(&self.project_id, &self.version, collection, &fs.name);
             let _ = self.store.fieldsets().update(
                 &key,
                 FieldsetUpdate {

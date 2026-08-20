@@ -62,11 +62,7 @@ impl CollectionScope {
 
     /// Validate every record in a list against this collection's schema.
     /// Diagnostics are aggregated and each path is prefixed with its record id.
-    pub fn validate_records<'a, I>(
-        &self,
-        records: I,
-        mode: ValidationMode,
-    ) -> ValidationReport
+    pub fn validate_records<'a, I>(&self, records: I, mode: ValidationMode) -> ValidationReport
     where
         I: IntoIterator<Item = (&'a str, &'a HashMap<String, Value>)>,
     {

@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use loco_schema_runtime::Error;
 
-use crate::{Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate};
+use crate::{
+    Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate,
+};
 
 pub struct ProjectConfig {
     store: Arc<SchemaStore>,
@@ -134,11 +136,7 @@ impl ProjectConfig {
         self.store.datasets().create(input)
     }
 
-    pub fn update_dataset(
-        &self,
-        name: &str,
-        patch: DatasetUpdate,
-    ) -> Result<Arc<Dataset>, Error> {
+    pub fn update_dataset(&self, name: &str, patch: DatasetUpdate) -> Result<Arc<Dataset>, Error> {
         self.store
             .datasets()
             .update(&Dataset::to_path(&self.project_id(), name), patch)
@@ -208,7 +206,10 @@ impl ProjectConfig {
         let fields_prefix = format!("{}/versions/{version}/fields/", self.project_id());
         let collections_prefix = format!("{}/versions/{version}/collections/", self.project_id());
         let _ = self.store.fields().delete_by_prefix(&fields_prefix);
-        let _ = self.store.collections().delete_by_prefix(&collections_prefix);
+        let _ = self
+            .store
+            .collections()
+            .delete_by_prefix(&collections_prefix);
         self.store.manifests().delete(&manifest_path)
     }
 }

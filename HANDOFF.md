@@ -17,7 +17,7 @@ cargo run -p loco-apps          # :3000
 npm run dev -w loco-studio      # :5174  (proxies /api → :3000)
 ```
 
-Login is still username-only against site-scoped users under `loco-apps/auth/` (gitignored). That is what PR 1 deletes.
+Login is global (`{ username, password }`). Seeded people (`alice`, `bob`) use password `password`. Membership (PR 2) is the ACL.
 
 `ben/pets` is gitignored scratch. `loco/core`, `loco/studio`, `loco/cards` are committed.
 
@@ -40,33 +40,9 @@ You log into Loco, not into a site. Authorization *behavior* stays the same so e
 
 **Done when:** `cargo test` is green, Studio login still works, `AuthUser.site_id` is no longer who you are.
 
-### PR 2 — Membership replaces the three gates
+### PR 2 — Membership replaces the three gates — done
 
-The real architecture PR. Do not split it.
-
-Delete `METADATA_EDITOR_SITES`, `require_can_edit_user`, and “this *site* may edit schema.”
-
-Add `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Authz on `SiteScope`: token → identity → union of org role + project role.
-
-- `/schema` + `/config` writes: `developer` or org `owner`, plus draft version.
-- `/data` writes: `developer` or `editor` (public hole stays until PR 3).
-- `/config` invite + list/remove members. Pending identity if the handle does not exist yet.
-- Create org → creator is org `owner`. Create person-owned project → creator is project `developer`.
-- `loco` is an org. Editors of `loco/studio` are members, not `username == loco`.
-
-Rewrite `loco-apps/tests/suites/authorization/authorization.hurl`:
-
-1. Alice (owner of `alice/testapp`) can mutate schema.
-2. Bob cannot.
-3. Alice invites Bob as `editor` → Bob can `/data`, cannot `/schema`.
-4. Promote Bob to `developer` → Bob can `/schema`.
-5. Org path: create `acme`, Alice is owner, Alice creates `acme/crm` and edits its schema.
-
-Studio: token is the person; `X-Project-Id` is the project; `X-Site-Id` is the pin. No more “log into the magic editor site.”
-
-**Touch:** `http/scope/site.rs`, `version.rs`, `config.rs`, `http/scope/mod.rs`, `handlers/config.rs`, `handlers/auth.rs`, authorization fixtures + Hurl, Studio project/session header usage.
-
-**Done when:** that Hurl file is the spec and the hardcoded allowlist is gone.
+Membership is the ACL. `METADATA_EDITOR_SITES`, `require_can_edit_user`, and “this site may edit schema” are gone. `authorization.hurl` is the spec.
 
 ### PR 3 — Public is a policy, not a hole
 

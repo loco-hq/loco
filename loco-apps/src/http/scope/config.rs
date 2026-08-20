@@ -1,18 +1,19 @@
 use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
-use axum::http::StatusCode;
 use axum::http::request::Parts;
+use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
 
+use crate::auth::{AuthUser, AuthenticatedUser};
+use crate::http::authz::require_developer;
 use crate::http::project_config::ProjectConfig;
 use crate::http::response::error_response;
 use crate::server::AppState;
 use crate::{Project, SchemaStore};
 
 use super::helpers::read_path_params;
-use super::site::SiteScope;
 
 #[derive(Deserialize)]
 struct ConfigProjectPathParams {
@@ -20,16 +21,14 @@ struct ConfigProjectPathParams {
     project: String,
 }
 
-/// A `SiteScope` plus a `ProjectConfig` pinned to the `{user}/{project}`
-/// in the request path, for `/config/...` routes that target an existing
-/// project.
+/// Authenticated identity plus a `ProjectConfig` pinned to the
+/// `{user}/{project}` in the request path, for `/config/...` routes
+/// that target an existing project.
 ///
-/// Authz lives entirely on `SiteScope` — this extractor composes it
-/// (authenticate, gate to metadata-editor sites, scope the path target to
-/// the authed user) and verifies the project exists before handing the
-/// `ProjectConfig` to the handler.
+/// Authz: developer (or org owner) on the path project. Site headers
+/// are not required.
 pub struct ConfigProjectScope {
-    pub site: SiteScope,
+    pub auth: AuthUser,
     pub config: ProjectConfig,
 }
 
@@ -54,13 +53,12 @@ impl FromRequestParts<Arc<AppState>> for ConfigProjectScope {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let site = SiteScope::from_request_parts(parts, state).await?;
-        site.require_authenticated()?;
-        site.require_metadata_editing_site()?;
+        let AuthenticatedUser(session) =
+            AuthenticatedUser::from_request_parts(parts, state).await?;
 
         let ConfigProjectPathParams { user, project } = read_path_params(parts, state).await?;
 
-        site.require_can_edit_user(&user)?;
+        require_developer(state, &session.user.username, &format!("{user}/{project}"))?;
 
         let config = ProjectConfig::new(state.schema.clone(), user, project);
         if !config.exists() {
@@ -70,37 +68,52 @@ impl FromRequestParts<Arc<AppState>> for ConfigProjectScope {
             ));
         }
 
-        Ok(ConfigProjectScope { site, config })
+        Ok(ConfigProjectScope {
+            auth: session.user,
+            config,
+        })
     }
 }
 
-/// A `SiteScope` for `/config/...` routes that don't (or can't) point at an
-/// existing project — `POST /config/project` (the project doesn't exist
-/// yet) and `GET /config/project/list` (no project in the URL at all).
-///
-/// Holds the schema store privately so handlers can list user projects or
-/// build a `ProjectConfig` without reaching into `state.schema`.
+/// Authenticated identity for `/config` routes that don't point at an
+/// existing project — `POST /config/project`, `POST /config/org`, and
+/// `GET /config/project/list`. No site headers required: capability is
+/// on the member, not a magic editor site.
 pub struct ConfigUserScope {
-    pub site: SiteScope,
+    pub user: AuthUser,
     store: Arc<SchemaStore>,
+    state: Arc<AppState>,
 }
 
 impl ConfigUserScope {
     pub fn username(&self) -> &str {
-        &self.site.user().username
+        &self.user.username
     }
 
-    /// Projects owned by the authenticated user.
+    /// Projects the identity can see: person-owned `{handle}/*`, org-owned
+    /// projects they own, and projects they have an explicit membership on.
     pub fn list_projects(&self) -> Vec<(String, Arc<Project>)> {
-        let prefix = format!("{}/", self.username());
-        self.store.projects().list(&prefix)
+        let handle = self.username();
+        self.store
+            .projects()
+            .list_all()
+            .into_iter()
+            .filter(|(_, project)| {
+                self.state
+                    .auth_adapter
+                    .project_access(handle, project.project())
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+            .collect()
     }
 
-    /// Build a `ProjectConfig` for `(auth_user, project)`. Caller is
+    /// Build a `ProjectConfig` for `(account, project)`. Caller is
     /// responsible for any existence semantics (e.g. `create_project`
     /// expects no entry; `update`/`delete` expect one).
-    pub fn project_config(&self, project: &str) -> ProjectConfig {
-        ProjectConfig::new(self.store.clone(), self.username().to_string(), project.to_string())
+    pub fn project_config(&self, account: &str, project: &str) -> ProjectConfig {
+        ProjectConfig::new(self.store.clone(), account.to_string(), project.to_string())
     }
 }
 
@@ -111,13 +124,12 @@ impl FromRequestParts<Arc<AppState>> for ConfigUserScope {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let site = SiteScope::from_request_parts(parts, state).await?;
-        site.require_authenticated()?;
-        site.require_metadata_editing_site()?;
+        let AuthenticatedUser(session) =
+            AuthenticatedUser::from_request_parts(parts, state).await?;
         Ok(ConfigUserScope {
-            site,
+            user: session.user,
             store: state.schema.clone(),
+            state: state.clone(),
         })
     }
 }
-

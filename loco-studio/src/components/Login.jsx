@@ -8,12 +8,13 @@ export default function Login() {
   const navigate = useNavigate();
   const login = useLogin();
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
 
   if (isLoggedIn()) return <Navigate to="/" replace />;
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    login.mutate(username, { onSuccess: () => navigate('/') });
+    login.mutate({ username, password }, { onSuccess: () => navigate('/') });
   };
 
   return (
@@ -27,6 +28,13 @@ export default function Login() {
             required
             value={username}
             onChange={setUsername}
+          />
+          <TextField
+            type="password"
+            placeholder="Password"
+            required
+            value={password}
+            onChange={setPassword}
           />
           <button type="submit" disabled={login.isPending}>Sign in</button>
         </form>

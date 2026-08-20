@@ -6,7 +6,8 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use crate::http::response::{ApiResponse, error_response, schema_error_to_response};
+use crate::auth::{auth_error_to_response, OrgRole, ProjectRole};
+use crate::http::response::{error_response, schema_error_to_response, ApiResponse};
 use crate::http::scope::{ConfigProjectScope, ConfigUserScope};
 use crate::server::AppState;
 use crate::{Dataset, DatasetUpdate, ProjectUpdate, Site, SiteUpdate};
@@ -20,6 +21,18 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/project/{user}/{project}",
             get(get_project).put(update_project).delete(delete_project),
+        )
+        // org
+        .route("/org", post(create_org))
+        .route("/org/{org}/member", post(invite_org_member))
+        .route("/org/{org}/member/list", get(list_org_members))
+        .route("/org/{org}/member/{handle}", delete(remove_org_member))
+        // project members
+        .route("/member/{user}/{project}", post(invite_project_member))
+        .route("/member/{user}/{project}/list", get(list_project_members))
+        .route(
+            "/member/{user}/{project}/{handle}",
+            axum::routing::put(update_project_member).delete(remove_project_member),
         )
         // dataset
         .route("/dataset/{user}/{project}", post(create_dataset))
@@ -38,7 +51,10 @@ pub fn router() -> Router<Arc<AppState>> {
         // version (read/edit of the manifest itself lives under /schema)
         .route("/version/{user}/{project}", post(create_version))
         .route("/version/{user}/{project}/list", get(list_versions))
-        .route("/version/{user}/{project}/{version}", delete(delete_version))
+        .route(
+            "/version/{user}/{project}/{version}",
+            delete(delete_version),
+        )
 }
 
 // --- project ---
@@ -48,10 +64,15 @@ pub struct CreateProjectBody {
     name: String,
     label: String,
     description: String,
+    /// Account that will own the project. Defaults to the caller's person
+    /// handle. Must be an org the caller owns, or the caller themselves.
+    #[serde(default)]
+    account: Option<String>,
 }
 
 pub async fn create_project(
     scope: ConfigUserScope,
+    State(state): State<Arc<AppState>>,
     Json(body): Json<CreateProjectBody>,
 ) -> Response {
     if body.name.is_empty() || body.name.contains('/') {
@@ -61,7 +82,12 @@ pub async fn create_project(
         );
     }
 
-    let pc = scope.project_config(&body.name);
+    let account = body.account.as_deref().unwrap_or_else(|| scope.username());
+    if let Err(resp) = require_can_create_under(&scope, &state, account) {
+        return resp;
+    }
+
+    let pc = scope.project_config(account, &body.name);
 
     let project = match pc.create_project(body.label.clone(), body.description) {
         Ok(v) => v,
@@ -85,7 +111,48 @@ pub async fn create_project(
         "dev".to_string(),
     ));
 
+    let project_id = format!("{account}/{}", body.name);
+    let _ = state.auth_adapter.add_project_member(
+        &project_id,
+        scope.username(),
+        ProjectRole::Developer,
+    );
+
     (StatusCode::CREATED, ApiResponse::success(project)).into_response()
+}
+
+fn require_can_create_under(
+    scope: &ConfigUserScope,
+    state: &AppState,
+    account: &str,
+) -> Result<(), Response> {
+    if account == scope.username() {
+        return Ok(());
+    }
+    match state.auth_adapter.get_account(account) {
+        Ok(Some(acct)) if acct.account_type == crate::auth::AccountType::Org => {
+            match state
+                .auth_adapter
+                .project_access(scope.username(), &format!("{account}/_"))
+            {
+                Ok(Some(role)) if role.can_develop() => Ok(()),
+                Ok(_) => Err(error_response(
+                    StatusCode::FORBIDDEN,
+                    "you do not have access to this resource",
+                )),
+                Err(e) => Err(auth_error_to_response(e)),
+            }
+        }
+        Ok(Some(_)) => Err(error_response(
+            StatusCode::FORBIDDEN,
+            "person accounts do not have members; create an org to share projects",
+        )),
+        Ok(None) => Err(error_response(
+            StatusCode::NOT_FOUND,
+            &format!("unknown account: {account}"),
+        )),
+        Err(e) => Err(auth_error_to_response(e)),
+    }
 }
 
 pub async fn list_projects(scope: ConfigUserScope) -> Response {
@@ -134,10 +201,7 @@ pub async fn delete_project(
 
 // --- dataset ---
 
-pub async fn create_dataset(
-    scope: ConfigProjectScope,
-    Json(input): Json<Dataset>,
-) -> Response {
+pub async fn create_dataset(scope: ConfigProjectScope, Json(input): Json<Dataset>) -> Response {
     match scope.config.create_dataset(input) {
         Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -193,10 +257,7 @@ pub async fn delete_dataset(
 
 // --- site ---
 
-pub async fn create_site(
-    scope: ConfigProjectScope,
-    Json(input): Json<Site>,
-) -> Response {
+pub async fn create_site(scope: ConfigProjectScope, Json(input): Json<Site>) -> Response {
     match scope.config.create_site(input) {
         Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
         Err(e) => schema_error_to_response(e),
@@ -275,5 +336,158 @@ pub async fn delete_version(
     match scope.config.delete_version(&version) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => schema_error_to_response(e),
+    }
+}
+
+// --- org ---
+
+#[derive(Deserialize)]
+pub struct CreateOrgBody {
+    handle: String,
+}
+
+pub async fn create_org(
+    scope: ConfigUserScope,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateOrgBody>,
+) -> Response {
+    match state
+        .auth_adapter
+        .create_org(&body.handle, scope.username())
+    {
+        Ok(account) => (StatusCode::CREATED, ApiResponse::success(account)).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct InviteOrgMemberBody {
+    handle: String,
+    role: OrgRole,
+}
+
+pub async fn invite_org_member(
+    scope: ConfigUserScope,
+    State(state): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    Json(body): Json<InviteOrgMemberBody>,
+) -> Response {
+    if let Err(resp) = require_org_owner(&scope, &state, &org) {
+        return resp;
+    }
+    match state
+        .auth_adapter
+        .add_org_member(&org, &body.handle, body.role)
+    {
+        Ok(member) => (StatusCode::CREATED, ApiResponse::success(member)).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+pub async fn list_org_members(
+    scope: ConfigUserScope,
+    State(state): State<Arc<AppState>>,
+    Path(org): Path<String>,
+) -> Response {
+    if let Err(resp) = require_org_owner(&scope, &state, &org) {
+        return resp;
+    }
+    match state.auth_adapter.list_org_members(&org) {
+        Ok(members) => ApiResponse::success(members).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+pub async fn remove_org_member(
+    scope: ConfigUserScope,
+    State(state): State<Arc<AppState>>,
+    Path((org, handle)): Path<(String, String)>,
+) -> Response {
+    if let Err(resp) = require_org_owner(&scope, &state, &org) {
+        return resp;
+    }
+    match state.auth_adapter.remove_org_member(&org, &handle) {
+        Ok(()) => ApiResponse::success("removed").into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+fn require_org_owner(scope: &ConfigUserScope, state: &AppState, org: &str) -> Result<(), Response> {
+    match state
+        .auth_adapter
+        .project_access(scope.username(), &format!("{org}/_"))
+    {
+        Ok(Some(role)) if role.can_develop() => Ok(()),
+        Ok(_) => Err(error_response(
+            StatusCode::FORBIDDEN,
+            "you do not have access to this resource",
+        )),
+        Err(e) => Err(auth_error_to_response(e)),
+    }
+}
+
+// --- project members ---
+
+#[derive(Deserialize)]
+pub struct InviteProjectMemberBody {
+    handle: String,
+    role: ProjectRole,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateProjectMemberBody {
+    role: ProjectRole,
+}
+
+pub async fn invite_project_member(
+    scope: ConfigProjectScope,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<InviteProjectMemberBody>,
+) -> Response {
+    match state
+        .auth_adapter
+        .add_project_member(&scope.project_id(), &body.handle, body.role)
+    {
+        Ok(member) => (StatusCode::CREATED, ApiResponse::success(member)).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+pub async fn list_project_members(
+    scope: ConfigProjectScope,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    match state.auth_adapter.list_project_members(&scope.project_id()) {
+        Ok(members) => ApiResponse::success(members).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+pub async fn update_project_member(
+    scope: ConfigProjectScope,
+    State(state): State<Arc<AppState>>,
+    Path((_, _, handle)): Path<(String, String, String)>,
+    Json(body): Json<UpdateProjectMemberBody>,
+) -> Response {
+    match state
+        .auth_adapter
+        .update_project_member(&scope.project_id(), &handle, body.role)
+    {
+        Ok(member) => ApiResponse::success(member).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
+}
+
+pub async fn remove_project_member(
+    scope: ConfigProjectScope,
+    State(state): State<Arc<AppState>>,
+    Path((_, _, handle)): Path<(String, String, String)>,
+) -> Response {
+    match state
+        .auth_adapter
+        .remove_project_member(&scope.project_id(), &handle)
+    {
+        Ok(()) => ApiResponse::success("removed").into_response(),
+        Err(e) => auth_error_to_response(e),
     }
 }

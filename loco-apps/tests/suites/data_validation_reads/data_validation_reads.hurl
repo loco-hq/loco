@@ -10,7 +10,7 @@
 # Login as `testuser`. Schema writes later still use the loco/cards editor site.
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
-{"username": "testuser"}
+{"username": "testuser", "password": "password"}
 HTTP 200
 [Captures]
 token: jsonpath "$.data.token"

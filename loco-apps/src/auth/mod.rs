@@ -42,7 +42,6 @@ impl fmt::Display for AuthError {
 // --- Data types ---
 
 /// Known password for seeded identities and auto-created test users.
-/// Login still accepts a missing password as a test-only bypass (removed in PR 2).
 pub const TEST_PASSWORD: &str = "password";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -59,6 +58,54 @@ impl AccountType {
             AccountType::Org => "org",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrgRole {
+    Owner,
+    Member,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectRole {
+    Developer,
+    Editor,
+}
+
+impl ProjectRole {
+    pub fn can_develop(self) -> bool {
+        matches!(self, ProjectRole::Developer)
+    }
+
+    pub fn can_edit_data(self) -> bool {
+        matches!(self, ProjectRole::Developer | ProjectRole::Editor)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Account {
+    pub handle: String,
+    #[serde(rename = "type")]
+    pub account_type: AccountType,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrgMember {
+    pub org: String,
+    pub handle: String,
+    pub role: OrgRole,
+    pub pending: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectMember {
+    pub project: String,
+    pub handle: String,
+    pub role: ProjectRole,
+    pub pending: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,12 +190,51 @@ pub trait AuthAdapter: Send + Sync {
     fn get_user(&self, user_id: &str) -> Result<Option<AuthUser>, AuthError>;
     fn list_users(&self) -> Result<Vec<AuthUser>, AuthError>;
     fn create_user(&self, user: &CreateUserRequest) -> Result<AuthUser, AuthError>;
-    fn update_user(&self, user_id: &str, updates: &UpdateUserRequest) -> Result<AuthUser, AuthError>;
+    fn update_user(
+        &self,
+        user_id: &str,
+        updates: &UpdateUserRequest,
+    ) -> Result<AuthUser, AuthError>;
     fn delete_user(&self, user_id: &str) -> Result<(), AuthError>;
     fn create_api_key(&self, identity_id: &str, label: &str) -> Result<ApiKey, AuthError>;
     fn validate_api_key(&self, key: &str) -> Result<AuthSession, AuthError>;
     fn revoke_api_key(&self, identity_id: &str, key_id: &str) -> Result<(), AuthError>;
     fn list_api_keys(&self, identity_id: &str) -> Result<Vec<ApiKeyInfo>, AuthError>;
+
+    fn get_account(&self, handle: &str) -> Result<Option<Account>, AuthError>;
+    fn create_org(&self, handle: &str, creator_handle: &str) -> Result<Account, AuthError>;
+
+    /// Effective role on `{account}/{project}`: org owner ∪ project role, plus
+    /// implicit developer when the identity owns the person account.
+    fn project_access(
+        &self,
+        identity_handle: &str,
+        project_id: &str,
+    ) -> Result<Option<ProjectRole>, AuthError>;
+
+    fn add_project_member(
+        &self,
+        project_id: &str,
+        handle: &str,
+        role: ProjectRole,
+    ) -> Result<ProjectMember, AuthError>;
+    fn update_project_member(
+        &self,
+        project_id: &str,
+        handle: &str,
+        role: ProjectRole,
+    ) -> Result<ProjectMember, AuthError>;
+    fn remove_project_member(&self, project_id: &str, handle: &str) -> Result<(), AuthError>;
+    fn list_project_members(&self, project_id: &str) -> Result<Vec<ProjectMember>, AuthError>;
+
+    fn add_org_member(
+        &self,
+        org: &str,
+        handle: &str,
+        role: OrgRole,
+    ) -> Result<OrgMember, AuthError>;
+    fn remove_org_member(&self, org: &str, handle: &str) -> Result<(), AuthError>;
+    fn list_org_members(&self, org: &str) -> Result<Vec<OrgMember>, AuthError>;
 }
 
 // --- Extractor ---
@@ -214,17 +300,11 @@ pub fn auth_error_to_response(err: AuthError) -> Response {
         AuthError::SessionExpired | AuthError::SessionNotFound => {
             auth_error_response(StatusCode::UNAUTHORIZED, &err.to_string())
         }
-        AuthError::UserNotFound => {
-            auth_error_response(StatusCode::NOT_FOUND, "user not found")
-        }
+        AuthError::UserNotFound => auth_error_response(StatusCode::NOT_FOUND, "user not found"),
         AuthError::UserAlreadyExists => {
             auth_error_response(StatusCode::CONFLICT, "user already exists")
         }
-        AuthError::Unauthorized => {
-            auth_error_response(StatusCode::FORBIDDEN, "unauthorized")
-        }
-        AuthError::Internal(msg) => {
-            auth_error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
-        }
+        AuthError::Unauthorized => auth_error_response(StatusCode::FORBIDDEN, "unauthorized"),
+        AuthError::Internal(msg) => auth_error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg),
     }
 }

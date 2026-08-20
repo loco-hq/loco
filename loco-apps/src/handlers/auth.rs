@@ -36,10 +36,7 @@ pub struct LoginRequest {
 
 /// Global login. Does not use `SiteScope` — identity is not site-scoped.
 /// Site headers on this request are ignored.
-pub async fn login(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<LoginRequest>,
-) -> Response {
+pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> Response {
     let credentials = LoginCredentials {
         username: body.username,
         password: body.password,
@@ -144,7 +141,10 @@ pub async fn create_api_key(
     }
 }
 
-pub async fn list_api_keys(user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
+pub async fn list_api_keys(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+) -> Response {
     match state.auth_adapter.list_api_keys(&user.0.user.id) {
         Ok(keys) => ApiResponse::success(keys).into_response(),
         Err(e) => auth_error_to_response(e),

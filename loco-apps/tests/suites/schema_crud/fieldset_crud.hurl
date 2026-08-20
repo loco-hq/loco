@@ -3,7 +3,7 @@
 
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
-{"username": "alice"}
+{"username": "alice", "password": "password"}
 HTTP 200
 [Captures]
 token: jsonpath "$.data.token"

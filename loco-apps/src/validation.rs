@@ -120,10 +120,7 @@ pub fn validate_record(
 ) -> ValidationReport {
     let field_defs = schema.fields(collection);
     // Map of field name -> declared type string ("string", "integer", ...).
-    let by_name: HashMap<&str, &str> = field_defs
-        .iter()
-        .map(|f| (f.name(), f.r#type()))
-        .collect();
+    let by_name: HashMap<&str, &str> = field_defs.iter().map(|f| (f.name(), f.r#type())).collect();
 
     let make = |kind: &str, path: Option<String>, message: String| match mode {
         ValidationMode::Create | ValidationMode::Update => Diagnostic::error(kind, path, message),
@@ -179,7 +176,11 @@ fn type_mismatch(declared: &str, value: &Value) -> Option<&'static str> {
         "boolean" => matches!(value, Value::Boolean(_)),
         _ => return None,
     };
-    if ok { None } else { Some(actual) }
+    if ok {
+        None
+    } else {
+        Some(actual)
+    }
 }
 
 fn value_type_name(value: &Value) -> &'static str {

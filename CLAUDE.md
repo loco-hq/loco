@@ -118,14 +118,14 @@ Mounted in `server.rs`:
 
 Handlers sit on request extractors in `http/scope/`:
 
-- `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_metadata_editing_site`, `require_can_edit_user`.
-- `VersionScope` — `SiteScope` plus a **writable** `VersionSchema` for the path triple. Used by `/schema`.
-- `ConfigProjectScope` / `ConfigUserScope` — `/config` routes.
-- `CollectionScope` / `RecordScope` — `/data` routes.
+- `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_developer`, `require_can_write_data`. Access is membership, not the site.
+- `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema`.
+- `ConfigProjectScope` / `ConfigUserScope` — `/config` routes. Project-targeted routes require developer; list/create/org do not need site headers.
+- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer; token-less `public` can still write (until the public-policy PR).
 
-Metadata-editor allowlist is currently hardcoded in `http/scope/site.rs`: `loco/studio/studio`, `loco/cards/cards`.
+Membership: `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Effective project access = org owner ∪ project role, plus implicit developer when the identity owns the person account (`alice` → `alice/*`).
 
-Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the user. Body is `{ "username" }` plus optional `"password"`. Seeded identities (`alice`, `bob`) have password `password`; omitting password is a test-only bypass. Org accounts (`loco`) cannot log in. Sessions and API keys hang off the identity and both work as `Authorization: Bearer …`.
+Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the user. Body is `{ "username", "password" }`. Seeded identities (`alice`, `bob`) have password `password`. Org accounts (`loco`) cannot log in. Sessions and API keys hang off the identity and both work as `Authorization: Bearer …`.
 
 ### Validation
 
@@ -152,7 +152,7 @@ All frontend apps use the same stack:
 
 ### Frontend locations
 
-- `loco-studio/` — Schema + record UI (port 5174). Editor session is always `X-Project-Id: loco/studio`, `X-Site-Id: studio`. Data calls override those headers to the browsed site.
+- `loco-studio/` — Schema + record UI (port 5174). The token is the person. Schema/config calls do not need site headers. Data calls send `X-Project-Id` / `X-Site-Id` for the browsed site.
 - `loco-ui/` — Reusable field library (no library build; consumed via npm workspaces). Playground at port 5175 (`npm run dev -w loco-ui`).
 
 ### loco-ui

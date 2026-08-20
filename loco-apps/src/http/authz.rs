@@ -1,8 +1,30 @@
 use axum::http::StatusCode;
 use axum::response::Response;
 
+use crate::auth::auth_error_to_response;
 use crate::http::response::error_response;
+use crate::server::AppState;
 use crate::SchemaStore;
+
+/// Developer (or org owner) on `{account}/{project}`. Used by `/schema` and
+/// `/config` extractors that target a path project.
+pub fn require_developer(
+    state: &AppState,
+    identity_handle: &str,
+    project_id: &str,
+) -> Result<(), Response> {
+    match state
+        .auth_adapter
+        .project_access(identity_handle, project_id)
+    {
+        Ok(Some(role)) if role.can_develop() => Ok(()),
+        Ok(_) => Err(error_response(
+            StatusCode::FORBIDDEN,
+            "you do not have access to this resource",
+        )),
+        Err(e) => Err(auth_error_to_response(e)),
+    }
+}
 
 pub fn validate_collection(
     schema: &SchemaStore,

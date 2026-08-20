@@ -14,7 +14,7 @@
 # Login as acme (global). Schema reads/writes still send loco/cards headers.
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
-{"username": "acme"}
+{"username": "acme", "password": "password"}
 HTTP 200
 [Captures]
 token: jsonpath "$.data.token"

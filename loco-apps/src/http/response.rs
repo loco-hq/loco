@@ -28,10 +28,7 @@ impl<T: Serialize> ApiResponse<T> {
 
     /// Like `success`, but attaches non-fatal diagnostics. Empty list collapses
     /// to `None` so the field stays absent on clean reads.
-    pub fn success_with_diagnostics(
-        data: T,
-        diagnostics: Vec<Diagnostic>,
-    ) -> Json<ApiResponse<T>> {
+    pub fn success_with_diagnostics(data: T, diagnostics: Vec<Diagnostic>) -> Json<ApiResponse<T>> {
         Json(ApiResponse {
             ok: true,
             data: Some(data),
@@ -74,9 +71,7 @@ pub fn lake_error_to_response(err: loco_lake::Error) -> Response {
         loco_lake::Error::InvalidDataset(msg) => {
             error_response(StatusCode::BAD_REQUEST, &format!("invalid dataset: {msg}"))
         }
-        loco_lake::Error::Internal(msg) => {
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
-        }
+        loco_lake::Error::Internal(msg) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg),
     }
 }
 
@@ -103,4 +98,3 @@ pub fn version_schema_error_to_response(
         VersionSchemaError::Schema(e) => schema_error_to_response(e),
     }
 }
-

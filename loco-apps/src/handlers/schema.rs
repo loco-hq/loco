@@ -5,13 +5,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
-use crate::http::response::{
-    error_response, version_schema_error_to_response, ApiResponse,
-};
+use crate::http::response::{error_response, version_schema_error_to_response, ApiResponse};
 use crate::http::scope::VersionScope;
 use crate::server::AppState;
 use crate::{
-    Collection, CollectionUpdate, Field, Fieldset, FieldsetUpdate, FieldUpdate, ManifestUpdate,
+    Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, ManifestUpdate,
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -21,7 +19,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/{user}/{project}/{version}/manifest",
             get(get_manifest).put(update_manifest),
         )
-        .route("/{user}/{project}/{version}/collection", post(create_collection))
+        .route(
+            "/{user}/{project}/{version}/collection",
+            post(create_collection),
+        )
         .route(
             "/{user}/{project}/{version}/collection/list",
             get(list_collections),
@@ -60,27 +61,18 @@ pub fn router() -> Router<Arc<AppState>> {
 pub async fn get_manifest(scope: VersionScope) -> Response {
     match scope.schema.manifest() {
         Some(m) => ApiResponse::success(m).into_response(),
-        None => error_response(
-            StatusCode::NOT_FOUND,
-            "manifest not found for this version",
-        ),
+        None => error_response(StatusCode::NOT_FOUND, "manifest not found for this version"),
     }
 }
 
-pub async fn update_manifest(
-    scope: VersionScope,
-    Json(patch): Json<ManifestUpdate>,
-) -> Response {
+pub async fn update_manifest(scope: VersionScope, Json(patch): Json<ManifestUpdate>) -> Response {
     match scope.schema.update_manifest(patch) {
         Ok(m) => ApiResponse::success(m).into_response(),
         Err(e) => version_schema_error_to_response(e),
     }
 }
 
-pub async fn create_collection(
-    scope: VersionScope,
-    Json(input): Json<Collection>,
-) -> Response {
+pub async fn create_collection(scope: VersionScope, Json(input): Json<Collection>) -> Response {
     match scope.schema.create_collection(input) {
         Ok(c) => (StatusCode::CREATED, ApiResponse::success(c)).into_response(),
         Err(e) => version_schema_error_to_response(e),
@@ -97,7 +89,10 @@ pub async fn get_collection(
 ) -> Response {
     match scope.schema.collection(&name) {
         Some(c) => ApiResponse::success(c).into_response(),
-        None => error_response(StatusCode::NOT_FOUND, &format!("collection not found: {name}")),
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            &format!("collection not found: {name}"),
+        ),
     }
 }
 

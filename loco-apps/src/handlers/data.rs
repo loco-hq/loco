@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use loco_lake::{InsertRequest, UpdatePatch, Value};
 
 use crate::http::response::{
-    ApiResponse, error_response, lake_error_to_response, validation_error_response,
+    error_response, lake_error_to_response, validation_error_response, ApiResponse,
 };
 use crate::http::scope::{CollectionScope, RecordScope};
 use crate::server::AppState;
@@ -30,6 +30,9 @@ pub async fn add(
     State(state): State<Arc<AppState>>,
     Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
+    if let Err(resp) = scope.site.require_can_write_data() {
+        return resp;
+    }
     let report = scope.validate(&fields, ValidationMode::Create);
     if report.has_errors() {
         return validation_error_response(report.diagnostics);
@@ -79,6 +82,9 @@ pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Resp
 }
 
 pub async fn delete(scope: RecordScope, State(state): State<Arc<AppState>>) -> Response {
+    if let Err(resp) = scope.collection.site.require_can_write_data() {
+        return resp;
+    }
     match state
         .data_adapter
         .delete(&scope.dataset_id(), scope.collection_key(), &scope.id)
@@ -93,6 +99,9 @@ pub async fn update(
     State(state): State<Arc<AppState>>,
     Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
+    if let Err(resp) = scope.collection.site.require_can_write_data() {
+        return resp;
+    }
     let report = scope.validate(&fields, ValidationMode::Update);
     if report.has_errors() {
         return validation_error_response(report.diagnostics);
@@ -102,10 +111,12 @@ pub async fn update(
         user: scope.user().username.clone(),
         fields,
     };
-    match state
-        .data_adapter
-        .update(&scope.dataset_id(), scope.collection_key(), &scope.id, patch)
-    {
+    match state.data_adapter.update(
+        &scope.dataset_id(),
+        scope.collection_key(),
+        &scope.id,
+        patch,
+    ) {
         Ok(rec) => ApiResponse::success(rec).into_response(),
         Err(e) => lake_error_to_response(e),
     }
