@@ -76,6 +76,9 @@ struct StoredProjectMember {
 /// ```
 pub struct LocalAuthAdapter {
     base_dir: PathBuf,
+    /// Login of an unknown handle creates a person account. Off unless the
+    /// caller asks for it — see [`LocalAuthAdapter::with_auto_create`].
+    auto_create: bool,
     accounts: RwLock<HashMap<String, StoredAccount>>,
     identities: RwLock<HashMap<String, StoredIdentity>>, // handle → identity
     sessions: RwLock<HashMap<String, StoredSession>>,    // token → session
@@ -85,9 +88,16 @@ pub struct LocalAuthAdapter {
 }
 
 impl LocalAuthAdapter {
+    /// Auto-create comes from the environment: off unless
+    /// `LOCO_AUTH_AUTO_CREATE=1` (or `cfg(test)`, for this crate's own tests).
     pub fn new(base_dir: &Path) -> Self {
+        Self::with_auto_create(base_dir, Self::auto_create_from_env())
+    }
+
+    pub fn with_auto_create(base_dir: &Path, auto_create: bool) -> Self {
         let adapter = LocalAuthAdapter {
             base_dir: base_dir.to_path_buf(),
+            auto_create,
             accounts: RwLock::new(HashMap::new()),
             identities: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
@@ -381,8 +391,10 @@ impl LocalAuthAdapter {
 
     /// First login of an unknown handle creates a person account + identity.
     /// Only when `cfg(test)` or `LOCO_AUTH_AUTO_CREATE=1` — Hurl suites use
-    /// the env flag so they do not need per-suite auth fixtures.
-    fn auto_create_enabled() -> bool {
+    /// the env flag so they do not need per-suite auth fixtures. Off by
+    /// default: an unknown handle would otherwise take the `{handle}/*`
+    /// namespace, because owning the person account implies developer on it.
+    fn auto_create_from_env() -> bool {
         cfg!(test)
             || std::env::var("LOCO_AUTH_AUTO_CREATE")
                 .ok()
@@ -525,7 +537,7 @@ impl AuthAdapter for LocalAuthAdapter {
                     identity.clone()
                 }
                 None => {
-                    if !Self::auto_create_enabled() {
+                    if !self.auto_create {
                         return Err(AuthError::InvalidCredentials);
                     }
                     let mut identity = self.auto_create_person(
@@ -981,6 +993,14 @@ mod tests {
         (dir, adapter)
     }
 
+    /// `cfg(test)` turns auto-create on for `new`, so the production default
+    /// has to be asked for explicitly.
+    fn adapter_without_auto_create() -> (tempfile::TempDir, LocalAuthAdapter) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), false);
+        (dir, adapter)
+    }
+
     fn login(adapter: &LocalAuthAdapter, username: &str, password: Option<&str>) -> AuthSession {
         adapter
             .login(&LoginCredentials {
@@ -1067,8 +1087,9 @@ mod tests {
     }
 
     #[test]
-    fn login_unknown_handle_creates_person() {
-        let (_dir, adapter) = adapter();
+    fn login_unknown_handle_creates_person_when_auto_create_on() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), true);
         let session = login_ok(&adapter, "testuser");
         assert_eq!(session.user.username, "testuser");
         assert_eq!(session.user.account_type, "person");
@@ -1180,6 +1201,30 @@ mod tests {
         let (_dir, adapter) = adapter();
         let err = adapter.create_org("alice", "bob").unwrap_err();
         assert!(matches!(err, AuthError::UserAlreadyExists));
+    }
+
+    #[test]
+    fn login_unknown_handle_without_auto_create_squats_nothing() {
+        let (dir, adapter) = adapter_without_auto_create();
+        let err = adapter
+            .login(&LoginCredentials {
+                username: "acme".to_string(),
+                password: Some(TEST_PASSWORD.to_string()),
+            })
+            .unwrap_err();
+        assert!(matches!(err, AuthError::InvalidCredentials));
+        assert!(!adapter.accounts.read().unwrap().contains_key("acme"));
+        assert!(!adapter.identities.read().unwrap().contains_key("acme"));
+        assert!(!dir.path().join("identities/acme.json").exists());
+        assert!(!dir.path().join("accounts/acme.json").exists());
+        assert_eq!(adapter.project_access("acme", "acme/crm").unwrap(), None);
+    }
+
+    #[test]
+    fn seeded_login_still_works_without_auto_create() {
+        let (_dir, adapter) = adapter_without_auto_create();
+        let session = login_ok(&adapter, "alice");
+        assert_eq!(session.user.username, "alice");
     }
 
     #[test]
