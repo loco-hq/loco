@@ -4,6 +4,7 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
+use super::secret;
 use super::{
     Account, AccountType, ApiKey, ApiKeyInfo, AuthAdapter, AuthError, AuthSession, AuthUser,
     CreateUserRequest, LoginCredentials, OrgMember, OrgRole, ProjectMember, ProjectRole,
@@ -24,8 +25,11 @@ struct StoredIdentity {
     id: String,
     handle: String,
     name: String,
-    /// Plaintext on the local adapter (same as API keys).
-    password: String,
+    /// Argon2id PHC string, never the password itself. `alias` reads files
+    /// written before hashing landed; [`LocalAuthAdapter::load_from_disk`]
+    /// re-hashes those in place.
+    #[serde(rename = "password_hash", alias = "password")]
+    password_hash: String,
     created_at: String,
     last_login_at: Option<String>,
 }
@@ -40,6 +44,8 @@ struct StoredSession {
 #[derive(Serialize, Deserialize, Clone)]
 struct StoredApiKey {
     id: String,
+    /// SHA-256 of the key, never the key itself. The plaintext key is returned
+    /// once, from [`LocalAuthAdapter::create_api_key`].
     key_hash: String,
     identity_id: String,
     label: String,
@@ -117,7 +123,14 @@ impl LocalAuthAdapter {
                 .unwrap()
                 .insert(account.handle.clone(), account);
         });
-        self.load_json_dir("identities", |this, identity: StoredIdentity| {
+        self.load_json_dir("identities", |this, mut identity: StoredIdentity| {
+            if !secret::is_password_hash(&identity.password_hash) {
+                // Written before credentials were hashed: the field holds the
+                // password itself. Hash it and rewrite the file so the
+                // plaintext stops living on disk.
+                identity.password_hash = secret::hash_password(&identity.password_hash);
+                this.persist_identity(&identity);
+            }
             this.identities
                 .write()
                 .unwrap()
@@ -129,7 +142,12 @@ impl LocalAuthAdapter {
                 .unwrap()
                 .insert(session.token.clone(), session);
         });
-        self.load_json_dir("api_keys", |this, key: StoredApiKey| {
+        self.load_json_dir("api_keys", |this, mut key: StoredApiKey| {
+            if !secret::is_api_key_hash(&key.key_hash) {
+                // Same upgrade as identities: the field used to hold the key.
+                key.key_hash = secret::hash_api_key(&key.key_hash);
+                this.persist_api_key(&key);
+            }
             this.api_keys.write().unwrap().insert(key.id.clone(), key);
         });
         self.load_member_tree("org_members", |this, member: StoredOrgMember| {
@@ -222,7 +240,7 @@ impl LocalAuthAdapter {
             id: uuid::Uuid::new_v4().to_string(),
             handle: handle.to_string(),
             name: name.to_string(),
-            password: TEST_PASSWORD.to_string(),
+            password_hash: secret::hash_password(TEST_PASSWORD),
             created_at: now,
             last_login_at: None,
         };
@@ -385,10 +403,6 @@ impl LocalAuthAdapter {
             .cloned()
     }
 
-    fn password_ok(stored: &str, provided: Option<&str>) -> bool {
-        provided == Some(stored)
-    }
-
     /// First login of an unknown handle creates a person account + identity.
     /// Only when `cfg(test)` or `LOCO_AUTH_AUTO_CREATE=1` — Hurl suites use
     /// the env flag so they do not need per-suite auth fixtures. Off by
@@ -431,7 +445,7 @@ impl LocalAuthAdapter {
             id: uuid::Uuid::new_v4().to_string(),
             handle: handle.to_string(),
             name: handle.to_string(),
-            password: password.to_string(),
+            password_hash: secret::hash_password(password),
             created_at: now,
             last_login_at: None,
         };
@@ -526,13 +540,25 @@ impl AuthAdapter for LocalAuthAdapter {
                     return Err(AuthError::InvalidCredentials);
                 }
                 Some(_) => {
+                    // Verify outside the write lock: argon2 is deliberately
+                    // slow, and holding the map would serialize every login.
+                    let stored = self
+                        .identities
+                        .read()
+                        .unwrap()
+                        .get(&credentials.username)
+                        .cloned()
+                        .ok_or(AuthError::UserNotFound)?;
+                    if !secret::verify_password(
+                        &stored.password_hash,
+                        credentials.password.as_deref(),
+                    ) {
+                        return Err(AuthError::InvalidCredentials);
+                    }
                     let mut identities = self.identities.write().unwrap();
                     let identity = identities
                         .get_mut(&credentials.username)
                         .ok_or(AuthError::UserNotFound)?;
-                    if !Self::password_ok(&identity.password, credentials.password.as_deref()) {
-                        return Err(AuthError::InvalidCredentials);
-                    }
                     identity.last_login_at = Some(now.clone());
                     identity.clone()
                 }
@@ -643,7 +669,7 @@ impl AuthAdapter for LocalAuthAdapter {
             id: uuid::Uuid::new_v4().to_string(),
             handle: req.username.clone(),
             name: req.name.clone(),
-            password: password.to_string(),
+            password_hash: secret::hash_password(password),
             created_at: now,
             last_login_at: None,
         };
@@ -705,7 +731,7 @@ impl AuthAdapter for LocalAuthAdapter {
         let id = uuid::Uuid::new_v4().to_string();
         let stored = StoredApiKey {
             id: id.clone(),
-            key_hash: key.clone(),
+            key_hash: secret::hash_api_key(&key),
             identity_id: identity_id.to_string(),
             label: label.to_string(),
             created_at: now.clone(),
@@ -726,10 +752,11 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn validate_api_key(&self, key: &str) -> Result<AuthSession, AuthError> {
+        let hash = secret::hash_api_key(key);
         let api_keys = self.api_keys.read().unwrap();
         let stored = api_keys
             .values()
-            .find(|k| k.key_hash == key && !k.revoked)
+            .find(|k| k.key_hash == hash && !k.revoked)
             .ok_or(AuthError::InvalidCredentials)?;
         let identity = self
             .identity_by_id(&stored.identity_id)
@@ -1129,6 +1156,91 @@ mod tests {
 
         adapter.revoke_api_key(&session.user.id, &key.id).unwrap();
         assert!(adapter.validate_api_key(&key.key).is_err());
+    }
+
+    #[test]
+    fn api_key_file_stores_a_digest_not_the_key() {
+        let (dir, adapter) = adapter();
+        let session = login_ok(&adapter, "alice");
+        let key = adapter.create_api_key(&session.user.id, "ci").unwrap();
+
+        let path = dir.path().join("api_keys").join(format!("{}.json", key.id));
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !contents.contains(&key.key),
+            "api key file holds the bearer token: {contents}"
+        );
+        let stored: StoredApiKey = serde_json::from_str(&contents).unwrap();
+        assert_eq!(stored.key_hash, secret::hash_api_key(&key.key));
+    }
+
+    /// Files written before hashing landed hold the password itself. Loading
+    /// them upgrades the file in place — the login still works, and the
+    /// plaintext stops living on disk.
+    #[test]
+    fn legacy_plaintext_identity_is_rehashed_on_load() {
+        let dir = tempfile::TempDir::new().unwrap();
+        {
+            let adapter = LocalAuthAdapter::new(dir.path());
+            let identity = adapter.identities.read().unwrap()["alice"].clone();
+            let legacy = serde_json::json!({
+                "id": identity.id,
+                "handle": "alice",
+                "name": "Alice",
+                "password": TEST_PASSWORD,
+                "created_at": identity.created_at,
+                "last_login_at": null,
+            });
+            std::fs::write(
+                dir.path().join("identities/alice.json"),
+                serde_json::to_string_pretty(&legacy).unwrap(),
+            )
+            .unwrap();
+        }
+
+        let adapter = LocalAuthAdapter::new(dir.path());
+        assert_eq!(login_ok(&adapter, "alice").user.username, "alice");
+        assert!(adapter
+            .login(&LoginCredentials {
+                username: "alice".to_string(),
+                password: Some("nope".to_string()),
+            })
+            .is_err());
+
+        let contents = std::fs::read_to_string(dir.path().join("identities/alice.json")).unwrap();
+        assert!(
+            !contents.contains(&format!("\"{TEST_PASSWORD}\"")),
+            "identity file still holds the plaintext password: {contents}"
+        );
+        let stored: StoredIdentity = serde_json::from_str(&contents).unwrap();
+        assert!(secret::is_password_hash(&stored.password_hash));
+    }
+
+    #[test]
+    fn legacy_plaintext_api_key_is_rehashed_on_load() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let raw_key = {
+            let adapter = LocalAuthAdapter::new(dir.path());
+            let session = login_ok(&adapter, "alice");
+            let key = adapter.create_api_key(&session.user.id, "ci").unwrap();
+            let mut stored = adapter.api_keys.read().unwrap()[&key.id].clone();
+            stored.key_hash = key.key.clone();
+            adapter.persist_api_key(&stored);
+            key.key
+        };
+
+        let adapter = LocalAuthAdapter::new(dir.path());
+        assert_eq!(
+            adapter.validate_api_key(&raw_key).unwrap().user.username,
+            "alice"
+        );
+        for entry in std::fs::read_dir(dir.path().join("api_keys")).unwrap() {
+            let contents = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            assert!(
+                !contents.contains(&raw_key),
+                "api key file still holds the bearer token: {contents}"
+            );
+        }
     }
 
     #[test]
