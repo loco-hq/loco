@@ -6,7 +6,7 @@ For the next session. Read `README.md` + `CLAUDE.md` + [`docs/identity.md`](docs
 
 Studio production build (PR 1 of the Node-free Studio design). Dropped the `/api` Vite rewrite. `api.js` talks to `/auth` `/config` `/schema` `/data`. API origin is the `API_ORIGIN` constant in `loco-studio/src/config.js` (default `http://localhost:3000`). Dev still uses a passthrough Vite proxy of those four prefixes. `npm run build -w loco-studio` emits a static `dist/` that can be served with `python3 -m http.server` — no Node at runtime.
 
-Identity stack (PRs 1–5) is done. Next is the field-metadata / schema→form loop. Serving `dist/` from Axum (`cargo run` = API + Studio) is the leftover Studio follow-up, not blocking schema→form.
+Identity stack (PRs 1–5) is done. Login auto-create is gated in **PR #21** (issue #2, approved, awaiting Ben merge): default off, `LOCO_AUTH_AUTO_CREATE=1` for Hurl, `LocalAuthAdapter::with_auto_create` so the off path is testable. Remaining auth p0 is issue #3 (hash passwords). Cadence is **one issue at a time**; do not spawn #3 until #21 is merged and the issue-2 worktree is torn down. Next product work after that is still the field-metadata / schema→form loop. Serving `dist/` from Axum (`cargo run` = API + Studio) is the leftover Studio follow-up, not blocking schema→form.
 
 ## Servers
 
