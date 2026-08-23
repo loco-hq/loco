@@ -14,6 +14,7 @@ Repo: `loco-hq/loco`. Process: [`orchestration.md`](orchestration.md). Read that
 cargo test                    # Workspace tests, including Hurl API suites
 cargo test -p loco-gen-schema # Schema/codegen crate only
 cargo clippy --workspace      # Lint everything
+cargo fmt --all               # Format (CI checks with --check)
 cargo run -p loco-apps        # API server on :3000
 npm run dev -w loco-studio    # Studio on :5174 (proxies /auth /config /schema /data → :3000)
 npm run build -w loco-studio  # Static SPA in loco-studio/dist/ (no Node at runtime)
@@ -21,6 +22,13 @@ python3 -m http.server 5176 --directory examples/public-page
                               # public page on :5176 (CORS → :3000)
 npm run dev -w loco-ui        # loco-ui playground on :5175
 ```
+
+## CI
+
+`.github/workflows/ci.yml` runs on every PR and on pushes to `main`: `cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, then `cargo test --workspace` (which
+includes the Hurl suites — the workflow installs the `hurl` binary first). Server-side only; the
+frontend workspaces are not built in CI yet.
 
 ## Project Structure
 
