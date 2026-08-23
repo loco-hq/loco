@@ -13,8 +13,8 @@
 //!   The second is authenticated-only for routes with no project in the
 //!   URL (project create, org create, project list).
 //! - [`CollectionScope`] / [`RecordScope`] layer on top of `SiteScope` for
-//!   data routes that need a specific collection or record. Public list/get
-//!   and insert are the union of permission sets the site assigns to `public`.
+//!   data routes that need a specific collection or record. Public CRUD
+//!   follows the verbs on permission sets the site assigns to `public`.
 
 mod collection;
 mod config;

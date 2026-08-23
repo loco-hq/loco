@@ -91,7 +91,7 @@ Every request that needs a site sends:
 - `X-Site-Id: {site}`
 - `Authorization: Bearer <token>` when authenticated
 
-Missing auth becomes a synthetic `public` user. Anonymous `/data` list/get/insert are the union of permission sets the site assigns to `public`. Update and delete are never public. `/schema` and `/config` require a real session and project `developer` (or org owner).
+Missing auth becomes a synthetic `public` user. Anonymous `/data` CRUD is the union of permission sets the site assigns to `public`; unspecified verbs default to false. `/schema` and `/config` require a real session and project `developer` (or org owner).
 
 ### `/data` — records (scoped by the site's dataset + version)
 

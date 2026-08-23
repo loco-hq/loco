@@ -113,7 +113,8 @@ impl SiteScope {
         }
     }
 
-    /// `/data` update/delete: developer or editor. Public never mutates.
+    /// Member data mutation (developer or editor). Public verbs live on
+    /// [`super::CollectionScope`] and follow the site's permission sets.
     pub fn require_can_write_data(&self) -> Result<(), Response> {
         if self.has_data_access()? {
             Ok(())

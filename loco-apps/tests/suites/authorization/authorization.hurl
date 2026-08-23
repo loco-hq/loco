@@ -39,13 +39,13 @@ Content-Type: application/json
 {"username": "alice"}
 HTTP 401
 
-# Collection list includes fixture collections (widgets + guestbook + secrets)
+# Collection list includes fixture collections (widgets + guestbook + secrets + wiki)
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
 Authorization: Bearer {{alice_token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
-jsonpath "$.data" count == 3
+jsonpath "$.data" count == 4
 
 # 1. Alice (developer of alice/testapp) can mutate schema
 POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection
@@ -65,7 +65,7 @@ Authorization: Bearer {{alice_token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
-jsonpath "$.data" count == 4
+jsonpath "$.data" count == 5
 
 # 2. Bob cannot touch Alice's schema
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list

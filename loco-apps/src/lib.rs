@@ -83,10 +83,17 @@ mod generated_tests {
             ("version".into(), "0-draft".into()),
             ("name".into(), "guestbook_read".into()),
         ]);
-        let ps = PermissionSet::from_yaml("label: Guestbook read\nread:\n  - guestbook\n", &vars)
-            .unwrap();
-        assert_eq!(ps.read(), &["guestbook".to_string()]);
-        assert!(ps.create().is_empty());
+        let ps = PermissionSet::from_yaml(
+            "label: Guestbook read\ncollections:\n  - collection: guestbook\n    read: true\n",
+            &vars,
+        )
+        .unwrap();
+        assert_eq!(ps.collections().len(), 1);
+        assert_eq!(ps.collections()[0].collection(), "guestbook");
+        assert!(ps.collections()[0].read());
+        assert!(!ps.collections()[0].create());
+        assert!(!ps.collections()[0].update());
+        assert!(!ps.collections()[0].delete());
     }
 
     #[test]

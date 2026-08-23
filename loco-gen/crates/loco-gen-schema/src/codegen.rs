@@ -1,11 +1,11 @@
-use crate::types::{FieldType, TypeDef};
+use crate::types::{FieldType, Property, TypeDef};
 
 const RUST_KEYWORDS: &[&str] = &[
     "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for",
     "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
-    "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use",
-    "where", "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final",
-    "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
+    "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where",
+    "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final", "macro",
+    "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
 ];
 
 fn rust_ident(name: &str) -> String {
@@ -31,13 +31,73 @@ fn plural_field(name: &str) -> String {
     rust_ident(&format!("{}s", to_snake_case(name)))
 }
 
+/// Nested `object` types, inner-first so a parent can name a child as a field.
+fn collect_object_types(field_type: &FieldType, out: &mut Vec<(String, Vec<Property>)>) {
+    match field_type {
+        FieldType::Object { name, properties } => {
+            for p in properties {
+                collect_object_types(&p.field_type, out);
+            }
+            if !out.iter().any(|(n, _)| n == name) {
+                out.push((name.clone(), properties.clone()));
+            }
+        }
+        FieldType::List(inner) => collect_object_types(inner, out),
+        _ => {}
+    }
+}
+
+fn generate_object_struct(out: &mut String, name: &str, properties: &[Property]) {
+    let fields: Vec<(String, FieldType)> = properties
+        .iter()
+        .map(|p| (p.name.clone(), p.field_type.clone()))
+        .collect();
+
+    out.push_str(
+        "#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]\n",
+    );
+    out.push_str(&format!("pub struct {name} {{\n"));
+    for (field_name, field_type) in &fields {
+        out.push_str("    #[serde(default)]\n");
+        out.push_str(&format!(
+            "    pub {}: {},\n",
+            rust_ident(field_name),
+            field_type.rust_type()
+        ));
+    }
+    out.push_str("}\n\n");
+
+    let type_def = TypeDef {
+        name: name.to_string(),
+        description: String::new(),
+        path_template: String::new(),
+        properties: properties.to_vec(),
+    };
+    out.push_str(&format!("impl {name} {{\n"));
+    generate_new(out, &type_def, &fields);
+    for (field_name, field_type) in &fields {
+        generate_accessor(out, field_name, field_type);
+    }
+    out.push_str("}\n\n");
+}
+
 /// Generate Rust source code for a single TypeDef.
 pub fn generate(type_def: &TypeDef) -> String {
     let name = &type_def.name;
     let fields = type_def.all_fields();
     let mut out = String::new();
 
-    out.push_str("#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]\n");
+    let mut objects = Vec::new();
+    for (_, ft) in &fields {
+        collect_object_types(ft, &mut objects);
+    }
+    for (obj_name, obj_props) in &objects {
+        generate_object_struct(&mut out, obj_name, obj_props);
+    }
+
+    out.push_str(
+        "#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]\n",
+    );
     out.push_str(&format!("pub struct {name} {{\n"));
     for (field_name, field_type) in &fields {
         out.push_str("    #[serde(default)]\n");
@@ -189,7 +249,9 @@ fn generate_new(out: &mut String, type_def: &TypeDef, fields: &[(String, FieldTy
 fn generate_accessor(out: &mut String, field_name: &str, field_type: &FieldType) {
     let ident = rust_ident(field_name);
     let (return_type, body) = match field_type {
-        FieldType::String | FieldType::Slug { .. } => ("&str".to_string(), format!("&self.{ident}")),
+        FieldType::String | FieldType::Slug { .. } => {
+            ("&str".to_string(), format!("&self.{ident}"))
+        }
         FieldType::Integer => ("i64".to_string(), format!("self.{ident}")),
         FieldType::Float => ("f64".to_string(), format!("self.{ident}")),
         FieldType::Boolean => ("bool".to_string(), format!("self.{ident}")),
@@ -197,6 +259,7 @@ fn generate_accessor(out: &mut String, field_name: &str, field_type: &FieldType)
             format!("&[{}]", inner.rust_type()),
             format!("&self.{ident}"),
         ),
+        FieldType::Object { name, .. } => (format!("&{name}"), format!("&self.{ident}")),
     };
     out.push_str(&format!(
         "    pub fn {ident}(&self) -> {} {{\n        {}\n    }}\n\n",
@@ -220,16 +283,14 @@ fn generate_from_map(out: &mut String, type_def: &TypeDef, fields: &[(String, Fi
                 format!("fields.get(\"{field_name}\").and_then(|v| v.parse().ok()).unwrap_or(0)")
             }
             FieldType::Float => {
-                format!(
-                    "fields.get(\"{field_name}\").and_then(|v| v.parse().ok()).unwrap_or(0.0)"
-                )
+                format!("fields.get(\"{field_name}\").and_then(|v| v.parse().ok()).unwrap_or(0.0)")
             }
             FieldType::Boolean => {
                 format!(
                     "fields.get(\"{field_name}\").and_then(|v| v.parse().ok()).unwrap_or(false)"
                 )
             }
-            FieldType::List(_) => {
+            FieldType::List(_) | FieldType::Object { .. } => {
                 format!("fields.get(\"{field_name}\").and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default()")
             }
         };
@@ -249,16 +310,14 @@ fn to_map_insert_expr(field_name: &str, field_type: &FieldType, owner: &str) -> 
         FieldType::Integer | FieldType::Float | FieldType::Boolean => format!(
             "m.insert(\"{field_name}\".to_string(), {access}.to_string());"
         ),
-        FieldType::List(_) => format!(
+        FieldType::List(_) | FieldType::Object { .. } => format!(
             "m.insert(\"{field_name}\".to_string(), serde_json::to_string(&{access}).unwrap_or_default());"
         ),
     }
 }
 
 fn generate_to_map(out: &mut String, fields: &[(String, FieldType)]) {
-    out.push_str(
-        "    pub fn to_map(&self) -> std::collections::HashMap<String, String> {\n",
-    );
+    out.push_str("    pub fn to_map(&self) -> std::collections::HashMap<String, String> {\n");
     out.push_str("        let mut m = std::collections::HashMap::new();\n");
     for (field_name, field_type) in fields {
         out.push_str(&format!(
@@ -298,9 +357,9 @@ fn generate_from_yaml(out: &mut String, type_def: &TypeDef) {
 fn yaml_coerce_expr(field_name: &str, field_type: &FieldType) -> String {
     let lookup = format!("mapping.and_then(|m| m.get(\"{field_name}\"))");
     match field_type {
-        FieldType::String | FieldType::Slug { .. } => format!(
-            "{lookup}.and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default()"
-        ),
+        FieldType::String | FieldType::Slug { .. } => {
+            format!("{lookup}.and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default()")
+        }
         FieldType::Integer => format!("{lookup}.and_then(|v| v.as_i64()).unwrap_or(0)"),
         FieldType::Float => format!("{lookup}.and_then(|v| v.as_f64()).unwrap_or(0.0)"),
         FieldType::Boolean => format!("{lookup}.and_then(|v| v.as_bool()).unwrap_or(false)"),
@@ -308,6 +367,11 @@ fn yaml_coerce_expr(field_name: &str, field_type: &FieldType) -> String {
             let item_expr = yaml_item_coerce_expr(inner);
             format!(
                 "{lookup}.and_then(|v| v.as_sequence()).map(|seq| seq.iter().filter_map(|item| {item_expr}).collect()).unwrap_or_default()"
+            )
+        }
+        FieldType::Object { .. } => {
+            format!(
+                "{lookup}.and_then(|v| serde_yaml::from_value(v.clone()).ok()).unwrap_or_default()"
             )
         }
     }
@@ -322,6 +386,7 @@ fn yaml_item_coerce_expr(field_type: &FieldType) -> String {
         FieldType::Float => "item.as_f64()".to_string(),
         FieldType::Boolean => "item.as_bool()".to_string(),
         FieldType::List(_) => unreachable!("nested lists are rejected at parse time"),
+        FieldType::Object { .. } => "serde_yaml::from_value(item.clone()).ok()".to_string(),
     }
 }
 
@@ -367,7 +432,7 @@ fn generate_update_struct(out: &mut String, type_def: &TypeDef) {
             FieldType::Integer | FieldType::Float | FieldType::Boolean => {
                 format!("fields.get(\"{field_name}\").and_then(|v| v.parse().ok())")
             }
-            FieldType::List(_) => {
+            FieldType::List(_) | FieldType::Object { .. } => {
                 format!("fields.get(\"{field_name}\").and_then(|v| serde_json::from_str(v).ok())")
             }
         };
@@ -377,9 +442,7 @@ fn generate_update_struct(out: &mut String, type_def: &TypeDef) {
     out.push_str("    }\n\n");
 
     // to_map
-    out.push_str(
-        "    pub fn to_map(&self) -> std::collections::HashMap<String, String> {\n",
-    );
+    out.push_str("    pub fn to_map(&self) -> std::collections::HashMap<String, String> {\n");
     out.push_str("        let mut m = std::collections::HashMap::new();\n");
     for (field_name, field_type) in &fields {
         let ident = rust_ident(field_name);
@@ -390,7 +453,7 @@ fn generate_update_struct(out: &mut String, type_def: &TypeDef) {
             FieldType::Integer | FieldType::Float | FieldType::Boolean => format!(
                 "m.insert(\"{field_name}\".to_string(), v.to_string());"
             ),
-            FieldType::List(_) => format!(
+            FieldType::List(_) | FieldType::Object { .. } => format!(
                 "m.insert(\"{field_name}\".to_string(), serde_json::to_string(v).unwrap_or_default());"
             ),
         };
@@ -408,7 +471,10 @@ fn generate_update_struct(out: &mut String, type_def: &TypeDef) {
     for (field_name, field_type) in &fields {
         let ident = rust_ident(field_name);
         let assign = match field_type {
-            FieldType::String | FieldType::Slug { .. } | FieldType::List(_) => {
+            FieldType::String
+            | FieldType::Slug { .. }
+            | FieldType::List(_)
+            | FieldType::Object { .. } => {
                 format!("target.{ident} = v.clone();")
             }
             FieldType::Integer | FieldType::Float | FieldType::Boolean => {
@@ -544,8 +610,7 @@ mod tests {
         TypeDef {
             name: "Collection".to_string(),
             description: "A named collection".to_string(),
-            path_template: "${namespace}/versions/${version}/collection/${name}"
-                .to_string(),
+            path_template: "${namespace}/versions/${version}/collection/${name}".to_string(),
             properties: vec![
                 Property {
                     name: "namespace".to_string(),
@@ -592,7 +657,9 @@ mod tests {
         // Main struct derives Default + Serialize + Deserialize so it can round-trip
         // through YAML and accept partial JSON inputs (with `#[serde(default)]` per
         // field) when the route layer fills in scope-provided fields.
-        assert!(code.contains("#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]"));
+        assert!(code.contains(
+            "#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]"
+        ));
         assert!(code.contains("#[serde(default)]\n    pub item_count: i64,"));
     }
 
@@ -625,9 +692,13 @@ mod tests {
     #[test]
     fn test_generates_from_map() {
         let code = generate(&sample_type_def());
-        assert!(code.contains("pub fn from_map(fields: &std::collections::HashMap<String, String>) -> Self"));
+        assert!(code.contains(
+            "pub fn from_map(fields: &std::collections::HashMap<String, String>) -> Self"
+        ));
         assert!(code.contains(r#"fields.get("name").cloned().unwrap_or_default()"#));
-        assert!(code.contains(r#"fields.get("item_count").and_then(|v| v.parse().ok()).unwrap_or(0)"#));
+        assert!(
+            code.contains(r#"fields.get("item_count").and_then(|v| v.parse().ok()).unwrap_or(0)"#)
+        );
     }
 
     #[test]
@@ -644,7 +715,9 @@ mod tests {
     fn test_generates_store_alias_and_accessor() {
         let code = generate(&sample_type_def());
         // Per-type store is a type alias over the generic InstanceStore.
-        assert!(code.contains("pub type CollectionStore = loco_schema_runtime::InstanceStore<Collection>;"));
+        assert!(code.contains(
+            "pub type CollectionStore = loco_schema_runtime::InstanceStore<Collection>;"
+        ));
         // SchemaStore gets an accessor returning a borrowed store.
         assert!(code.contains("impl SchemaStore {"));
         assert!(code.contains("pub fn collections(&self) -> &CollectionStore"));
@@ -665,7 +738,9 @@ mod tests {
         assert!(code.contains("fn apply_update(&mut self, patch: &CollectionUpdate)"));
         assert!(code.contains("patch.apply(self);"));
         // Trait impl forwards from_path / from_yaml to the inherent methods.
-        assert!(code.contains("fn from_path(path: &str) -> Option<std::collections::HashMap<String, String>>"));
+        assert!(code.contains(
+            "fn from_path(path: &str) -> Option<std::collections::HashMap<String, String>>"
+        ));
         assert!(code.contains("Collection::from_path(path)"));
         assert!(code.contains("fn from_yaml(yaml: &str, vars: &std::collections::HashMap<String, String>) -> Result<Self, loco_schema_runtime::Error>"));
         assert!(code.contains("Collection::from_yaml(yaml, vars)"));
@@ -676,7 +751,9 @@ mod tests {
         let code = generate(&sample_type_def());
         assert!(code.contains("pub fn to_map(&self) -> std::collections::HashMap<String, String>"));
         assert!(code.contains(r#"m.insert("name".to_string(), self.name.clone());"#));
-        assert!(code.contains(r#"m.insert("item_count".to_string(), self.item_count.to_string());"#));
+        assert!(
+            code.contains(r#"m.insert("item_count".to_string(), self.item_count.to_string());"#)
+        );
         assert!(code.contains(r#"m.insert("is_active".to_string(), self.is_active.to_string());"#));
     }
 
@@ -714,8 +791,16 @@ mod tests {
             description: "A site".to_string(),
             path_template: "${project}/sites/${name}".to_string(),
             properties: vec![
-                Property { name: "project".to_string(), field_type: FieldType::Slug { segments: 2 }, create_only: true },
-                Property { name: "name".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
+                Property {
+                    name: "project".to_string(),
+                    field_type: FieldType::Slug { segments: 2 },
+                    create_only: true,
+                },
+                Property {
+                    name: "name".to_string(),
+                    field_type: FieldType::Slug { segments: 1 },
+                    create_only: true,
+                },
             ],
         };
         let code = generate_all(&[td]);
@@ -725,7 +810,9 @@ mod tests {
         assert!(code.contains("pub fn load(instances_dir: &std::path::Path) -> Result<Self, loco_schema_runtime::Error>"));
         // Each type gets its own YAML/FS adapter, wrapped in an Arc and shared
         // with the InstanceStore.
-        assert!(code.contains("loco_schema_runtime::YamlFsAdapter::<Site>::new(instances_dir.to_path_buf())"));
+        assert!(code.contains(
+            "loco_schema_runtime::YamlFsAdapter::<Site>::new(instances_dir.to_path_buf())"
+        ));
         assert!(code.contains("loco_schema_runtime::SchemaPersistence<Site>"));
         assert!(code.contains("SiteStore::new(sites_adapter.clone())"));
         // Loading is per-type via adapter.load_all().
@@ -788,6 +875,68 @@ mod tests {
     }
 
     #[test]
+    fn test_list_of_object_generation() {
+        let td = TypeDef {
+            name: "PermissionSet".to_string(),
+            description: "".to_string(),
+            path_template: "${project}/versions/${version}/permission_sets/${name}".to_string(),
+            properties: vec![
+                Property {
+                    name: "project".to_string(),
+                    field_type: FieldType::Slug { segments: 2 },
+                    create_only: true,
+                },
+                Property {
+                    name: "version".to_string(),
+                    field_type: FieldType::Slug { segments: 1 },
+                    create_only: true,
+                },
+                Property {
+                    name: "name".to_string(),
+                    field_type: FieldType::Slug { segments: 1 },
+                    create_only: true,
+                },
+                Property {
+                    name: "collections".to_string(),
+                    field_type: FieldType::List(Box::new(FieldType::Object {
+                        name: "CollectionGrant".to_string(),
+                        properties: vec![
+                            Property {
+                                name: "collection".to_string(),
+                                field_type: FieldType::String,
+                                create_only: false,
+                            },
+                            Property {
+                                name: "read".to_string(),
+                                field_type: FieldType::Boolean,
+                                create_only: false,
+                            },
+                            Property {
+                                name: "create".to_string(),
+                                field_type: FieldType::Boolean,
+                                create_only: false,
+                            },
+                        ],
+                    })),
+                    create_only: false,
+                },
+            ],
+        };
+        let code = generate(&td);
+        assert!(code.contains("pub struct CollectionGrant {"));
+        assert!(code.contains("pub collection: String,"));
+        assert!(code.contains("pub read: bool,"));
+        assert!(code.contains("pub fn collection(&self) -> &str"));
+        assert!(code.contains("pub fn read(&self) -> bool"));
+        assert!(code.contains("pub collections: Vec<CollectionGrant>,"));
+        assert!(code.contains("pub fn collections(&self) -> &[CollectionGrant]"));
+        assert!(code.contains("serde_yaml::from_value(item.clone()).ok()"));
+        // Nested objects are not instances — no store, no path helpers.
+        assert!(!code.contains("pub type CollectionGrantStore"));
+        assert!(!code.contains("impl loco_schema_runtime::SchemaInstance for CollectionGrant"));
+    }
+
+    #[test]
     fn test_to_snake_case() {
         assert_eq!(to_snake_case("Collection"), "collection");
         assert_eq!(to_snake_case("MyType"), "my_type");
@@ -797,8 +946,11 @@ mod tests {
     #[test]
     fn test_generates_to_path() {
         let code = generate(&sample_type_def());
-        assert!(code.contains("pub fn to_path(namespace: &str, version: &str, name: &str) -> String"));
-        assert!(code.contains(r#"format!("{0}/versions/{1}/collection/{2}", namespace, version, name)"#));
+        assert!(
+            code.contains("pub fn to_path(namespace: &str, version: &str, name: &str) -> String")
+        );
+        assert!(code
+            .contains(r#"format!("{0}/versions/{1}/collection/{2}", namespace, version, name)"#));
     }
 
     #[test]
@@ -819,8 +971,16 @@ mod tests {
             description: "".to_string(),
             path_template: "${type}/items/${name}".to_string(),
             properties: vec![
-                Property { name: "type".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
-                Property { name: "name".to_string(), field_type: FieldType::Slug { segments: 1 }, create_only: true },
+                Property {
+                    name: "type".to_string(),
+                    field_type: FieldType::Slug { segments: 1 },
+                    create_only: true,
+                },
+                Property {
+                    name: "name".to_string(),
+                    field_type: FieldType::Slug { segments: 1 },
+                    create_only: true,
+                },
             ],
         };
         let code = generate(&td);

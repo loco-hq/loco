@@ -52,7 +52,23 @@ properties:
 | `float` | `f64` |
 | `boolean` | |
 | `slug` | Path-safe identifier `[a-z0-9_.-]+`. Optional `segments:` (default 1) controls how many `/`-separated parts are allowed. |
-| `list` | Requires `items:` naming a scalar type. Nested lists are rejected. |
+| `list` | Requires `items:` naming a scalar type, or an inline `object`. Nested lists are rejected. |
+| `object` | Inline nested struct (not an instance). Requires `name:` (snake_case, same as a type filename) and `properties:`. Codegen PascalCases it (`collection_grant` → `CollectionGrant`). Used as a list item; may also be a property. |
+
+`items:` is either a scalar type name or an object spec:
+
+```yaml
+collections:
+  type: list
+  items:
+    type: object
+    name: collection_grant
+    properties:
+      collection:
+        type: string
+      read:
+        type: boolean
+```
 
 ### Property flags
 
@@ -87,7 +103,7 @@ Rust keyword escaping is handled automatically (e.g. `type` → `r#type`).
 
 - `TypeDef` — parsed type definition (name, description, `path_template`, properties)
 - `Property` — name, `FieldType`, `create_only` flag
-- `FieldType` — `String`, `Integer`, `Float`, `Boolean`, `Slug { segments }`, `List(Box<FieldType>)`
+- `FieldType` — `String`, `Integer`, `Float`, `Boolean`, `Slug { segments }`, `List(Box<FieldType>)`, `Object { name, properties }`
 - `Error` — crate error type
 
 ## Tests

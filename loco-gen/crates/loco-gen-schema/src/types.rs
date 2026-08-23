@@ -7,12 +7,20 @@ pub enum FieldType {
     List(Box<FieldType>),
     /// A path-safe identifier: `[a-z0-9_.-]+` per segment, `/`-separated.
     /// `segments` controls how many `/`-separated parts are expected (default 1).
-    Slug { segments: u32 },
+    Slug {
+        segments: u32,
+    },
+    /// Inline nested struct. Not an instance — no pathTemplate, no store.
+    /// `name` is the generated Rust struct ident (must be unique in the crate).
+    Object {
+        name: String,
+        properties: Vec<Property>,
+    },
 }
 
 impl FieldType {
-    /// Parse a scalar type name. Lists and slugs have sub-keys and are built
-    /// by the parser, not this function.
+    /// Parse a scalar type name. Lists, slugs, and objects have sub-keys and
+    /// are built by the parser, not this function.
     pub fn parse_scalar(s: &str) -> Option<Self> {
         match s {
             "string" => Some(FieldType::String),
@@ -30,6 +38,7 @@ impl FieldType {
             FieldType::Float => "f64".to_string(),
             FieldType::Boolean => "bool".to_string(),
             FieldType::List(inner) => format!("Vec<{}>", inner.rust_type()),
+            FieldType::Object { name, .. } => name.clone(),
         }
     }
 }
@@ -78,4 +87,3 @@ impl TypeDef {
             .collect()
     }
 }
-

@@ -13,15 +13,19 @@ Content-Type: application/json
 {
   "name": "public_notes",
   "label": "Public notes",
-  "read": ["notes"],
-  "create": ["notes"]
+  "collections": [
+    { "collection": "notes", "read": true, "create": true }
+  ]
 }
 HTTP 201
 [Asserts]
 jsonpath "$.ok" == true
 jsonpath "$.data.name" == "public_notes"
-jsonpath "$.data.read[0]" == "notes"
-jsonpath "$.data.create[0]" == "notes"
+jsonpath "$.data.collections[0].collection" == "notes"
+jsonpath "$.data.collections[0].read" == true
+jsonpath "$.data.collections[0].create" == true
+jsonpath "$.data.collections[0].update" == false
+jsonpath "$.data.collections[0].delete" == false
 
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/permission_set/list
 Authorization: Bearer {{token}}
@@ -42,13 +46,15 @@ Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "label": "Anonymous notes",
-  "create": []
+  "collections": [
+    { "collection": "notes", "read": true }
+  ]
 }
 HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Anonymous notes"
-jsonpath "$.data.create" count == 0
-jsonpath "$.data.read[0]" == "notes"
+jsonpath "$.data.collections[0].read" == true
+jsonpath "$.data.collections[0].create" == false
 
 DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/permission_set/public_notes
 Authorization: Bearer {{token}}

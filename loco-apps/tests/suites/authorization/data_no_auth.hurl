@@ -5,11 +5,12 @@
 #   widgets   — no grants
 #   guestbook — guestbook_read + guestbook_create stacked on site `dev`
 #   secrets   — secrets_read assigned only on site `open`
+#   wiki      — wiki_public (all four verbs) assigned on site `open`
 #   site `dev`  — public_permission_sets: [guestbook_read, guestbook_create]
-#   site `open` — public_permission_sets: [secrets_read]
+#   site `open` — public_permission_sets: [secrets_read, wiki_public]
 #
-# Token-less requests are principal `public`. List/get if any assigned set
-# grants read; insert if any assigned set grants create. Update/delete never.
+# Token-less requests are principal `public`. Each verb is whatever the
+# assigned sets grant; unspecified flags are false.
 
 # 1. Private collection — no anonymous list/add
 GET http://127.0.0.1:{{port}}/data/widgets/list
@@ -174,6 +175,65 @@ DELETE http://127.0.0.1:{{port}}/data/secrets/delete/{{secret_id}}
 Authorization: Bearer {{alice_token}}
 X-Project-Id: alice/testapp
 X-Site-Id: dev
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+
+# 7. Public CRUD when the set grants all four verbs (wiki on `open`).
+POST http://127.0.0.1:{{port}}/data/wiki/add
+X-Project-Id: alice/testapp
+X-Site-Id: open
+Content-Type: application/json
+{}
+HTTP 201
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data.owner" == "public"
+[Captures]
+wiki_id: jsonpath "$.data.id"
+
+PUT http://127.0.0.1:{{port}}/data/wiki/update/{{wiki_id}}
+X-Project-Id: alice/testapp
+X-Site-Id: open
+Content-Type: application/json
+{}
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+
+GET http://127.0.0.1:{{port}}/data/wiki/get/{{wiki_id}}
+X-Project-Id: alice/testapp
+X-Site-Id: open
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+
+DELETE http://127.0.0.1:{{port}}/data/wiki/delete/{{wiki_id}}
+X-Project-Id: alice/testapp
+X-Site-Id: open
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+
+GET http://127.0.0.1:{{port}}/data/wiki/get/{{wiki_id}}
+X-Project-Id: alice/testapp
+X-Site-Id: open
+HTTP 404
+
+# Authenticated non-member still cannot use the public write hole
+POST http://127.0.0.1:{{port}}/data/wiki/add
+Authorization: Bearer {{carol_token}}
+X-Project-Id: alice/testapp
+X-Site-Id: open
+Content-Type: application/json
+{}
+HTTP 403
+
+# ...but can read a collection a public set grants read on
+GET http://127.0.0.1:{{port}}/data/wiki/list
+Authorization: Bearer {{carol_token}}
+X-Project-Id: alice/testapp
+X-Site-Id: open
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true

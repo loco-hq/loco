@@ -7,7 +7,7 @@ use axum::response::Response;
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
-use crate::http::authz::{forbidden, public_may_create, public_may_read};
+use crate::http::authz::{forbidden, public_may, DataVerb};
 use crate::server::AppState;
 use crate::validation::{validate_record, validate_records, ValidationMode, ValidationReport};
 use crate::PermissionSet;
@@ -82,14 +82,33 @@ impl CollectionScope {
             .collect()
     }
 
+    /// Owning project of the resolved collection (self or a direct dep).
+    /// Used so a qualified grant `{project}.{name}` can pin the owner;
+    /// bare names ignore this and match by collection name only.
+    fn collection_project(&self) -> String {
+        self.site
+            .schema
+            .collection(&self.collection_name)
+            .map(|c| c.project().to_string())
+            .unwrap_or_else(|| self.project_id())
+    }
+
+    fn public_allowed(&self, verb: DataVerb) -> bool {
+        public_may(
+            self.public_sets().iter().map(|s| s.as_ref()),
+            &self.collection_name,
+            &self.collection_project(),
+            verb,
+        )
+    }
+
     /// List/get: members with data access, or anyone when a stacked set
     /// grants `read` on this collection.
     pub fn require_can_read_data(&self) -> Result<(), Response> {
         if self.site.has_data_access()? {
             return Ok(());
         }
-        let sets = self.public_sets();
-        if public_may_read(sets.iter().map(|s| s.as_ref()), &self.collection_name) {
+        if self.public_allowed(DataVerb::Read) {
             return Ok(());
         }
         Err(forbidden())
@@ -97,24 +116,32 @@ impl CollectionScope {
 
     /// Insert: members with data access, or the `public` principal when a
     /// stacked set grants `create`. Authenticated non-members cannot use
-    /// the public-create hole.
+    /// the public write hole.
     pub fn require_can_create_data(&self) -> Result<(), Response> {
+        self.require_public_write(DataVerb::Create)
+    }
+
+    /// Update: members, or `public` when a stacked set grants `update`.
+    pub fn require_can_update_data(&self) -> Result<(), Response> {
+        self.require_public_write(DataVerb::Update)
+    }
+
+    /// Delete: members, or `public` when a stacked set grants `delete`.
+    pub fn require_can_delete_data(&self) -> Result<(), Response> {
+        self.require_public_write(DataVerb::Delete)
+    }
+
+    fn require_public_write(&self, verb: DataVerb) -> Result<(), Response> {
         if self.site.has_data_access()? {
             return Ok(());
         }
         if !self.site.is_public() {
             return Err(forbidden());
         }
-        let sets = self.public_sets();
-        if public_may_create(sets.iter().map(|s| s.as_ref()), &self.collection_name) {
+        if self.public_allowed(verb) {
             return Ok(());
         }
         Err(forbidden())
-    }
-
-    /// Update/delete: members only. Public never mutates.
-    pub fn require_can_write_data(&self) -> Result<(), Response> {
-        self.site.require_can_write_data()
     }
 }
 

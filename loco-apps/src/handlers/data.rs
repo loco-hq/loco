@@ -88,7 +88,7 @@ pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Resp
 }
 
 pub async fn delete(scope: RecordScope, State(state): State<Arc<AppState>>) -> Response {
-    if let Err(resp) = scope.collection.require_can_write_data() {
+    if let Err(resp) = scope.collection.require_can_delete_data() {
         return resp;
     }
     match state
@@ -105,7 +105,7 @@ pub async fn update(
     State(state): State<Arc<AppState>>,
     Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
-    if let Err(resp) = scope.collection.require_can_write_data() {
+    if let Err(resp) = scope.collection.require_can_update_data() {
         return resp;
     }
     let report = scope.validate(&fields, ValidationMode::Update);

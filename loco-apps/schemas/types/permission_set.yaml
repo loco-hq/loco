@@ -15,9 +15,19 @@ properties:
     type: string
   description:
     type: string
-  read:
+  collections:
     type: list
-    items: string
-  create:
-    type: list
-    items: string
+    items:
+      type: object
+      name: collection_grant
+      properties:
+        collection:
+          type: string
+        read:
+          type: boolean
+        create:
+          type: boolean
+        update:
+          type: boolean
+        delete:
+          type: boolean

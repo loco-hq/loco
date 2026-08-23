@@ -7,9 +7,24 @@ pub enum Error {
     Yaml(serde_yaml::Error),
     InvalidFieldType(String),
     MissingField(&'static str),
-    TemplateVarNotDeclared { type_name: String, var: String },
-    TemplateVarNotCreateOnly { type_name: String, var: String },
-    TemplateVarNotSlug { type_name: String, var: String },
+    TemplateVarNotDeclared {
+        type_name: String,
+        var: String,
+    },
+    TemplateVarNotCreateOnly {
+        type_name: String,
+        var: String,
+    },
+    TemplateVarNotSlug {
+        type_name: String,
+        var: String,
+    },
+    /// `type: object` (including as a list item) must declare `name:`
+    /// (snake_case; codegen PascalCases it).
+    ObjectMissingName {
+        parent: String,
+        field: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -30,6 +45,10 @@ impl fmt::Display for Error {
             Error::TemplateVarNotSlug { type_name, var } => write!(
                 f,
                 "type '{type_name}' property '{var}' is used in pathTemplate and must have type: slug"
+            ),
+            Error::ObjectMissingName { parent, field } => write!(
+                f,
+                "object type used by '{parent}.{field}' must declare name:"
             ),
         }
     }

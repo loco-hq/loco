@@ -24,7 +24,7 @@ They must not share tables. A Loco login is never "log into this site as a custo
 | **Account** | A handle that owns projects. `type` is `person` or `org`. The first segment of `{account}/{project}`. |
 | **Membership** | Identity ↔ org, and identity ↔ project. The Loco ACL. |
 | **Principal** | Who this request is: a Loco identity, or the reserved `public` principal. |
-| **Permission set** | A named, additive bundle of collection grants (`read`, `create`). Stacked by union. |
+| **Permission set** | A named, additive bundle of collection grants (`read`, `create`, `update`, `delete`). Stacked by union. |
 | **Site assignment** | Which permission sets the `public` principal gets on this site (`public_permission_sets`). |
 
 Handles are unique across person and org accounts. There is no person `loco` and org `loco`.
@@ -43,9 +43,19 @@ Permission sets sit beside collections, in the same version:
 ${project}/versions/${version}/permission_sets/${name}
 ```
 
-A set lists collection **names** it grants (`read: [guestbook]`, `create: [guestbook]`). Names resolve through `VersionSchema` (this version plus **direct** dependencies), so a consuming project can grant `contacts` even when that collection is owned by a package.
+A set lists collections it grants, each with boolean verbs:
 
-Sets are additive. There is no deny. Two sets that both mention `guestbook` stack: read from one and create from the other is read+create.
+```yaml
+# permission_sets/guestbook_read.yaml
+label: Guestbook read
+collections:
+  - collection: guestbook
+    read: true
+```
+
+Names are bare (`guestbook`) and resolve through `VersionSchema` (this version plus **direct** dependencies), so a consuming project can grant `contacts` even when that collection is owned by a package. Qualified `{project}.{name}` (e.g. `ben/crm.contacts`) is accepted and pins the owning project; a bare name is the common case and matches whichever collection that name resolves to (self first).
+
+Sets are additive. There is no deny. Two sets that both mention `guestbook` stack: read from one and create from the other is read+create. Unspecified verbs default to false — listing a collection with only `read: true` is the read-only default.
 
 The **site** chooses which sets apply to `public`:
 
@@ -60,7 +70,7 @@ public_permission_sets:
 
 Same pinned version, two sites, two public policies — that is the package story. A package may also ship a recommended set (e.g. `public_contacts`); the consuming site opts in by listing its name. Unknown names and grants for unknown collections are inert.
 
-Default: no sets assigned → `public` cannot list, get, or insert. Update and delete are never public (until record-level security).
+Default: no sets assigned → `public` cannot list, get, insert, update, or delete. Public may do any verb an assigned set grants, including update and delete. Without record-level security that means anyone can mutate any row; opt in explicitly.
 
 Loco `developer` / `editor` still have full `/data` access on the project. They do not go through permission sets. Sets are the site data-plane for `public` (and, later, for site users). Do not encode Studio capability as a permission set.
 
@@ -81,7 +91,7 @@ Personal accounts do not have members. If Alice wants a team, she creates an org
 3. Effective Loco project access = org role on the account segment ∪ project role on `{account}/{project}`.
 4. `/schema` and `/config` writes: identity with `developer` (or org `owner`) + draft version.
 5. `/data` for a Loco `developer` or `editor`: full CRUD.
-6. `/data` for `public`: list/get if any assigned set grants `read` on that collection; insert if any assigned set grants `create`. Authenticated Loco identities that are not members cannot use the public hole (they are not `public`). Update/delete never for `public`.
+6. `/data` for `public`: each verb (`read` / `create` / `update` / `delete`) if any assigned set grants it on that collection. Authenticated Loco identities that are not members may use the public *read* hole (they are not `public` for writes).
 7. `/schema` reads: `developer` or `editor`, and (once PR 4 lands) `public` on a site that assigns at least one permission set to `public`, pinned version only.
 
 API keys are issued to a Loco identity, then scoped to an account or one project, with `developer` or `editor`. Clippy/CI hold a key. Consumer bundles never do.
@@ -94,7 +104,7 @@ API keys are issued to a Loco identity, then scoped to an account or one project
 | `METADATA_EDITOR_SITES` (`loco/studio/studio`, `loco/cards/cards`) | Capability is on the member, not the site. |
 | `require_can_edit_user` (session name == path segment) | Membership. `ben/pets` is a handle, not an ACL. |
 | Studio logs into `loco/studio`, then overrides headers for data | One token. Headers only select the site. |
-| Anonymous `/data` can create/update/delete as `public` | Site-assigned permission sets. Default: no public write or delete. |
+| Anonymous `/data` can create/update/delete as `public` | Site-assigned permission sets. Default: no public access. Verbs are whatever the set grants. |
 | `public_read` / `public_create` on collection or site | `permission_set` metadata + `site.public_permission_sets`. |
 
 `loco/` is an org. People who edit `loco/studio` are members, not “username == loco”.

@@ -54,7 +54,7 @@ An instance's namespace IS its path relative to `schemas/instances/` with `.yaml
 
 ## Schema Files
 
-Type definitions live in `loco-apps/schemas/types/`. Supported field types: `string`, `integer`, `float`, `boolean`, `slug`, and `list` (a `list` requires an `items:` sub-key naming a scalar type — nested lists are rejected at parse time). Every type has a required `pathTemplate` that controls where instance files live under `schemas/instances/` and how template variables are extracted from file paths. The template is purely logical — it never contains `.yaml`; the storage layer appends that extension when writing to disk.
+Type definitions live in `loco-apps/schemas/types/`. Supported field types: `string`, `integer`, `float`, `boolean`, `slug`, and `list` (a `list` requires an `items:` sub-key naming a scalar type, or an inline `object` with `name:` and `properties:` — nested lists are rejected at parse time). Every type has a required `pathTemplate` that controls where instance files live under `schemas/instances/` and how template variables are extracted from file paths. The template is purely logical — it never contains `.yaml`; the storage layer appends that extension when writing to disk.
 
 ### pathTemplate examples
 
@@ -75,7 +75,7 @@ Type definitions live in `loco-apps/schemas/types/`. Supported field types: `str
 
 - A **version** is a schema snapshot under `{project}/versions/{version}/`. A version whose name contains `-` is a draft (`0.0.1-dev`); only drafts accept `/schema` writes.
 - A **dataset** is a lake partition. Record keys are `(dataset_id, collection, id)` where `dataset_id` is `{user}/{project}/{dataset_name}`.
-- A **site** pins a `version` + `dataset`. Requests identify the site with `X-Project-Id: {user}/{project}` and `X-Site-Id: {site}`. There is no tenant header. Token-less `public` may list/get or insert `/data` only via permission sets the site assigns (`public_permission_sets`). Grants are not on the collection. Update/delete are never public.
+- A **site** pins a `version` + `dataset`. Requests identify the site with `X-Project-Id: {user}/{project}` and `X-Site-Id: {site}`. There is no tenant header. Token-less `public` may perform any `/data` verb a permission set the site assigns (`public_permission_sets`) grants. Grants are not on the collection. Unspecified verbs default to false.
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
@@ -122,7 +122,7 @@ Handlers sit on request extractors in `http/scope/`:
 - `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_developer`, `require_can_write_data`. Access is membership, not the site.
 - `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema`.
 - `ConfigProjectScope` / `ConfigUserScope` — `/config` routes. Project-targeted routes require developer; list/create/org do not need site headers.
-- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get or insert when a permission set the site assigns to `public` grants `read` / `create` on that collection. Update/delete are never public.
+- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the site assigns to `public` grants that verb on that collection.
 
 Membership: `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Effective project access = org owner ∪ project role, plus implicit developer when the identity owns the person account (`alice` → `alice/*`).
 
