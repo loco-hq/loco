@@ -126,7 +126,7 @@ Projects, datasets, sites, and version create/list/delete. Creating a project bo
 
 ### `/auth`
 
-Login (global identity; `{ "username" }` plus optional `"password"`), logout, `GET /me` (any authenticated identity), `POST /users` (self-service signup, password required), `GET /users/list` (authenticated directory), `PUT`/`DELETE /users/{id}` (self), API keys. Sessions and keys hang off the identity and are stored under `loco-apps/auth/{accounts,identities,sessions,api_keys}/`.
+Login (global identity; `{ "username" }` plus optional `"password"`), logout, `GET /me` (any authenticated identity), `POST /users` (self-service signup, password required), `PUT`/`DELETE /users/{id}` (self), API keys. Sessions and keys hang off the identity and are stored under `loco-apps/auth/{accounts,identities,sessions,api_keys}/`.
 
 ### Response shape
 
@@ -165,6 +165,7 @@ curl -X POST 'http://localhost:3000/data/pet/add' \
 | `LOCO_ADAPTER` | `sqlite` | Data adapter: `sqlite` or `memory` |
 | `LOCO_DB_PATH` | `loco.db` | SQLite file (created next to the process cwd) |
 | `LOCO_AUTH_ADAPTER` | `local` | Auth adapter. Only `local` exists. |
+| `LOCO_AUTH_AUTO_CREATE` | unset | If `1`/`true`, login of an unknown handle creates a person account (Hurl sets this). |
 
 ## Frontends
 

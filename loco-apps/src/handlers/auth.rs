@@ -21,7 +21,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/logout", post(logout))
         .route("/me", get(me))
         .route("/users", post(create_user))
-        .route("/users/list", get(list_users))
         .route("/users/{id}", put(update_user).delete(delete_user))
         .route("/api-keys", post(create_api_key))
         .route("/api-keys/list", get(list_api_keys))
@@ -69,8 +68,9 @@ pub struct CreateUserHttpRequest {
     password: Option<String>,
 }
 
-/// Self-service signup. No token. A password is required so the local
-/// adapter cannot stamp `TEST_PASSWORD`.
+/// Self-service signup. No token. Password is required in the adapter
+/// (`CreateUserRequest.password` is a `String`); this maps a missing body
+/// field to 400 instead of 401.
 pub async fn create_user(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateUserHttpRequest>,
@@ -82,20 +82,11 @@ pub async fn create_user(
     let req = CreateUserRequest {
         username: body.username,
         name: body.name,
-        password: Some(password.to_string()),
+        password: password.to_string(),
     };
 
     match state.auth_adapter.create_user(&req) {
         Ok(new_user) => (StatusCode::CREATED, ApiResponse::success(new_user)).into_response(),
-        Err(e) => auth_error_to_response(e),
-    }
-}
-
-/// Authenticated directory for invite pickers. Membership routes still
-/// decide who can actually add someone to an org or project.
-pub async fn list_users(_user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
-    match state.auth_adapter.list_users() {
-        Ok(users) => ApiResponse::success(users).into_response(),
         Err(e) => auth_error_to_response(e),
     }
 }

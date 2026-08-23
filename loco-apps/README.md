@@ -17,6 +17,7 @@ Listens on `http://localhost:3000`. Studio in dev (`:5174`) proxies `/auth` `/co
 | `LOCO_ADAPTER` | `sqlite` | `sqlite` or `memory` |
 | `LOCO_DB_PATH` | `loco.db` | SQLite file path |
 | `LOCO_AUTH_ADAPTER` | `local` | Only `local` exists |
+| `LOCO_AUTH_AUTO_CREATE` | unset | Login of an unknown handle creates a person (`1`/`true`; Hurl sets this) |
 
 ## How it boots
 
@@ -64,7 +65,7 @@ Unversioned config: projects, datasets, sites, version create/list/delete. Creat
 
 ### `/auth/…`
 
-`POST /login` is global (`{ "username" }`, optional `"password"`; no site headers required). `POST /logout`, `GET /me` (authenticated self-read), `POST /users` (self-service signup, password required), `GET /users/list` (authenticated directory), `PUT`/`DELETE /users/{id}` (self). Persistence is `auth/{accounts,identities,sessions,api_keys}/` (gitignored).
+`POST /login` is global (`{ "username" }`, optional `"password"`; no site headers required). `POST /logout`, `GET /me` (authenticated self-read), `POST /users` (self-service signup, password required), `PUT`/`DELETE /users/{id}` (self). Persistence is `auth/{accounts,identities,sessions,api_keys}/` (gitignored). Login auto-creates unknown handles only when `LOCO_AUTH_AUTO_CREATE` is set.
 
 ## Schemas on disk
 

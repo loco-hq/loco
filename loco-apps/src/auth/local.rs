@@ -380,7 +380,15 @@ impl LocalAuthAdapter {
     }
 
     /// First login of an unknown handle creates a person account + identity.
-    /// Lets Hurl suites keep working without per-suite auth fixtures.
+    /// Only when `cfg(test)` or `LOCO_AUTH_AUTO_CREATE=1` — Hurl suites use
+    /// the env flag so they do not need per-suite auth fixtures.
+    fn auto_create_enabled() -> bool {
+        cfg!(test)
+            || std::env::var("LOCO_AUTH_AUTO_CREATE")
+                .ok()
+                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    }
+
     fn auto_create_person(
         &self,
         handle: &str,
@@ -389,6 +397,9 @@ impl LocalAuthAdapter {
         if !Self::is_valid_handle(handle) {
             return Err(AuthError::InvalidCredentials);
         }
+        let Some(password) = password.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err(AuthError::InvalidCredentials);
+        };
         {
             let accounts = self.accounts.read().unwrap();
             if let Some(existing) = accounts.get(handle) {
@@ -408,9 +419,7 @@ impl LocalAuthAdapter {
             id: uuid::Uuid::new_v4().to_string(),
             handle: handle.to_string(),
             name: handle.to_string(),
-            password: password
-                .map(str::to_string)
-                .unwrap_or_else(|| TEST_PASSWORD.to_string()),
+            password: password.to_string(),
             created_at: now,
             last_login_at: None,
         };
@@ -425,6 +434,62 @@ impl LocalAuthAdapter {
             .unwrap()
             .insert(handle.to_string(), identity.clone());
         Ok(identity)
+    }
+
+    /// Orgs this handle solely owns. Deleting them would leave the org
+    /// with no owner.
+    fn sole_owned_org(&self, handle: &str) -> Option<String> {
+        let members = self.org_members.read().unwrap();
+        let owned: Vec<String> = members
+            .values()
+            .filter(|m| m.handle == handle && m.role == OrgRole::Owner)
+            .map(|m| m.org.clone())
+            .collect();
+        owned.into_iter().find(|org| {
+            members
+                .values()
+                .filter(|m| m.org == *org && m.role == OrgRole::Owner)
+                .count()
+                == 1
+        })
+    }
+
+    fn purge_memberships(&self, handle: &str) {
+        let org_keys: Vec<(String, String)> = {
+            let members = self.org_members.read().unwrap();
+            members
+                .keys()
+                .filter(|(_, h)| h == handle)
+                .cloned()
+                .collect()
+        };
+        {
+            let mut members = self.org_members.write().unwrap();
+            for key in &org_keys {
+                members.remove(key);
+            }
+        }
+        for (org, h) in &org_keys {
+            self.delete_org_member_file(org, h);
+        }
+
+        let project_keys: Vec<(String, String)> = {
+            let members = self.project_members.read().unwrap();
+            members
+                .keys()
+                .filter(|(_, h)| h == handle)
+                .cloned()
+                .collect()
+        };
+        {
+            let mut members = self.project_members.write().unwrap();
+            for key in &project_keys {
+                members.remove(key);
+            }
+        }
+        for (project, h) in &project_keys {
+            self.delete_project_member_file(project, h);
+        }
     }
 }
 
@@ -460,6 +525,9 @@ impl AuthAdapter for LocalAuthAdapter {
                     identity.clone()
                 }
                 None => {
+                    if !Self::auto_create_enabled() {
+                        return Err(AuthError::InvalidCredentials);
+                    }
                     let mut identity = self.auto_create_person(
                         &credentials.username,
                         credentials.password.as_deref(),
@@ -541,13 +609,12 @@ impl AuthAdapter for LocalAuthAdapter {
         Ok(self.identity_by_id(user_id).map(|i| Self::to_auth_user(&i)))
     }
 
-    fn list_users(&self) -> Result<Vec<AuthUser>, AuthError> {
-        let identities = self.identities.read().unwrap();
-        Ok(identities.values().map(Self::to_auth_user).collect())
-    }
-
     fn create_user(&self, req: &CreateUserRequest) -> Result<AuthUser, AuthError> {
         if !Self::is_valid_handle(&req.username) {
+            return Err(AuthError::InvalidCredentials);
+        }
+        let password = req.password.trim();
+        if password.is_empty() {
             return Err(AuthError::InvalidCredentials);
         }
         if self.accounts.read().unwrap().contains_key(&req.username) {
@@ -564,10 +631,7 @@ impl AuthAdapter for LocalAuthAdapter {
             id: uuid::Uuid::new_v4().to_string(),
             handle: req.username.clone(),
             name: req.name.clone(),
-            password: req
-                .password
-                .clone()
-                .unwrap_or_else(|| TEST_PASSWORD.to_string()),
+            password: password.to_string(),
             created_at: now,
             last_login_at: None,
         };
@@ -605,16 +669,15 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn delete_user(&self, user_id: &str) -> Result<(), AuthError> {
-        let handle = {
-            let mut identities = self.identities.write().unwrap();
-            let handle = identities
-                .values()
-                .find(|i| i.id == user_id)
-                .map(|i| i.handle.clone())
-                .ok_or(AuthError::UserNotFound)?;
-            identities.remove(&handle);
-            handle
-        };
+        let handle = self
+            .identity_by_id(user_id)
+            .map(|i| i.handle)
+            .ok_or(AuthError::UserNotFound)?;
+        if let Some(org) = self.sole_owned_org(&handle) {
+            return Err(AuthError::SoleOrgOwner(org));
+        }
+        self.purge_memberships(&handle);
+        self.identities.write().unwrap().remove(&handle);
         self.accounts.write().unwrap().remove(&handle);
         self.delete_identity_files(&handle);
         self.revoke_all_sessions(user_id)?;
@@ -1117,5 +1180,91 @@ mod tests {
         let (_dir, adapter) = adapter();
         let err = adapter.create_org("alice", "bob").unwrap_err();
         assert!(matches!(err, AuthError::UserAlreadyExists));
+    }
+
+    #[test]
+    fn auto_create_rejects_missing_password() {
+        let (_dir, adapter) = adapter();
+        let err = adapter
+            .login(&LoginCredentials {
+                username: "newbie".to_string(),
+                password: None,
+            })
+            .unwrap_err();
+        assert!(matches!(err, AuthError::InvalidCredentials));
+        assert!(!adapter.identities.read().unwrap().contains_key("newbie"));
+    }
+
+    #[test]
+    fn create_user_rejects_empty_password() {
+        let (_dir, adapter) = adapter();
+        let err = adapter
+            .create_user(&CreateUserRequest {
+                username: "newbie".to_string(),
+                name: "Newbie".to_string(),
+                password: "  ".to_string(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, AuthError::InvalidCredentials));
+    }
+
+    #[test]
+    fn delete_user_purges_memberships_so_handle_reuse_does_not_inherit() {
+        let (_dir, adapter) = adapter();
+        let bob = login_ok(&adapter, "bob");
+        adapter.create_org("acme", "alice").unwrap();
+        adapter
+            .add_org_member("acme", "bob", OrgRole::Member)
+            .unwrap();
+        adapter
+            .add_project_member("alice/testapp", "bob", ProjectRole::Editor)
+            .unwrap();
+
+        adapter.delete_user(&bob.user.id).unwrap();
+        assert!(adapter
+            .list_org_members("acme")
+            .unwrap()
+            .iter()
+            .all(|m| m.handle != "bob"));
+        assert!(adapter
+            .list_project_members("alice/testapp")
+            .unwrap()
+            .iter()
+            .all(|m| m.handle != "bob"));
+
+        adapter
+            .create_user(&CreateUserRequest {
+                username: "bob".to_string(),
+                name: "Bob".to_string(),
+                password: TEST_PASSWORD.to_string(),
+            })
+            .unwrap();
+        assert_eq!(adapter.project_access("bob", "alice/testapp").unwrap(), None);
+        assert!(adapter
+            .list_org_members("acme")
+            .unwrap()
+            .iter()
+            .all(|m| m.handle != "bob"));
+    }
+
+    #[test]
+    fn delete_user_refuses_sole_org_owner() {
+        let (_dir, adapter) = adapter();
+        let alice = login_ok(&adapter, "alice");
+        adapter.create_org("acme", "alice").unwrap();
+        let err = adapter.delete_user(&alice.user.id).unwrap_err();
+        assert!(matches!(err, AuthError::SoleOrgOwner(org) if org == "acme"));
+        assert!(adapter.identities.read().unwrap().contains_key("alice"));
+
+        adapter
+            .add_org_member("acme", "bob", OrgRole::Owner)
+            .unwrap();
+        adapter.delete_user(&alice.user.id).unwrap();
+        assert!(!adapter.identities.read().unwrap().contains_key("alice"));
+        assert!(adapter
+            .list_org_members("acme")
+            .unwrap()
+            .iter()
+            .any(|m| m.handle == "bob" && m.role == OrgRole::Owner));
     }
 }

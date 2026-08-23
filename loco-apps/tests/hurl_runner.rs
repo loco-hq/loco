@@ -59,7 +59,10 @@ fn run_suite(suite_dir: &Path) {
 
     // 2. Use in-memory adapter (no SQLite needed for tests). Set once across all suites.
     ADAPTER_ENV_ONCE.call_once(|| {
-        unsafe { std::env::set_var("LOCO_ADAPTER", "memory") };
+        unsafe {
+            std::env::set_var("LOCO_ADAPTER", "memory");
+            std::env::set_var("LOCO_AUTH_AUTO_CREATE", "1");
+        }
     });
 
     // 3. Build the app rooted at the tempdir
