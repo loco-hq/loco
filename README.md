@@ -13,6 +13,9 @@ cargo run -p loco-apps
 # Studio — http://localhost:5174  (proxies /api to :3000)
 npm run dev -w loco-studio
 
+# Cross-origin public page — http://localhost:5176  (talks to :3000, CORS)
+python3 -m http.server 5176 --directory examples/public-page
+
 # Field-component playground — http://localhost:5175
 npm run dev -w loco-ui
 
@@ -32,7 +35,8 @@ loco/
 ├── loco-lake/crates/loco-lake/                # DataAdapter (SQLite, in-memory)
 ├── loco-apps/                                 # Axum server: /data /schema /config /auth
 ├── loco-studio/                               # Schema + record editor (port 5174)
-└── loco-ui/                                   # Field primitives consumed by studio
+├── loco-ui/                                   # Field primitives consumed by studio
+└── examples/public-page/                      # Static cross-origin page (port 5176)
 ```
 
 **Build time:** `loco-apps/build.rs` → `loco_gen_schema::build::generate("schemas/types")`
@@ -69,6 +73,7 @@ Shipped projects (committed under `schemas/instances/loco/`):
 - `loco/core` — framework collections (`user`)
 - `loco/studio` — the editor site (`studio`)
 - `loco/cards` — another metadata-editor site
+- `loco/demo` — public guestbook site (`www`) for the standalone frontend example
 
 User-scoped instances (`ben/…`) are gitignored scratch data. Test suites carry their own fixtures.
 
@@ -84,6 +89,8 @@ An instance's key **is** its path relative to `schemas/instances/` with `.yaml` 
 ## REST API
 
 The server listens on `:3000`. Studio rewrites `/api/…` to these paths.
+
+Browser clients on another origin are allowed: CORS is `*` origin, method, and header. Sessions are `Authorization: Bearer`, not cookies, so `*` is legal. `examples/public-page/` is a static page that lists `loco/demo` guestbook with `{ apiUrl, projectId, siteId }` and no token.
 
 Every request that needs a site sends:
 

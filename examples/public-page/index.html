@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Loco public page</title>
+<body>
+<h1>Guestbook</h1>
+<ul id="list"><li>loading…</li></ul>
+<script>
+// Connection only. No token — `public` on this site may list guestbook.
+const apiUrl = 'http://localhost:3000';
+const projectId = 'loco/demo';
+const siteId = 'www';
+
+fetch(`${apiUrl}/data/guestbook/list`, {
+  headers: { 'X-Project-Id': projectId, 'X-Site-Id': siteId },
+})
+  .then((r) => r.json())
+  .then((json) => {
+    const ul = document.getElementById('list');
+    ul.replaceChildren();
+    if (!json.ok) {
+      ul.textContent = json.error || 'error';
+      return;
+    }
+    if (!json.data.length) {
+      ul.textContent = '(empty)';
+      return;
+    }
+    for (const rec of json.data) {
+      const li = document.createElement('li');
+      li.textContent = rec.fields.message ?? rec.id;
+      ul.appendChild(li);
+    }
+  })
+  .catch((err) => {
+    document.getElementById('list').textContent = String(err);
+  });
+</script>

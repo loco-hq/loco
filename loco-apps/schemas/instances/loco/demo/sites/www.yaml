@@ -1,0 +1,5 @@
+label: "Demo"
+version: "0.0.1-dev"
+dataset: "dev"
+public_permission_sets:
+  - guestbook_read

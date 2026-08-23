@@ -8,7 +8,7 @@ Axum server that exposes generated schema types and a schemaless record lake ove
 cargo run -p loco-apps
 ```
 
-Listens on `http://localhost:3000`. Studio on `:5174` proxies `/api` here.
+Listens on `http://localhost:3000`. Studio on `:5174` proxies `/api` here. A static page on another origin (`examples/public-page/`, typically `:5176`) talks to this server directly; CORS is `*` origin, method, and header (no cookies).
 
 ### Environment Variables
 
@@ -72,10 +72,11 @@ Unversioned config: projects, datasets, sites, version create/list/delete. Creat
 schemas/
 ├── types/                 # Type definitions (rebuild to change)
 └── instances/
-    └── loco/              # Committed: core, studio, cards
+    └── loco/              # Committed: core, studio, cards, demo
         ├── core/
         ├── studio/
-        └── cards/
+        ├── cards/
+        └── demo/          # public guestbook (`www`)
 ```
 
 `schemas/instances/*` other than `loco/` is gitignored. Hurl fixtures live under `tests/suites/*/fixtures/`.

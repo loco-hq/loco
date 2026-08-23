@@ -10,6 +10,8 @@ cargo test -p loco-gen-schema # Schema/codegen crate only
 cargo clippy --workspace      # Lint everything
 cargo run -p loco-apps        # API server on :3000
 npm run dev -w loco-studio    # Studio on :5174 (proxies /api → :3000)
+python3 -m http.server 5176 --directory examples/public-page
+                              # public page on :5176 (CORS → :3000)
 npm run dev -w loco-ui        # loco-ui playground on :5175
 ```
 
@@ -22,7 +24,8 @@ loco/
 ├── loco-lake/crates/loco-lake/                # DataAdapter + InMemoryAdapter + SqliteAdapter
 ├── loco-apps/                                 # Axum server consuming generated types
 ├── loco-studio/                               # Schema + record editor
-└── loco-ui/                                   # Field component library (npm workspace)
+├── loco-ui/                                   # Field component library (npm workspace)
+└── examples/public-page/                      # Static cross-origin page (no Node)
 ```
 
 ### Dependency flow
@@ -50,7 +53,7 @@ An instance's namespace IS its path relative to `schemas/instances/` with `.yaml
 - `schemas/instances/ben/crm/datasets/acme.yaml` → `ben/crm/datasets/acme`
 - `schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
 
-`schemas/instances/loco/` is committed (core, studio, cards). Other instance trees (`ben/…`) are gitignored scratch data. Hurl suites use their own fixtures under `loco-apps/tests/suites/*/fixtures/`.
+`schemas/instances/loco/` is committed (core, studio, cards, demo). Other instance trees (`ben/…`) are gitignored scratch data. Hurl suites use their own fixtures under `loco-apps/tests/suites/*/fixtures/`.
 
 ## Schema Files
 
@@ -116,6 +119,8 @@ Mounted in `server.rs`:
 | `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets). |
 | `/config` | Unversioned project / dataset / site / version lifecycle. |
 | `/auth` | Login, logout, `/me`, users, API keys. |
+
+CORS is `*` origin, method, and header. No cookies; clients send `Authorization: Bearer`. Studio's Vite proxy is unchanged.
 
 Handlers sit on request extractors in `http/scope/`:
 

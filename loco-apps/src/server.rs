@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::Router;
+use tower_http::cors::{Any, CorsLayer};
 
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter};
 
@@ -70,4 +71,16 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
         .nest("/config", handlers::config::router())
         .nest("/auth", handlers::auth::router())
         .with_state(state)
+        // Outermost so OPTIONS preflight never hits auth extractors, and so
+        // 404s still carry CORS headers (a missing header looks like a CORS
+        // failure in the browser). Any origin / method / header; no cookies.
+        // Studio's Vite proxy is unchanged.
+        .layer(cors_layer())
+}
+
+fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any)
 }

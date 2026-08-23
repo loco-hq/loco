@@ -17,7 +17,8 @@ Loco is a low-code backend for structured data — think Salesforce or Airtable,
 - Pluggable lake (`sqlite`, `memory`) scoped by `dataset_id`
 - Write-time validation (unknown fields + scalar types) and read-time diagnostics
 - `AuthAdapter` + local filesystem adapter: sessions, users, API keys
-- Username-only login; metadata-editor sites are a hardcoded allowlist
+- Global identities, project membership, public permission sets
+- CORS on the API; static `examples/public-page/` talks to it from another origin
 - Studio for schema + records; `loco-ui` field primitives
 - Hurl suites covering auth, CRUD, validation, and project/version/schema lifecycle
 
@@ -25,11 +26,9 @@ Loco is a low-code backend for structured data — think Salesforce or Airtable,
 
 In order. Detail and PR slices live in [`HANDOFF.md`](HANDOFF.md). The identity target model is [`docs/identity.md`](docs/identity.md).
 
-1. **Identity PR stack.** Global Loco identities, person/org accounts, project `developer`/`editor` membership. Replaces site-scoped users, `METADATA_EDITOR_SITES`, and `require_can_edit_user`. Then public `/data` policy, schema read vs write, and a cross-origin proof page. Do not start from “add a site flag” — capability is on the member, not the site.
+1. **Finish the schema → form loop.** Collection fields need `description`, `required`, and maybe `variant`. Validate required fields on create/update. Drive record forms (and keep tables) from the `auto_add` fieldset. Register `SelectField` on the dispatcher. Stop offering `list` as a record field type until the validator and a control exist.
 
-2. **Finish the schema → form loop.** Collection fields need `description`, `required`, and maybe `variant`. Validate required fields on create/update. Drive record forms (and keep tables) from the `auto_add` fieldset. Register `SelectField` on the dispatcher. Stop offering `list` as a record field type until the validator and a control exist. Orthogonal to identity; if one person, do this after membership (identity PR 2).
-
-3. **Then interfaces.** MCP tools and a `loco` CLI on top of the same API. Not before membership is trustworthy. Surfaces sketched in `FUTURE_IDEAS.md`.
+2. **Then interfaces.** MCP tools and a `loco` CLI on top of the same API. Surfaces sketched in `FUTURE_IDEAS.md`.
 
 ## Later
 

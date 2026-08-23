@@ -4,29 +4,24 @@ For the next session. Read `README.md` + `CLAUDE.md` + [`docs/identity.md`](docs
 
 ## Last session
 
-PR 4 — schema read vs schema write. `cargo test` is green.
+PR 5 — standalone frontend. CORS on the API (`*` origin / method / header, no cookies). `examples/public-page/` lists `loco/demo` guestbook from another origin with `{ apiUrl, projectId, siteId }` and no token. Studio’s Vite proxy is unchanged. Spec: `tests/suites/authorization/cors.hurl`. `cargo test` is green.
 
-- GET `/schema` is `VersionReadScope` (read-only). Writes stay `VersionScope` (developer + draft).
-- Developer/editor: any version of a project they belong to, no site headers.
-- `public` (and authenticated non-members): site headers required; path version must match the site pin; the site must assign at least one permission set to `public`. Whole pinned version, no per-collection filter.
-- Spec: `tests/suites/authorization/schema_read.hurl`.
-
-Field-metadata / schema→form loop is still valid work and orthogonal. Park it until after this identity stack.
+Identity stack (PRs 1–5) is done. Next is the field-metadata / schema→form loop.
 
 ## Servers
 
 ```bash
 cargo run -p loco-apps          # :3000
 npm run dev -w loco-studio      # :5174  (proxies /api → :3000)
+python3 -m http.server 5176 --directory examples/public-page
+                                # :5176  (static page → :3000, CORS)
 ```
 
 Login is global (`{ username, password }`). Seeded people (`alice`, `bob`) use password `password`. Membership (PR 2) is the ACL.
 
-`ben/pets` is gitignored scratch. `loco/core`, `loco/studio`, `loco/cards` are committed.
+`ben/pets` is gitignored scratch. `loco/core`, `loco/studio`, `loco/cards`, `loco/demo` are committed.
 
-## Next — identity PR stack
-
-Hard cut, not a migration saga. Each PR leaves `cargo test` green. Do not start MCP, CLI, Clippy, or anything in `FUTURE_IDEAS.md` until this stack is trustworthy. CORS / a cross-origin page is PR 5, not a side quest.
+## Identity PR stack — done
 
 ### PR 1 — Global identity — done
 
@@ -40,11 +35,9 @@ Anonymous `/data` is principal `public`. Grants are permission sets assigned on 
 
 `GET /schema` uses `VersionReadScope`: developer/editor any version (no site headers); `public` (and authenticated non-members) on a site that assigns at least one permission set, pinned version only. Writes stay `VersionScope` (developer + draft). Spec: `tests/suites/authorization/schema_read.hurl`.
 
-### PR 5 — Prove the standalone frontend
+### PR 5 — Prove the standalone frontend — done
 
-CORS on the API. A 40-line page on another origin that lists a public collection. Leave Studio’s Vite proxy alone. The page is the dogfood, not a product.
-
-**Done when:** that page works with only `{ apiUrl, projectId, siteId }` in the source and no token.
+CORS on the API (`*` origin / method / header, no cookies). `examples/public-page/` is a static page on `:5176` that lists `loco/demo` guestbook with `{ apiUrl, projectId, siteId }` and no token. Studio’s Vite proxy is unchanged. Spec: `tests/suites/authorization/cors.hurl`.
 
 ## After this stack
 
