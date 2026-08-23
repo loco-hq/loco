@@ -2,6 +2,12 @@
 
 Schema-driven backend: YAML type definitions become Rust structs at build time. Instances load at runtime into typed stores. Records live in a schemaless lake and are validated by loco-apps.
 
+Repo: `loco-hq/loco`. Process: [`orchestration.md`](orchestration.md). Read that file before writing code if you are sitting a term.
+
+- **Orchestrator** — Current term is in `orchestration.md`. Pick GitHub issues, spawn implementer/reviewer via herdr. Do **not** implement the feature.
+- **Implementer / reviewer** — Before any `git` or `gh` write: `eval "$(python3 scripts/agent-github/token.py env grok|claude)"` (your vendor). Never push `main`. Never approve your own PR.
+- PEMs live on this machine at `~/.config/loco-hq/apps/`, not in the repo. If `token.py` fails, stop; do not fall back to Ben’s `gh` auth.
+
 ## Commands
 
 ```bash

@@ -1,8 +1,8 @@
 # Filing work on Loco
 
-This is the contract for turning reviews into GitHub issues. Implementation conventions live in [`Claude.md`](Claude.md). There is no project board; issues and milestones are the backlog.
+This is the contract for turning reviews into GitHub issues. Implementation conventions live in [`CLAUDE.md`](CLAUDE.md). Agent process lives in [`orchestration.md`](orchestration.md). There is no project board; issues and milestones are the backlog.
 
-Repo: `humandad/loco`. Use `gh` against that remote.
+Repo: `loco-hq/loco`. Use `gh` against that remote.
 
 ## Who does what
 
@@ -22,7 +22,7 @@ A milestone is a **closable batch**, not a category. Area and type are labels.
 Create 2–4 milestones after synthesizing the reviews, before filing issues.
 
 ```bash
-gh api repos/humandad/loco/milestones \
+gh api repos/loco-hq/loco/milestones \
   -f title='short goal' \
   -f description='What "done" means for this batch.'
 ```
@@ -38,7 +38,7 @@ Rules:
 List what you created, then file into those titles:
 
 ```bash
-gh api repos/humandad/loco/milestones --jq '.[] | {number, title, open_issues, state}'
+gh api repos/loco-hq/loco/milestones --jq '.[] | {number, title, open_issues, state}'
 ```
 
 ## One issue = one shippable change
@@ -51,8 +51,8 @@ No: `Auth is a prototype.` / `Fix architecture section 2.`
 Search before creating:
 
 ```bash
-gh issue list --repo humandad/loco --state all --limit 50
-gh issue list --repo humandad/loco --search 'require_collection'
+gh issue list --repo loco-hq/loco --state all --limit 50
+gh issue list --repo loco-hq/loco --search 'require_collection'
 ```
 
 Title: imperative, specific, no review-author prefix.
@@ -60,7 +60,7 @@ Title: imperative, specific, no review-author prefix.
 Body: use the Task template (`.github/ISSUE_TEMPLATE/task.md`). Required sections are **Problem**, **Evidence**, **Proposed change**, **Acceptance**, **Source**. Point at `file:line` and the review heading. Do not paste the review.
 
 ```bash
-gh issue create --repo humandad/loco \
+gh issue create --repo loco-hq/loco \
   --title "Gate /auth/users on self-or-owner" \
   --label "p0,type:security,area:auth" \
   --milestone "Auth that cannot leak" \
@@ -90,7 +90,7 @@ Priority vs milestone: `p0` can sit in a later milestone if it is blocked; a mil
 Print the backlog grouped by milestone so a human can scan it:
 
 ```bash
-gh issue list --repo humandad/loco --limit 100 --json number,title,labels,milestone \
+gh issue list --repo loco-hq/loco --limit 100 --json number,title,labels,milestone \
   --jq 'group_by(.milestone.title // "unscheduled")[] | {milestone: .[0].milestone.title // "unscheduled", issues: map({number, title, labels: [.labels[].name]})}'
 ```
 
