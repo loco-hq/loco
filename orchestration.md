@@ -68,7 +68,7 @@ One issue at a time. Parallel issues are allowed only when Ben says the plan bud
    - Request changes → implementer pushes, reviewer re-reviews. Repeat.
    - Dispute (implementer believes the review is wrong) → both comment on the PR @-mentioning the question; orchestrator decides on the PR, in public.
    - Approve → stop. Do not merge in phase 1.
-8. **Human merge.** Ben merges when the review is an approval and he agrees. Orchestrator does not merge. **There is no GitHub Actions CI yet.** Missing checks are not a block; the reviewer runs the relevant tests locally and says so on the review. When CI exists, this step also requires green checks — do not invent that requirement now.
+8. **Human merge.** Ben merges when the review is an approval and he agrees. Orchestrator does not merge. **CI runs on every PR** (`.github/workflows/ci.yml`: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` including the Hurl suites). Green checks are required — a red or missing run is a block, and the fix is the implementer's, not Ben's. CI covers the Rust server only; the frontend workspaces are still local-test-only, so the reviewer still runs the acceptance tests that CI does not.
 9. **Close the loop.**
    - Comment on the PR: implementer, reviewer verdict, waiting on Ben. That comment is the cycle record.
    - Product state → `HANDOFF.md`. Process → this file, as its **own small PR** (orchestrator’s vendor authors, the other vendor reviews). Do not leave these dirty on `main`. Do not fold them into the product PR.
@@ -168,7 +168,7 @@ You are the implementer for loco-hq/loco issue #N.
 Read CLAUDE.md, the issue, and orchestration.md.
 Before any git or gh write: eval "$(python3 scripts/agent-github/token.py env claude)"
 Do not push main. Open one PR for this issue. Stop when the PR is up and tests you can run locally have passed.
-There is no GitHub Actions CI yet; local tests are the proof.
+CI runs fmt, clippy (`-D warnings`), and `cargo test --workspace` on the PR — get it green before you stop. Run the acceptance tests locally too; CI does not cover the frontend workspaces.
 EOF
 )" --wait --timeout 1200000
 ```
@@ -197,7 +197,7 @@ eval "\$(python3 scripts/agent-github/token.py env grok)"
 Read the diff with gh (not the herdr sidebar).
 Implementer worktree (run tests here, do not dirty main):
   ${worktree}
-There is no GitHub Actions CI. Missing checks are not a block. Run the acceptance tests in that worktree and say what you ran on the review.
+Check CI on the PR (`gh pr checks`) — red or missing is a block, not a nit. CI runs fmt, clippy, and `cargo test --workspace`; it does not cover the frontend, so also run the acceptance tests in that worktree and say what you ran on the review.
 Post a GitHub review: approve, comment, or request changes.
 Do not push code. If you and the implementer disagree, comment on the PR for the orchestrator; do not merge.
 EOF
@@ -214,7 +214,7 @@ Request changes when: behavior is wrong, tests that should exist don’t, `CLAUD
 
 Comment (not block) when: naming nits, optional follow-ups. File a follow-up issue rather than growing the PR.
 
-Approve when: the issue’s acceptance is met, you ran the tests that prove it (or the implementer did and you re-ran the ones that matter), you would be willing to have Ben merge it, and you are not the implementer. Empty CI on the PR is expected until we add GitHub Actions.
+Approve when: the issue’s acceptance is met, CI is green, you ran the tests that prove it (or the implementer did and you re-ran the ones that matter), you would be willing to have Ben merge it, and you are not the implementer.
 
 ## Disputes
 
@@ -243,3 +243,4 @@ Those file edits ship as a **small process PR**, not as uncommitted changes on `
 - **2026-08-23** — Org `loco-hq` created. Repo transferred to `loco-hq/loco` and made public. Apps `loco-grok` / `loco-claude` installed on that repo only. Token helper is `scripts/agent-github/token.py`. `main` requires a PR and 1 approving review (admins included). Ben merges.
 - **2026-08-23** — First product cycle. Claude implemented issue #2 in a herdr worktree (`issue-2-stop-auto-create-person`); opened PR #21 as `loco-claude[bot]`. Grok reviewed from a sibling pane and approved as `loco-grok[bot]`. Recipe worked: worktree + `agent start`/`prompt --wait`, tokens from `token.py`, no self-approval. Orchestrator did not merge.
 - **2026-08-23** — First-cycle process lessons (this edit): still-real check and the right to not spawn; process docs are their own PR; keep worktree/reviewer pane until merge then teardown; reviewer prompt includes the worktree path; implementer wait 20 minutes; no CI yet, local tests are the bar; serial cadence while on basic vendor plans. Herdr API has no plan/usage fields.
+- **2026-08-23** — GitHub Actions CI added (`.github/workflows/ci.yml`, PR #23): fmt, clippy `-D warnings`, and `cargo test --workspace` (Hurl suites included — the runner starts an in-process server, the workflow only installs the `hurl` binary) on every PR and push to `main`. Green checks are now part of the merge bar; earlier "no CI, local tests are the bar" guidance is superseded. Rust server only — `loco-studio` / `loco-ui` are not built in CI.

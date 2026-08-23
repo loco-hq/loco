@@ -32,13 +32,23 @@ impl SqliteAdapter {
         )
         .map_err(|e| Error::Internal(e.to_string()))?;
 
-        Ok(SqliteAdapter { conn: Mutex::new(conn) })
+        Ok(SqliteAdapter {
+            conn: Mutex::new(conn),
+        })
     }
 
-    fn write_record(&self, dataset_id: &str, collection: &str, record: &Record) -> Result<(), Error> {
+    fn write_record(
+        &self,
+        dataset_id: &str,
+        collection: &str,
+        record: &Record,
+    ) -> Result<(), Error> {
         let fields_json =
             serde_json::to_string(&record.fields).map_err(|e| Error::Internal(e.to_string()))?;
-        let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         conn.execute(
             "INSERT INTO records (dataset_id, collection, id, created_at, created_by, updated_at, updated_by, owner, fields)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -79,7 +89,10 @@ impl DataAdapter for SqliteAdapter {
     }
 
     fn get(&self, dataset_id: &str, collection: &str, id: &str) -> Result<Option<Record>, Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, created_at, created_by, updated_at, updated_by, owner, fields
@@ -122,7 +135,10 @@ impl DataAdapter for SqliteAdapter {
 
         let fields_json =
             serde_json::to_string(&record.fields).map_err(|e| Error::Internal(e.to_string()))?;
-        let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
 
         let rows = conn
             .execute(
@@ -147,7 +163,10 @@ impl DataAdapter for SqliteAdapter {
     }
 
     fn delete(&self, dataset_id: &str, collection: &str, id: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
 
         let rows = conn
             .execute(
@@ -164,7 +183,10 @@ impl DataAdapter for SqliteAdapter {
     }
 
     fn list(&self, dataset_id: &str, collection: &str) -> Result<Vec<Record>, Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, created_at, created_by, updated_at, updated_by, owner, fields
@@ -196,7 +218,10 @@ impl DataAdapter for SqliteAdapter {
     }
 
     fn delete_dataset(&self, dataset_id: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM records WHERE dataset_id = ?1",
             rusqlite::params![dataset_id],
@@ -237,11 +262,19 @@ mod tests {
     #[test]
     fn test_insert_and_get() {
         let adapter = make_adapter();
-        let inserted = adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
+        let inserted = adapter
+            .insert(DATASET, "users", make_request("Alice"))
+            .unwrap();
 
-        let retrieved = adapter.get(DATASET, "users", &inserted.id).unwrap().unwrap();
+        let retrieved = adapter
+            .get(DATASET, "users", &inserted.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(retrieved.id, inserted.id);
-        assert_eq!(retrieved.fields.get("name").unwrap(), &Value::String("Alice".to_string()));
+        assert_eq!(
+            retrieved.fields.get("name").unwrap(),
+            &Value::String("Alice".to_string())
+        );
     }
 
     #[test]
@@ -282,7 +315,10 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(updated.fields.get("name").unwrap(), &Value::String("Bob".to_string()));
+        assert_eq!(
+            updated.fields.get("name").unwrap(),
+            &Value::String("Bob".to_string())
+        );
         assert_eq!(updated.fields.get("age").unwrap(), &Value::Integer(30));
         assert_eq!(updated.created_by, "creator");
         assert_eq!(updated.owner, "creator");
@@ -299,7 +335,9 @@ mod tests {
     #[test]
     fn test_delete() {
         let adapter = make_adapter();
-        let inserted = adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
+        let inserted = adapter
+            .insert(DATASET, "users", make_request("Alice"))
+            .unwrap();
         adapter.delete(DATASET, "users", &inserted.id).unwrap();
         let result = adapter.get(DATASET, "users", &inserted.id).unwrap();
         assert!(result.is_none());
@@ -315,8 +353,12 @@ mod tests {
     #[test]
     fn test_list() {
         let adapter = make_adapter();
-        adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
-        adapter.insert(DATASET, "users", make_request("Bob")).unwrap();
+        adapter
+            .insert(DATASET, "users", make_request("Alice"))
+            .unwrap();
+        adapter
+            .insert(DATASET, "users", make_request("Bob"))
+            .unwrap();
 
         let records = adapter.list(DATASET, "users").unwrap();
         assert_eq!(records.len(), 2);
@@ -332,7 +374,9 @@ mod tests {
     #[test]
     fn test_dataset_isolation() {
         let adapter = make_adapter();
-        let inserted = adapter.insert("dataset-a", "users", make_request("Alice")).unwrap();
+        let inserted = adapter
+            .insert("dataset-a", "users", make_request("Alice"))
+            .unwrap();
 
         let result = adapter.get("dataset-b", "users", &inserted.id).unwrap();
         assert!(result.is_none());
@@ -344,9 +388,15 @@ mod tests {
     #[test]
     fn test_delete_dataset() {
         let adapter = make_adapter();
-        adapter.insert("ds", "users", make_request("Alice")).unwrap();
-        adapter.insert("ds", "orders", make_request("Order1")).unwrap();
-        adapter.insert("other", "users", make_request("Bob")).unwrap();
+        adapter
+            .insert("ds", "users", make_request("Alice"))
+            .unwrap();
+        adapter
+            .insert("ds", "orders", make_request("Order1"))
+            .unwrap();
+        adapter
+            .insert("other", "users", make_request("Bob"))
+            .unwrap();
 
         adapter.delete_dataset("ds").unwrap();
 
