@@ -35,13 +35,24 @@ fn build_data_adapter() -> Box<dyn DataAdapter> {
     }
 }
 
-fn build_auth_adapter(root: &std::path::Path) -> Box<dyn AuthAdapter> {
+/// Overrides a caller can pin instead of reading the environment. Tests use
+/// this so one process can host servers that disagree about a flag.
+#[derive(Default)]
+pub struct AppOptions {
+    /// `None` → `LOCO_AUTH_AUTO_CREATE` decides (off unless set).
+    pub auth_auto_create: Option<bool>,
+}
+
+fn build_auth_adapter(root: &std::path::Path, options: &AppOptions) -> Box<dyn AuthAdapter> {
     let adapter_type = std::env::var("LOCO_AUTH_ADAPTER").unwrap_or_else(|_| "local".to_string());
     match adapter_type.as_str() {
         "local" => {
             let path = root.join("auth");
             println!("Using local filesystem auth adapter ({})", path.display());
-            Box::new(LocalAuthAdapter::new(&path))
+            Box::new(match options.auth_auto_create {
+                Some(auto_create) => LocalAuthAdapter::with_auto_create(&path, auto_create),
+                None => LocalAuthAdapter::new(&path),
+            })
         }
         other => panic!("unknown LOCO_AUTH_ADAPTER: {other} (expected \"local\")"),
     }
@@ -52,12 +63,16 @@ pub fn build_app() -> Router {
 }
 
 pub fn build_app_with_root(root: &std::path::Path) -> Router {
+    build_app_with_options(root, AppOptions::default())
+}
+
+pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Router {
     // Load schema from disk into a fresh store
     let instances_dir = root.join("schemas/instances");
     let schema = Arc::new(SchemaStore::load(&instances_dir).expect("failed to load schema"));
 
     let data_adapter = build_data_adapter();
-    let auth_adapter = build_auth_adapter(root);
+    let auth_adapter = build_auth_adapter(root, &options);
 
     let state = Arc::new(AppState {
         data_adapter,

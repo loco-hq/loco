@@ -2,6 +2,8 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Once;
 
+use loco_apps::server::AppOptions;
+
 // `std::env::set_var` is not thread-safe; guard it so parallel suites set it exactly once.
 static ADAPTER_ENV_ONCE: Once = Once::new();
 
@@ -38,6 +40,13 @@ fn crate_dir() -> &'static Path {
 /// - `schemas/instances/`, `auth/` come from the suite's `fixtures/` folder
 ///   if present, otherwise empty dirs are created
 fn run_suite(suite_dir: &Path) {
+    run_suite_with(suite_dir, AppOptions::default());
+}
+
+/// As `run_suite`, with app options pinned instead of read from the
+/// environment. Returns the server root so a caller can assert on what the
+/// suite did (or did not) write to disk.
+fn run_suite_with(suite_dir: &Path, options: AppOptions) -> tempfile::TempDir {
     // 1. Build server root in a tempdir
     let tmp = tempfile::TempDir::new().unwrap();
 
@@ -66,7 +75,7 @@ fn run_suite(suite_dir: &Path) {
     });
 
     // 3. Build the app rooted at the tempdir
-    let app = loco_apps::server::build_app_with_root(tmp.path());
+    let app = loco_apps::server::build_app_with_options(tmp.path(), options);
 
     // 4. Start server on a random available port
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -121,6 +130,8 @@ fn run_suite(suite_dir: &Path) {
         "hurl tests failed in {}",
         suite_dir.display()
     );
+
+    tmp
 }
 
 #[test]
@@ -161,4 +172,22 @@ fn suite_data_validation_reads() {
 #[test]
 fn suite_version_lifecycle() {
     run_suite(&suites_dir().join("version_lifecycle"));
+}
+
+#[test]
+fn suite_auth_no_auto_create() {
+    // The rest of the suites set LOCO_AUTH_AUTO_CREATE=1 process-wide; this
+    // one pins the production default off and checks nothing was squatted.
+    let tmp = run_suite_with(
+        &suites_dir().join("auth_no_auto_create"),
+        AppOptions {
+            auth_auto_create: Some(false),
+        },
+    );
+    for dir in ["accounts", "identities"] {
+        assert!(
+            !tmp.path().join("auth").join(dir).join("acme.json").exists(),
+            "login of an unknown handle wrote auth/{dir}/acme.json"
+        );
+    }
 }
