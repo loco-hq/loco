@@ -12,7 +12,7 @@ use crate::auth::{
     UpdateUserRequest,
 };
 use crate::http::authz::require_any_org_owner;
-use crate::http::response::ApiResponse;
+use crate::http::response::{error_response, ApiResponse};
 use crate::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -70,18 +70,20 @@ pub struct CreateUserHttpRequest {
     password: Option<String>,
 }
 
+/// Self-service signup. No token. A password is required so the local
+/// adapter cannot stamp `TEST_PASSWORD`. List/update/delete stay org-owner.
 pub async fn create_user(
-    user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateUserHttpRequest>,
 ) -> Response {
-    if let Err(resp) = require_any_org_owner(&state, &user.0.user.username) {
-        return resp;
+    let password = body.password.as_deref().map(str::trim).unwrap_or("");
+    if password.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "password is required");
     }
     let req = CreateUserRequest {
         username: body.username,
         name: body.name,
-        password: body.password,
+        password: Some(password.to_string()),
     };
 
     match state.auth_adapter.create_user(&req) {

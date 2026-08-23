@@ -1,4 +1,5 @@
-# /auth/users is org-owner admin. Self-read is GET /auth/me, not GET /users/{id}.
+# POST /auth/users is self-service signup (no token, password required).
+# List/update/delete stay org-owner admin. Self-read is GET /auth/me.
 # Person-account ownership (alice → alice/*) is not an org role.
 #
 # Fixture: alice owns alice/testapp, bob owns bob/myapp. Neither starts as
@@ -37,7 +38,7 @@ HTTP 200
 [Asserts]
 jsonpath "$.data.username" == "alice"
 
-# No token → 401 on /me and /users.
+# No token → 401 on /me and list. Signup is the open POST.
 GET http://127.0.0.1:{{port}}/auth/me
 HTTP 401
 [Asserts]
@@ -48,17 +49,47 @@ HTTP 401
 [Asserts]
 jsonpath "$.ok" == false
 
-# Logged-in person who does not own an org cannot list, create, update, or delete.
-GET http://127.0.0.1:{{port}}/auth/users/list
-Authorization: Bearer {{bob_token}}
-HTTP 403
+# Self-service signup: no token, password required.
+POST http://127.0.0.1:{{port}}/auth/users
+Content-Type: application/json
+{"username": "dana", "name": "Dana"}
+HTTP 400
+[Asserts]
+jsonpath "$.ok" == false
+jsonpath "$.error" == "password is required"
+
+POST http://127.0.0.1:{{port}}/auth/users
+Content-Type: application/json
+{"username": "dana", "name": "Dana", "password": "password"}
+HTTP 201
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data.username" == "dana"
+jsonpath "$.data.name" == "Dana"
+
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{"username": "dana", "password": "password"}
+HTTP 200
+[Captures]
+dana_token: jsonpath "$.data.token"
+
+GET http://127.0.0.1:{{port}}/auth/me
+Authorization: Bearer {{dana_token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data.username" == "dana"
+
+POST http://127.0.0.1:{{port}}/auth/users
+Content-Type: application/json
+{"username": "dana", "name": "Dana", "password": "password"}
+HTTP 409
 [Asserts]
 jsonpath "$.ok" == false
 
-POST http://127.0.0.1:{{port}}/auth/users
+# Logged-in person who does not own an org cannot list, update, or delete.
+GET http://127.0.0.1:{{port}}/auth/users/list
 Authorization: Bearer {{bob_token}}
-Content-Type: application/json
-{"username": "intruder", "name": "Intruder"}
 HTTP 403
 [Asserts]
 jsonpath "$.ok" == false
