@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::secret;
@@ -34,11 +35,52 @@ struct StoredIdentity {
     last_login_at: Option<String>,
 }
 
+/// How long a login is good for. Sessions are absolute — there is no refresh,
+/// so past this point the client logs in again.
+pub const SESSION_TTL_DAYS: i64 = 7;
+
 #[derive(Serialize, Deserialize, Clone)]
 struct StoredSession {
     token: String,
     identity_id: String,
     created_at: String,
+    /// Absolute expiry, RFC 3339. Sessions written before expiry landed have
+    /// no such field; those fall back to `created_at` + [`SESSION_TTL_DAYS`].
+    #[serde(default)]
+    expires_at: Option<String>,
+}
+
+impl StoredSession {
+    fn new(token: String, identity_id: String, now: DateTime<Utc>) -> Self {
+        StoredSession {
+            token,
+            identity_id,
+            created_at: now.to_rfc3339(),
+            expires_at: Some((now + Duration::days(SESSION_TTL_DAYS)).to_rfc3339()),
+        }
+    }
+
+    /// A session whose dates cannot be parsed is treated as expired: we cannot
+    /// tell how old it is, so it does not get to authenticate anything.
+    fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        match self.expiry() {
+            Some(expiry) => now >= expiry,
+            None => true,
+        }
+    }
+
+    fn expiry(&self) -> Option<DateTime<Utc>> {
+        match &self.expires_at {
+            Some(expires_at) => parse_rfc3339(expires_at),
+            None => parse_rfc3339(&self.created_at).map(|at| at + Duration::days(SESSION_TTL_DAYS)),
+        }
+    }
+}
+
+fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -142,6 +184,7 @@ impl LocalAuthAdapter {
                 .unwrap()
                 .insert(session.token.clone(), session);
         });
+        self.sweep_expired_sessions(Utc::now());
         self.load_json_dir("api_keys", |this, mut key: StoredApiKey| {
             if !secret::is_api_key_hash(&key.key_hash) {
                 // Same upgrade as identities: the field used to hold the key.
@@ -309,6 +352,30 @@ impl LocalAuthAdapter {
     fn delete_session_file(&self, token: &str) {
         let path = self.base_dir.join("sessions").join(format!("{token}.json"));
         let _ = std::fs::remove_file(path);
+    }
+
+    /// Drop a session from the cache and from disk. Used when a session turns
+    /// out to be expired, so the sweep is not the only thing keeping the store
+    /// from growing forever.
+    fn forget_session(&self, token: &str) {
+        self.sessions.write().unwrap().remove(token);
+        self.delete_session_file(token);
+    }
+
+    /// Boot-time cleanup: expired sessions never come back, so there is no
+    /// reason to carry them in memory or leave their files on disk.
+    fn sweep_expired_sessions(&self, now: DateTime<Utc>) {
+        let expired: Vec<String> = {
+            let sessions = self.sessions.read().unwrap();
+            sessions
+                .values()
+                .filter(|session| session.is_expired(now))
+                .map(|session| session.token.clone())
+                .collect()
+        };
+        for token in &expired {
+            self.forget_session(token);
+        }
     }
 
     fn persist_api_key(&self, key: &StoredApiKey) {
@@ -525,7 +592,8 @@ impl AuthAdapter for LocalAuthAdapter {
             return Err(AuthError::InvalidCredentials);
         }
 
-        let now = chrono::Utc::now().to_rfc3339();
+        let issued_at = Utc::now();
+        let now = issued_at.to_rfc3339();
 
         let identity = {
             let account = self
@@ -583,11 +651,7 @@ impl AuthAdapter for LocalAuthAdapter {
         self.persist_identity(&identity);
 
         let token = uuid::Uuid::new_v4().to_string();
-        let session = StoredSession {
-            token: token.clone(),
-            identity_id: identity.id.clone(),
-            created_at: now,
-        };
+        let session = StoredSession::new(token.clone(), identity.id.clone(), issued_at);
         self.persist_session(&session);
         self.sessions
             .write()
@@ -601,8 +665,17 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn validate_session(&self, token: &str) -> Result<AuthSession, AuthError> {
-        let sessions = self.sessions.read().unwrap();
-        let session = sessions.get(token).ok_or(AuthError::SessionNotFound)?;
+        let session = {
+            let sessions = self.sessions.read().unwrap();
+            sessions
+                .get(token)
+                .cloned()
+                .ok_or(AuthError::SessionNotFound)?
+        };
+        if session.is_expired(Utc::now()) {
+            self.forget_session(token);
+            return Err(AuthError::SessionExpired);
+        }
         let identity = self
             .identity_by_id(&session.identity_id)
             .ok_or(AuthError::UserNotFound)?;
@@ -1143,6 +1216,130 @@ mod tests {
             .unwrap()
             .get("site_id")
             .is_none());
+    }
+
+    /// Rewrite a live session so it looks like it was issued `days` ago —
+    /// cheaper than waiting out a real TTL.
+    fn backdate_session(adapter: &LocalAuthAdapter, token: &str, days: i64) {
+        let mut session = adapter
+            .sessions
+            .read()
+            .unwrap()
+            .get(token)
+            .cloned()
+            .expect("session is live");
+        let issued_at = Utc::now() - Duration::days(days);
+        session.created_at = issued_at.to_rfc3339();
+        session.expires_at = Some((issued_at + Duration::days(SESSION_TTL_DAYS)).to_rfc3339());
+        adapter.persist_session(&session);
+        adapter
+            .sessions
+            .write()
+            .unwrap()
+            .insert(token.to_string(), session);
+    }
+
+    fn session_file(dir: &Path, token: &str) -> PathBuf {
+        dir.join("sessions").join(format!("{token}.json"))
+    }
+
+    #[test]
+    fn session_past_ttl_is_rejected_and_forgotten() {
+        let (dir, adapter) = adapter();
+        let token = login_ok(&adapter, "alice").token;
+        backdate_session(&adapter, &token, SESSION_TTL_DAYS + 1);
+
+        let err = adapter.validate_session(&token).unwrap_err();
+        assert!(matches!(err, AuthError::SessionExpired));
+
+        // Rejecting it also drops it, so it cannot be retried and cannot keep
+        // occupying the cache or the disk.
+        assert!(!adapter.sessions.read().unwrap().contains_key(&token));
+        assert!(!session_file(dir.path(), &token).exists());
+        assert!(matches!(
+            adapter.validate_session(&token).unwrap_err(),
+            AuthError::SessionNotFound
+        ));
+    }
+
+    #[test]
+    fn session_within_ttl_still_validates() {
+        let (_dir, adapter) = adapter();
+        let token = login_ok(&adapter, "alice").token;
+        backdate_session(&adapter, &token, SESSION_TTL_DAYS - 1);
+
+        let validated = adapter.validate_session(&token).unwrap();
+        assert_eq!(validated.user.username, "alice");
+    }
+
+    #[test]
+    fn expired_sessions_are_swept_on_load() {
+        let (dir, adapter) = adapter();
+        let fresh = login_ok(&adapter, "alice").token;
+        let stale = login_ok(&adapter, "bob").token;
+        backdate_session(&adapter, &stale, SESSION_TTL_DAYS + 1);
+
+        drop(adapter);
+        let reloaded = LocalAuthAdapter::new(dir.path());
+
+        assert!(!reloaded.sessions.read().unwrap().contains_key(&stale));
+        assert!(!session_file(dir.path(), &stale).exists());
+        assert_eq!(
+            reloaded.validate_session(&fresh).unwrap().user.username,
+            "alice"
+        );
+    }
+
+    /// Session files written before expiry landed carry only `created_at`.
+    #[test]
+    fn session_file_without_expires_at_ages_out_from_created_at() {
+        let (dir, adapter) = adapter();
+        let identity_id = login_ok(&adapter, "alice").user.id;
+        drop(adapter);
+
+        let write_legacy = |token: &str, age_days: i64| {
+            let created_at = (Utc::now() - Duration::days(age_days)).to_rfc3339();
+            std::fs::write(
+                session_file(dir.path(), token),
+                serde_json::json!({
+                    "token": token,
+                    "identity_id": identity_id,
+                    "created_at": created_at,
+                })
+                .to_string(),
+            )
+            .unwrap();
+        };
+        write_legacy("legacy-fresh", 1);
+        write_legacy("legacy-stale", SESSION_TTL_DAYS + 1);
+
+        let adapter = LocalAuthAdapter::new(dir.path());
+        assert_eq!(
+            adapter
+                .validate_session("legacy-fresh")
+                .unwrap()
+                .user
+                .username,
+            "alice"
+        );
+        assert!(!session_file(dir.path(), "legacy-stale").exists());
+    }
+
+    /// An undateable session is not a session we can vouch for.
+    #[test]
+    fn session_with_unparseable_dates_is_expired() {
+        let session = StoredSession {
+            token: "t".to_string(),
+            identity_id: "i".to_string(),
+            created_at: "whenever".to_string(),
+            expires_at: None,
+        };
+        assert!(session.is_expired(Utc::now()));
+        assert!(StoredSession {
+            expires_at: Some("whenever".to_string()),
+            ..session
+        }
+        .is_expired(Utc::now()));
     }
 
     #[test]
