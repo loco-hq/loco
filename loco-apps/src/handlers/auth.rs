@@ -11,7 +11,8 @@ use crate::auth::{
     auth_error_to_response, AuthenticatedUser, CreateUserRequest, LoginCredentials,
     UpdateUserRequest,
 };
-use crate::http::response::ApiResponse;
+use crate::http::authz::require_self;
+use crate::http::response::{error_response, ApiResponse};
 use crate::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -20,7 +21,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/logout", post(logout))
         .route("/me", get(me))
         .route("/users", post(create_user))
-        .route("/users/list", get(list_users))
         .route("/users/{id}", put(update_user).delete(delete_user))
         .route("/api-keys", post(create_api_key))
         .route("/api-keys/list", get(list_api_keys))
@@ -55,6 +55,7 @@ pub async fn logout(user: AuthenticatedUser, State(state): State<Arc<AppState>>)
     }
 }
 
+/// Authenticated self-read. `/auth/users/{id}` is not a public lookup.
 pub async fn me(user: AuthenticatedUser) -> Response {
     ApiResponse::success(user.0.user).into_response()
 }
@@ -67,26 +68,25 @@ pub struct CreateUserHttpRequest {
     password: Option<String>,
 }
 
+/// Self-service signup. No token. Password is required in the adapter
+/// (`CreateUserRequest.password` is a `String`); this maps a missing body
+/// field to 400 instead of 401.
 pub async fn create_user(
-    _user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateUserHttpRequest>,
 ) -> Response {
+    let password = body.password.as_deref().map(str::trim).unwrap_or("");
+    if password.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "password is required");
+    }
     let req = CreateUserRequest {
         username: body.username,
         name: body.name,
-        password: body.password,
+        password: password.to_string(),
     };
 
     match state.auth_adapter.create_user(&req) {
         Ok(new_user) => (StatusCode::CREATED, ApiResponse::success(new_user)).into_response(),
-        Err(e) => auth_error_to_response(e),
-    }
-}
-
-pub async fn list_users(_user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
-    match state.auth_adapter.list_users() {
-        Ok(users) => ApiResponse::success(users).into_response(),
         Err(e) => auth_error_to_response(e),
     }
 }
@@ -98,11 +98,14 @@ pub struct UpdateUserHttpRequest {
 }
 
 pub async fn update_user(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(body): Json<UpdateUserHttpRequest>,
 ) -> Response {
+    if let Err(resp) = require_self(&user.0.user.id, &id) {
+        return resp;
+    }
     let updates = UpdateUserRequest { name: body.name };
 
     match state.auth_adapter.update_user(&id, &updates) {
@@ -112,10 +115,13 @@ pub async fn update_user(
 }
 
 pub async fn delete_user(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
+    if let Err(resp) = require_self(&user.0.user.id, &id) {
+        return resp;
+    }
     match state.auth_adapter.delete_user(&id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => auth_error_to_response(e),

@@ -22,6 +22,9 @@ pub enum AuthError {
     UserNotFound,
     UserAlreadyExists,
     Unauthorized,
+    /// The identity is the only `owner` of this org. Deleting them would
+    /// orphan it; add another owner first.
+    SoleOrgOwner(String),
     Internal(String),
 }
 
@@ -34,6 +37,9 @@ impl fmt::Display for AuthError {
             AuthError::UserNotFound => write!(f, "user not found"),
             AuthError::UserAlreadyExists => write!(f, "user already exists"),
             AuthError::Unauthorized => write!(f, "unauthorized"),
+            AuthError::SoleOrgOwner(org) => {
+                write!(f, "cannot delete the sole owner of {org}")
+            }
             AuthError::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -156,7 +162,7 @@ pub struct LoginCredentials {
 pub struct CreateUserRequest {
     pub username: String,
     pub name: String,
-    pub password: Option<String>,
+    pub password: String,
 }
 
 pub struct UpdateUserRequest {
@@ -188,7 +194,6 @@ pub trait AuthAdapter: Send + Sync {
     fn logout(&self, token: &str) -> Result<(), AuthError>;
     fn revoke_all_sessions(&self, identity_id: &str) -> Result<(), AuthError>;
     fn get_user(&self, user_id: &str) -> Result<Option<AuthUser>, AuthError>;
-    fn list_users(&self) -> Result<Vec<AuthUser>, AuthError>;
     fn create_user(&self, user: &CreateUserRequest) -> Result<AuthUser, AuthError>;
     fn update_user(
         &self,
@@ -305,6 +310,7 @@ pub fn auth_error_to_response(err: AuthError) -> Response {
             auth_error_response(StatusCode::CONFLICT, "user already exists")
         }
         AuthError::Unauthorized => auth_error_response(StatusCode::FORBIDDEN, "unauthorized"),
+        AuthError::SoleOrgOwner(_) => auth_error_response(StatusCode::CONFLICT, &err.to_string()),
         AuthError::Internal(msg) => auth_error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg),
     }
 }

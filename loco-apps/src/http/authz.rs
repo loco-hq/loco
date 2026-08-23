@@ -30,6 +30,16 @@ pub fn require_developer(
     }
 }
 
+/// The caller's identity id must match the path id. Person accounts are
+/// personal — org owners manage membership, not the identity record.
+pub fn require_self(caller_id: &str, target_id: &str) -> Result<(), Response> {
+    if caller_id == target_id {
+        Ok(())
+    } else {
+        Err(forbidden())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DataVerb {
     Read,
