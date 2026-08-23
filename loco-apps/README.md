@@ -64,7 +64,7 @@ Unversioned config: projects, datasets, sites, version create/list/delete. Creat
 
 ### `/auth/…`
 
-`POST /login` is global (`{ "username" }`, optional `"password"`; no site headers required). `POST /logout`, `GET /me`, users, API keys. Persistence is `auth/{accounts,identities,sessions,api_keys}/` (gitignored).
+`POST /login` is global (`{ "username" }`, optional `"password"`; no site headers required). `POST /logout`, `GET /me` (authenticated self-read), users (org owner of at least one org), API keys. Persistence is `auth/{accounts,identities,sessions,api_keys}/` (gitignored).
 
 ## Schemas on disk
 

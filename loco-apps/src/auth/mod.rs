@@ -235,6 +235,11 @@ pub trait AuthAdapter: Send + Sync {
     ) -> Result<OrgMember, AuthError>;
     fn remove_org_member(&self, org: &str, handle: &str) -> Result<(), AuthError>;
     fn list_org_members(&self, org: &str) -> Result<Vec<OrgMember>, AuthError>;
+
+    /// True when the identity is `owner` of at least one org. Person-account
+    /// ownership does not count — that is implicit developer on `{handle}/*`,
+    /// not an org role. Used as the admin gate for `/auth/users`.
+    fn is_org_owner(&self, identity_handle: &str) -> Result<bool, AuthError>;
 }
 
 // --- Extractor ---

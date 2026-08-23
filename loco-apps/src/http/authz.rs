@@ -30,6 +30,16 @@ pub fn require_developer(
     }
 }
 
+/// Owner of at least one org. Admin gate for `/auth/users` until there is a
+/// dedicated platform-admin role. Person-account ownership does not qualify.
+pub fn require_any_org_owner(state: &AppState, identity_handle: &str) -> Result<(), Response> {
+    match state.auth_adapter.is_org_owner(identity_handle) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(forbidden()),
+        Err(e) => Err(auth_error_to_response(e)),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DataVerb {
     Read,

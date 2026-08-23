@@ -11,6 +11,7 @@ use crate::auth::{
     auth_error_to_response, AuthenticatedUser, CreateUserRequest, LoginCredentials,
     UpdateUserRequest,
 };
+use crate::http::authz::require_any_org_owner;
 use crate::http::response::ApiResponse;
 use crate::server::AppState;
 
@@ -55,6 +56,8 @@ pub async fn logout(user: AuthenticatedUser, State(state): State<Arc<AppState>>)
     }
 }
 
+/// Authenticated self-read. `/auth/users/{id}` is not a public lookup —
+/// identities other than the caller are listed only by an org owner.
 pub async fn me(user: AuthenticatedUser) -> Response {
     ApiResponse::success(user.0.user).into_response()
 }
@@ -68,10 +71,13 @@ pub struct CreateUserHttpRequest {
 }
 
 pub async fn create_user(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateUserHttpRequest>,
 ) -> Response {
+    if let Err(resp) = require_any_org_owner(&state, &user.0.user.username) {
+        return resp;
+    }
     let req = CreateUserRequest {
         username: body.username,
         name: body.name,
@@ -84,7 +90,10 @@ pub async fn create_user(
     }
 }
 
-pub async fn list_users(_user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
+pub async fn list_users(user: AuthenticatedUser, State(state): State<Arc<AppState>>) -> Response {
+    if let Err(resp) = require_any_org_owner(&state, &user.0.user.username) {
+        return resp;
+    }
     match state.auth_adapter.list_users() {
         Ok(users) => ApiResponse::success(users).into_response(),
         Err(e) => auth_error_to_response(e),
@@ -98,11 +107,14 @@ pub struct UpdateUserHttpRequest {
 }
 
 pub async fn update_user(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(body): Json<UpdateUserHttpRequest>,
 ) -> Response {
+    if let Err(resp) = require_any_org_owner(&state, &user.0.user.username) {
+        return resp;
+    }
     let updates = UpdateUserRequest { name: body.name };
 
     match state.auth_adapter.update_user(&id, &updates) {
@@ -112,10 +124,13 @@ pub async fn update_user(
 }
 
 pub async fn delete_user(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
+    if let Err(resp) = require_any_org_owner(&state, &user.0.user.username) {
+        return resp;
+    }
     match state.auth_adapter.delete_user(&id) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => auth_error_to_response(e),
