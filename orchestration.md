@@ -178,13 +178,22 @@ EOF
 Reviewer sits in a sibling pane on the **main** checkout. Tell them the worktree path so tests run there, not in `main`:
 
 ```bash
+# Fresh shell — do not reuse $worktree from the implementer block above.
+worktree=$(herdr worktree list --cwd /Users/ben/dev/loco \
+  | jq -r --arg b "issue-N-short-slug" '.result.worktrees[] | select(.branch==$b) | .path')
+if [ -z "$worktree" ]; then
+  echo "no worktree for branch issue-N-short-slug; herdr worktree list" >&2
+  exit 1
+fi
+
 split=$(herdr pane split --current --direction right --cwd /Users/ben/dev/loco --no-focus)
 review_pane=$(printf '%s\n' "$split" | jq -r '.result.pane.pane_id')
 
 herdr agent start review --kind grok --pane "$review_pane"
+# Unquoted EOF so $worktree expands. Escape \$ so token.py does not run in *this* shell.
 herdr agent prompt review "$(cat <<EOF
 You are the reviewer for PR #M (issue #N). Implementer was Claude.
-eval \"\$(python3 scripts/agent-github/token.py env grok)\"
+eval "\$(python3 scripts/agent-github/token.py env grok)"
 Read the diff with gh (not the herdr sidebar).
 Implementer worktree (run tests here, do not dirty main):
   ${worktree}
