@@ -30,13 +30,13 @@ pub fn require_developer(
     }
 }
 
-/// Owner of at least one org. Admin gate for `/auth/users` until there is a
-/// dedicated platform-admin role. Person-account ownership does not qualify.
-pub fn require_any_org_owner(state: &AppState, identity_handle: &str) -> Result<(), Response> {
-    match state.auth_adapter.is_org_owner(identity_handle) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(forbidden()),
-        Err(e) => Err(auth_error_to_response(e)),
+/// The caller's identity id must match the path id. Person accounts are
+/// personal — org owners manage membership, not the identity record.
+pub fn require_self(caller_id: &str, target_id: &str) -> Result<(), Response> {
+    if caller_id == target_id {
+        Ok(())
+    } else {
+        Err(forbidden())
     }
 }
 

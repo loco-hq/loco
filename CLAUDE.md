@@ -119,7 +119,7 @@ Mounted in `server.rs`:
 | `/data` | Record CRUD. Site-scoped via headers. Strict validation on write; diagnostics on read. |
 | `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets). |
 | `/config` | Unversioned project / dataset / site / version lifecycle. |
-| `/auth` | Login, logout, `/me` (self), signup (`POST /users`), users list/update/delete (org owner), API keys. |
+| `/auth` | Login, logout, `/me` (self), signup (`POST /users`), users list (authenticated), update/delete (self), API keys. |
 
 CORS is `*` origin, method, and header. No cookies; clients send `Authorization: Bearer`. Studio's Vite proxy is unchanged.
 
@@ -133,7 +133,7 @@ Handlers sit on request extractors in `http/scope/`:
 
 Membership: `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Effective project access = org owner ∪ project role, plus implicit developer when the identity owns the person account (`alice` → `alice/*`).
 
-Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the user. Body is `{ "username", "password" }`. Seeded identities (`alice`, `bob`) have password `password`. Org accounts (`loco`) cannot log in. Sessions and API keys hang off the identity and both work as `Authorization: Bearer …`. `GET /auth/me` is authenticated self-read. `POST /auth/users` is self-service signup (no token; password required). List/update/delete of `/auth/users` require the caller to be `owner` of at least one org; person-account ownership does not qualify.
+Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the user. Body is `{ "username", "password" }`. Seeded identities (`alice`, `bob`) have password `password`. Org accounts (`loco`) cannot log in. Sessions and API keys hang off the identity and both work as `Authorization: Bearer …`. `GET /auth/me` is authenticated self-read. `POST /auth/users` is self-service signup (no token; password required). `GET /auth/users/list` is an authenticated directory for invite pickers. `PUT` / `DELETE /auth/users/{id}` are self only — org owners manage membership, not the person account.
 
 ### Validation
 

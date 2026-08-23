@@ -126,7 +126,7 @@ Projects, datasets, sites, and version create/list/delete. Creating a project bo
 
 ### `/auth`
 
-Login (global identity; `{ "username" }` plus optional `"password"`), logout, `GET /me` (any authenticated identity), `POST /users` (self-service signup, password required), users list/update/delete (org owner of at least one org), API keys. Sessions and keys hang off the identity and are stored under `loco-apps/auth/{accounts,identities,sessions,api_keys}/`.
+Login (global identity; `{ "username" }` plus optional `"password"`), logout, `GET /me` (any authenticated identity), `POST /users` (self-service signup, password required), `GET /users/list` (authenticated directory), `PUT`/`DELETE /users/{id}` (self), API keys. Sessions and keys hang off the identity and are stored under `loco-apps/auth/{accounts,identities,sessions,api_keys}/`.
 
 ### Response shape
 

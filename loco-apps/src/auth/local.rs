@@ -905,13 +905,6 @@ impl AuthAdapter for LocalAuthAdapter {
             })
             .collect())
     }
-
-    fn is_org_owner(&self, identity_handle: &str) -> Result<bool, AuthError> {
-        let members = self.org_members.read().unwrap();
-        Ok(members
-            .values()
-            .any(|m| m.handle == identity_handle && m.role == OrgRole::Owner))
-    }
 }
 
 #[cfg(test)]
@@ -1124,26 +1117,5 @@ mod tests {
         let (_dir, adapter) = adapter();
         let err = adapter.create_org("alice", "bob").unwrap_err();
         assert!(matches!(err, AuthError::UserAlreadyExists));
-    }
-
-    #[test]
-    fn person_account_is_not_an_org_owner() {
-        let (_dir, adapter) = adapter();
-        assert!(!adapter.is_org_owner("alice").unwrap());
-        assert!(!adapter.is_org_owner("bob").unwrap());
-    }
-
-    #[test]
-    fn creating_an_org_makes_the_creator_an_org_owner() {
-        let (_dir, adapter) = adapter();
-        adapter.create_org("acme", "alice").unwrap();
-        assert!(adapter.is_org_owner("alice").unwrap());
-        assert!(!adapter.is_org_owner("bob").unwrap());
-        adapter
-            .add_org_member("acme", "bob", OrgRole::Member)
-            .unwrap();
-        assert!(!adapter.is_org_owner("bob").unwrap());
-        adapter.create_org("widgets", "bob").unwrap();
-        assert!(adapter.is_org_owner("bob").unwrap());
     }
 }
