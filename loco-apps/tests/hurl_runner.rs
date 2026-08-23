@@ -173,6 +173,60 @@ fn suite_version_lifecycle() {
 }
 
 #[test]
+fn suite_auth_credentials() {
+    let tmp = run_suite_with(
+        &suites_dir().join("auth_credentials"),
+        AppOptions::default(),
+    );
+    let auth = tmp.path().join("auth");
+
+    // Signup password must not be recoverable from the identity file.
+    let dora = std::fs::read_to_string(auth.join("identities/dora.json"))
+        .expect("auth/identities/dora.json");
+    assert!(
+        !dora.contains("correct-horse-battery-staple"),
+        "identity file holds the login password in plaintext: {dora}"
+    );
+    assert!(
+        !dora.contains("\"password\":"),
+        "identity file still has a plaintext `password` field: {dora}"
+    );
+
+    // Every identity on disk, seeded ones included, stores an argon2 hash.
+    for entry in std::fs::read_dir(auth.join("identities")).unwrap() {
+        let path = entry.unwrap().path();
+        let identity: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let hash = identity["password_hash"].as_str().unwrap_or_default();
+        assert!(
+            hash.starts_with("$argon2"),
+            "{} does not store an argon2 hash: {hash}",
+            path.display()
+        );
+    }
+
+    // The bearer token the suite used must not be recoverable from the key
+    // file — only its SHA-256 digest is stored.
+    let mut keys = 0;
+    for entry in std::fs::read_dir(auth.join("api_keys")).unwrap() {
+        let path = entry.unwrap().path();
+        let key: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let hash = key["key_hash"].as_str().unwrap_or_default();
+        assert!(
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "{} stores something other than a sha256 digest: {hash}",
+            path.display()
+        );
+        keys += 1;
+    }
+    assert_eq!(keys, 1, "expected the suite to leave one api key on disk");
+}
+
+#[test]
 fn suite_auth_no_auto_create() {
     // The rest of the suites set LOCO_AUTH_AUTO_CREATE=1 process-wide; this
     // one pins the production default off and checks nothing was squatted.

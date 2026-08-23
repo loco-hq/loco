@@ -32,9 +32,9 @@ Date, datetime, reference (foreign key), picklist, multi-select, rich text, file
 
 ## API keys (beyond the prototype)
 
-The adapter and `/auth/api-keys` routes exist. Still open:
+The adapter and `/auth/api-keys` routes exist. The key is shown once at
+creation and only its SHA-256 digest is stored. Still open:
 
-- Key shown once at creation; only the hash stored (verify this is true of the local adapter)
 - Multiple labeled keys per user ("CLI", "CI pipeline", "MCP") with individual revocation — mostly there
 - Last-used timestamps, audit trail for use
 - Rate limiting per key

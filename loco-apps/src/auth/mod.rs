@@ -1,4 +1,5 @@
 pub mod local;
+pub mod secret;
 
 use std::fmt;
 use std::sync::Arc;
