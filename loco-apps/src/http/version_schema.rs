@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::http::authz::is_draft_version;
 use crate::{
     Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest,
-    ManifestUpdate, SchemaStore,
+    ManifestUpdate, PermissionSet, PermissionSetUpdate, SchemaStore,
 };
 
 /// Name of the fieldset auto-created when a collection is created. The boolean
@@ -241,6 +241,31 @@ impl VersionSchema {
         })
     }
 
+    /// Every permission set visible to this version, across self + direct deps.
+    pub fn permission_sets(&self) -> Vec<Arc<PermissionSet>> {
+        self.dependencies
+            .iter()
+            .flat_map(|(project_id, version)| {
+                let prefix = format!("{project_id}/versions/{version}/permission_sets/");
+                self.store
+                    .permission_sets()
+                    .list(&prefix)
+                    .into_iter()
+                    .map(|(_, ps)| ps)
+            })
+            .collect()
+    }
+
+    /// First permission set with the given `name` across self + direct deps.
+    /// Self wins on a name collision so a consumer can shadow a package set.
+    pub fn permission_set(&self, name: &str) -> Option<Arc<PermissionSet>> {
+        self.dependencies.iter().find_map(|(project_id, version)| {
+            self.store
+                .permission_sets()
+                .get(&PermissionSet::to_path(project_id, version, name))
+        })
+    }
+
     /// Auto-add fieldsets only, scoped to this project+version (deps don't
     /// influence ordering — each project's fields land in its own sets).
     fn auto_add_fieldsets(&self, collection: &str) -> Vec<Arc<Fieldset>> {
@@ -395,6 +420,32 @@ impl VersionSchema {
         self.require_writable()?;
         let key = Fieldset::to_path(&self.project_id, &self.version, collection, name);
         Ok(self.store.fieldsets().delete(&key)?)
+    }
+
+    pub fn create_permission_set(
+        &self,
+        mut input: PermissionSet,
+    ) -> Result<Arc<PermissionSet>, VersionSchemaError> {
+        self.require_writable()?;
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.permission_sets().create(input)?)
+    }
+
+    pub fn update_permission_set(
+        &self,
+        name: &str,
+        patch: PermissionSetUpdate,
+    ) -> Result<Arc<PermissionSet>, VersionSchemaError> {
+        self.require_writable()?;
+        let key = PermissionSet::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.permission_sets().update(&key, patch)?)
+    }
+
+    pub fn delete_permission_set(&self, name: &str) -> Result<(), VersionSchemaError> {
+        self.require_writable()?;
+        let key = PermissionSet::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.permission_sets().delete(&key)?)
     }
 
     /// Append `field_name` to every `auto_add` fieldset in this project+version

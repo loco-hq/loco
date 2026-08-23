@@ -36,13 +36,12 @@ There is no tenant header. A request names a **site**:
 - `X-Site-Id: {site}`
 - `Authorization: Bearer <session or api key>` (optional)
 
-`SiteScope` resolves the site, pins the lake to that site's dataset, and builds a read-only `VersionSchema` for the site's version. Missing auth becomes the synthetic `public` user.
+`SiteScope` resolves the site, pins the lake to that site's dataset, and builds a read-only `VersionSchema` for the site's version. Missing auth becomes the synthetic `public` user. Anonymous `/data` list/get/insert are the union of permission sets the site assigns to `public` (`public_permission_sets`). Update and delete are never public.
 
 `/schema` and `/config` writes additionally require:
 
 - a real session
-- the site to be on the metadata-editor allowlist (`loco/studio/studio`, `loco/cards/cards`)
-- the session username to match the `{user}` in the path
+- project `developer` (or org owner) on the path project
 - a draft version (name contains `-`) for `/schema` mutations
 
 ## Routes

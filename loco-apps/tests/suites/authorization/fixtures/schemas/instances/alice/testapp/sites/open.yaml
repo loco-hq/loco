@@ -1,0 +1,5 @@
+label: "Open"
+version: "0-draft"
+dataset: "dev"
+public_permission_sets:
+  - secrets_read

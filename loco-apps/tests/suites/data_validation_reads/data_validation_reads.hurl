@@ -19,6 +19,7 @@ token: jsonpath "$.data.token"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": "Widget",
@@ -35,6 +36,7 @@ rec1_id: jsonpath "$.data.id"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": "Gadget",
@@ -51,6 +53,7 @@ rec2_id: jsonpath "$.data.id"
 GET http://127.0.0.1:{{port}}/data/items/get/{{rec1_id}}
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -61,6 +64,7 @@ jsonpath "$.diagnostics" not exists
 GET http://127.0.0.1:{{port}}/data/items/list
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -81,6 +85,7 @@ jsonpath "$.ok" == true
 GET http://127.0.0.1:{{port}}/data/items/get/{{rec1_id}}
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -94,6 +99,7 @@ jsonpath "$.diagnostics[0].path" == "extra"
 GET http://127.0.0.1:{{port}}/data/items/list
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -125,6 +131,7 @@ jsonpath "$.data.type" == "string"
 GET http://127.0.0.1:{{port}}/data/items/get/{{rec1_id}}
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -138,6 +145,7 @@ jsonpath "$.diagnostics[*].path" includes "quantity"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": "Trinket",
@@ -153,6 +161,7 @@ jsonpath "$.diagnostics[0].path" == "quantity"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": "Trinket",

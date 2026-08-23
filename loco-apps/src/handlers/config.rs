@@ -109,6 +109,7 @@ pub async fn create_project(
         default_label,
         "0.0.1-dev".to_string(),
         "dev".to_string(),
+        Vec::new(),
     ));
 
     let project_id = format!("{account}/{}", body.name);

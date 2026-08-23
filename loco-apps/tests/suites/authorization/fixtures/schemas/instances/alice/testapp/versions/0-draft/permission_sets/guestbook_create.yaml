@@ -1,0 +1,4 @@
+label: "Guestbook create"
+description: "Public may insert guestbook entries"
+create:
+  - guestbook

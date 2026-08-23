@@ -1,0 +1,23 @@
+description: "An additive named bundle of collection grants. Stacked by union; assigned to public on a site."
+pathTemplate: "${project}/versions/${version}/permission_sets/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+  description:
+    type: string
+  read:
+    type: list
+    items: string
+  create:
+    type: list
+    items: string

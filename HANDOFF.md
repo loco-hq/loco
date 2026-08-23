@@ -1,14 +1,17 @@
-# Handoff — 2026-08-18
+# Handoff — 2026-08-22
 
 For the next session. Read `README.md` + `CLAUDE.md` + [`docs/identity.md`](docs/identity.md) if you are cold. This file is only “where we left off” and what to do next.
 
 ## This session
 
-Architecture only. No code.
+Revised PR 3: grants moved off collection/site flags onto **permission sets**.
 
-- Locked the target identity model: global Loco identities, person/org accounts, project `developer`/`editor`, no application-user table. Doc: [`docs/identity.md`](docs/identity.md).
-- Agreed standalone frontends (CloudFront, no secrets) and a later Clippy, but those wait until this stack exists.
-- Field-metadata / schema→form loop (old HANDOFF §1) is still valid work and orthogonal. If one person: park it until after PR 2 so Hurl/Studio do not rebase twice. Do not mix it with PR 2.
+- New type `permission_set` (`${project}/versions/${version}/permission_sets/${name}`) with additive `read` / `create` collection-name lists.
+- Site assigns sets to `public` via `public_permission_sets`. Stacking is union. Same version, two sites, two public policies.
+- Loco `developer`/`editor` still have full `/data`. Sets are the site data-plane for `public` (and later site users).
+- Spec: `tests/suites/authorization/data_no_auth.hurl`. `cargo test` is green.
+
+Field-metadata / schema→form loop is still valid work and orthogonal. If one person: park it until after this identity stack. Do not mix it with PR 4.
 
 ## Servers
 
@@ -23,7 +26,7 @@ Login is global (`{ username, password }`). Seeded people (`alice`, `bob`) use p
 
 ## Next — identity PR stack
 
-Hard cut, not a migration saga. Each PR leaves `cargo test` green. Do not start MCP, CLI, Clippy, or anything in `FUTURE_IDEAS.md` until PR 2 (membership) is trustworthy. CORS / a cross-origin page is PR 5, not a side quest.
+Hard cut, not a migration saga. Each PR leaves `cargo test` green. Do not start MCP, CLI, Clippy, or anything in `FUTURE_IDEAS.md` until this stack is trustworthy. CORS / a cross-origin page is PR 5, not a side quest.
 
 ### PR 1 — Global identity (no policy change)
 
@@ -44,17 +47,13 @@ You log into Loco, not into a site. Authorization *behavior* stays the same so e
 
 Membership is the ACL. `METADATA_EDITOR_SITES`, `require_can_edit_user`, and “this site may edit schema” are gone. `authorization.hurl` is the spec.
 
-### PR 3 — Public is a policy, not a hole
+### PR 3 — Public is a policy, not a hole — done
 
-- Site or collection flags: `publicRead` / `publicCreate`. Default: **no** public write or delete.
-- Anonymous `/data` is principal `public`. List/get only if `publicRead`. Insert only if `publicCreate`. Update/delete never (until RLS).
-- Flip `tests/suites/authorization/data_no_auth.hurl` — it currently asserts public can add and delete.
-
-**Done when:** no token cannot delete, and a fixture can opt a collection into public create.
+Anonymous `/data` is principal `public`. Grants are **permission sets** (additive `read`/`create` lists), assigned on the site as `public_permission_sets`. Not flags on the collection — packages must not carry the installer's access policy. Spec: `tests/suites/authorization/data_no_auth.hurl`.
 
 ### PR 4 — Schema read vs schema write
 
-- `GET /schema/...` for `developer`, `editor`, and `public` on a public-read site (pinned version only).
+- `GET /schema/...` for `developer`, `editor`, and `public` on a site that assigns at least one permission set to `public` (pinned version only).
 - Writes stay `developer` + draft.
 - Split the read extractor from `VersionScope` (today every `/schema` route requires auth + editor site).
 

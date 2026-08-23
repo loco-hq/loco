@@ -91,7 +91,7 @@ Every request that needs a site sends:
 - `X-Site-Id: {site}`
 - `Authorization: Bearer <token>` when authenticated
 
-Missing auth becomes a synthetic `public` user. Writes that require a real session return `401`. `/schema` and `/config` writes also require the site to be on the metadata-editor allowlist (`loco/studio/studio`, `loco/cards/cards`) and the session user to match the `{user}` in the path.
+Missing auth becomes a synthetic `public` user. Anonymous `/data` list/get/insert are the union of permission sets the site assigns to `public`. Update and delete are never public. `/schema` and `/config` require a real session and project `developer` (or org owner).
 
 ### `/data` — records (scoped by the site's dataset + version)
 

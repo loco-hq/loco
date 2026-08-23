@@ -67,14 +67,15 @@ Type definitions live in `loco-apps/schemas/types/`. Supported field types: `str
 | collection | `${project}/versions/${version}/collections/${name}` |
 | field | `${project}/versions/${version}/fields/${collection}/${name}` |
 | fieldset | `${project}/versions/${version}/fieldsets/${collection}/${name}` |
+| permission_set | `${project}/versions/${version}/permission_sets/${name}` |
 
-`${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `versions`).
+`${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `versions`).
 
 ### Versions, sites, datasets
 
 - A **version** is a schema snapshot under `{project}/versions/{version}/`. A version whose name contains `-` is a draft (`0.0.1-dev`); only drafts accept `/schema` writes.
 - A **dataset** is a lake partition. Record keys are `(dataset_id, collection, id)` where `dataset_id` is `{user}/{project}/{dataset_name}`.
-- A **site** pins a `version` + `dataset`. Requests identify the site with `X-Project-Id: {user}/{project}` and `X-Site-Id: {site}`. There is no tenant header.
+- A **site** pins a `version` + `dataset`. Requests identify the site with `X-Project-Id: {user}/{project}` and `X-Site-Id: {site}`. There is no tenant header. Token-less `public` may list/get or insert `/data` only via permission sets the site assigns (`public_permission_sets`). Grants are not on the collection. Update/delete are never public.
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
@@ -121,7 +122,7 @@ Handlers sit on request extractors in `http/scope/`:
 - `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_developer`, `require_can_write_data`. Access is membership, not the site.
 - `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema`.
 - `ConfigProjectScope` / `ConfigUserScope` — `/config` routes. Project-targeted routes require developer; list/create/org do not need site headers.
-- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer; token-less `public` can still write (until the public-policy PR).
+- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get or insert when a permission set the site assigns to `public` grants `read` / `create` on that collection. Update/delete are never public.
 
 Membership: `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Effective project access = org owner ∪ project role, plus implicit developer when the identity owns the person account (`alice` → `alice/*`).
 

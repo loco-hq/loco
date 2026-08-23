@@ -7,8 +7,10 @@ use axum::response::Response;
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
+use crate::http::authz::{forbidden, public_may_create, public_may_read};
 use crate::server::AppState;
 use crate::validation::{validate_record, validate_records, ValidationMode, ValidationReport};
+use crate::PermissionSet;
 
 use loco_lake::Value;
 
@@ -67,6 +69,52 @@ impl CollectionScope {
         I: IntoIterator<Item = (&'a str, &'a HashMap<String, Value>)>,
     {
         validate_records(&self.site.schema, &self.collection_name, records, mode)
+    }
+
+    /// Permission sets the site assigns to `public`, resolved against the
+    /// pinned version (self + direct deps). Unknown names are skipped.
+    fn public_sets(&self) -> Vec<Arc<PermissionSet>> {
+        self.site
+            .site
+            .public_permission_sets()
+            .iter()
+            .filter_map(|name| self.site.schema.permission_set(name))
+            .collect()
+    }
+
+    /// List/get: members with data access, or anyone when a stacked set
+    /// grants `read` on this collection.
+    pub fn require_can_read_data(&self) -> Result<(), Response> {
+        if self.site.has_data_access()? {
+            return Ok(());
+        }
+        let sets = self.public_sets();
+        if public_may_read(sets.iter().map(|s| s.as_ref()), &self.collection_name) {
+            return Ok(());
+        }
+        Err(forbidden())
+    }
+
+    /// Insert: members with data access, or the `public` principal when a
+    /// stacked set grants `create`. Authenticated non-members cannot use
+    /// the public-create hole.
+    pub fn require_can_create_data(&self) -> Result<(), Response> {
+        if self.site.has_data_access()? {
+            return Ok(());
+        }
+        if !self.site.is_public() {
+            return Err(forbidden());
+        }
+        let sets = self.public_sets();
+        if public_may_create(sets.iter().map(|s| s.as_ref()), &self.collection_name) {
+            return Ok(());
+        }
+        Err(forbidden())
+    }
+
+    /// Update/delete: members only. Public never mutates.
+    pub fn require_can_write_data(&self) -> Result<(), Response> {
+        self.site.require_can_write_data()
     }
 }
 

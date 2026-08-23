@@ -62,4 +62,57 @@ mod generated_tests {
         // Trailing junk
         assert!(Dataset::from_path("ben/crm/datasets/acme/extra").is_none());
     }
+
+    #[test]
+    fn permission_set_path_roundtrip() {
+        let path = PermissionSet::to_path("ben/crm", "0.0.1-dev", "public_contacts");
+        assert_eq!(
+            path,
+            "ben/crm/versions/0.0.1-dev/permission_sets/public_contacts"
+        );
+        let vars = PermissionSet::from_path(&path).unwrap();
+        assert_eq!(vars.get("project").unwrap(), "ben/crm");
+        assert_eq!(vars.get("version").unwrap(), "0.0.1-dev");
+        assert_eq!(vars.get("name").unwrap(), "public_contacts");
+    }
+
+    #[test]
+    fn permission_set_yaml_grants() {
+        let vars = std::collections::HashMap::from([
+            ("project".into(), "alice/testapp".into()),
+            ("version".into(), "0-draft".into()),
+            ("name".into(), "guestbook_read".into()),
+        ]);
+        let ps = PermissionSet::from_yaml("label: Guestbook read\nread:\n  - guestbook\n", &vars)
+            .unwrap();
+        assert_eq!(ps.read(), &["guestbook".to_string()]);
+        assert!(ps.create().is_empty());
+    }
+
+    #[test]
+    fn site_yaml_public_permission_sets() {
+        let vars = std::collections::HashMap::from([
+            ("project".into(), "alice/testapp".into()),
+            ("name".into(), "dev".into()),
+        ]);
+        let s = Site::from_yaml(
+            "label: Dev\nversion: 0-draft\ndataset: dev\npublic_permission_sets:\n  - guestbook_read\n  - guestbook_create\n",
+            &vars,
+        )
+        .unwrap();
+        assert_eq!(
+            s.public_permission_sets(),
+            &["guestbook_read".to_string(), "guestbook_create".to_string()]
+        );
+    }
+
+    #[test]
+    fn site_yaml_public_permission_sets_default_empty() {
+        let vars = std::collections::HashMap::from([
+            ("project".into(), "alice/testapp".into()),
+            ("name".into(), "dev".into()),
+        ]);
+        let s = Site::from_yaml("label: Dev\nversion: 0-draft\ndataset: dev\n", &vars).unwrap();
+        assert!(s.public_permission_sets().is_empty());
+    }
 }

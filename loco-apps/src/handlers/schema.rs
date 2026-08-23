@@ -10,6 +10,7 @@ use crate::http::scope::VersionScope;
 use crate::server::AppState;
 use crate::{
     Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, ManifestUpdate,
+    PermissionSet, PermissionSetUpdate,
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -55,6 +56,20 @@ pub fn router() -> Router<Arc<AppState>> {
             get(get_fieldset)
                 .put(update_fieldset)
                 .delete(delete_fieldset),
+        )
+        .route(
+            "/{user}/{project}/{version}/permission_set",
+            post(create_permission_set),
+        )
+        .route(
+            "/{user}/{project}/{version}/permission_set/list",
+            get(list_permission_sets),
+        )
+        .route(
+            "/{user}/{project}/{version}/permission_set/{name}",
+            get(get_permission_set)
+                .put(update_permission_set)
+                .delete(delete_permission_set),
         )
 }
 
@@ -195,6 +210,54 @@ pub async fn delete_fieldset(
     Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
 ) -> Response {
     match scope.schema.delete_fieldset(&collection, &name) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn create_permission_set(
+    scope: VersionScope,
+    Json(input): Json<PermissionSet>,
+) -> Response {
+    match scope.schema.create_permission_set(input) {
+        Ok(ps) => (StatusCode::CREATED, ApiResponse::success(ps)).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn list_permission_sets(scope: VersionScope) -> Response {
+    ApiResponse::success(scope.schema.permission_sets()).into_response()
+}
+
+pub async fn get_permission_set(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+) -> Response {
+    match scope.schema.permission_set(&name) {
+        Some(ps) => ApiResponse::success(ps).into_response(),
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            &format!("permission set not found: {name}"),
+        ),
+    }
+}
+
+pub async fn update_permission_set(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+    Json(patch): Json<PermissionSetUpdate>,
+) -> Response {
+    match scope.schema.update_permission_set(&name, patch) {
+        Ok(ps) => ApiResponse::success(ps).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn delete_permission_set(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+) -> Response {
+    match scope.schema.delete_permission_set(&name) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => version_schema_error_to_response(e),
     }

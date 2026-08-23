@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 
 use crate::auth::{AuthSession, AuthUser, AuthenticatedUser, ProjectRole, PUBLIC_USERNAME};
-use crate::http::authz::validate_collection;
+use crate::http::authz::{forbidden, validate_collection};
 use crate::http::paths::collection_key;
 use crate::http::response::error_response;
 use crate::http::version_schema::VersionSchema;
@@ -94,26 +94,31 @@ impl SiteScope {
     pub fn require_developer(&self, project_id: &str) -> Result<(), Response> {
         match self.project_role(project_id)? {
             Some(role) if role.can_develop() => Ok(()),
-            Some(_) | None => Err(error_response(
-                StatusCode::FORBIDDEN,
-                "you do not have access to this resource",
-            )),
+            Some(_) | None => Err(forbidden()),
         }
     }
 
-    /// `/data` writes for an authenticated identity: developer or editor.
-    /// Unauthenticated (`public`) is still allowed — that hole closes in PR 3.
-    pub fn require_can_write_data(&self) -> Result<(), Response> {
-        if self.auth.user.username == PUBLIC_USERNAME {
-            return Ok(());
+    pub fn is_public(&self) -> bool {
+        self.auth.user.username == PUBLIC_USERNAME
+    }
+
+    /// Identity is a project editor/developer (or org owner). `public` never is.
+    pub fn has_data_access(&self) -> Result<bool, Response> {
+        if self.is_public() {
+            return Ok(false);
         }
-        let project_id = self.project.project_id();
-        match self.project_role(&project_id)? {
-            Some(role) if role.can_edit_data() => Ok(()),
-            Some(_) | None => Err(error_response(
-                StatusCode::FORBIDDEN,
-                "you do not have access to this resource",
-            )),
+        match self.project_role(&self.project.project_id())? {
+            Some(role) if role.can_edit_data() => Ok(true),
+            Some(_) | None => Ok(false),
+        }
+    }
+
+    /// `/data` update/delete: developer or editor. Public never mutates.
+    pub fn require_can_write_data(&self) -> Result<(), Response> {
+        if self.has_data_access()? {
+            Ok(())
+        } else {
+            Err(forbidden())
         }
     }
 }

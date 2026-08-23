@@ -7,11 +7,20 @@
 #   - unknown fields (kind=unknown_field, severity=error)
 #   - type mismatches (kind=type_mismatch, severity=error)
 # and that valid records succeed (no diagnostics on the response).
+# Collection is private, so these run as the project owner.
+
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{"username": "testuser", "password": "password"}
+HTTP 200
+[Captures]
+token: jsonpath "$.data.token"
 
 # 1. Baseline: a fully valid insert succeeds and carries no diagnostics
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": "Widget",
@@ -31,6 +40,7 @@ ok_id: jsonpath "$.data.id"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": null,
@@ -45,6 +55,7 @@ jsonpath "$.diagnostics" not exists
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": "Gadget",
@@ -59,6 +70,7 @@ jsonpath "$.diagnostics" not exists
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": "Widget",
@@ -77,6 +89,7 @@ jsonpath "$.diagnostics[0].path" == "color"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "name": "Widget",
@@ -94,6 +107,7 @@ jsonpath "$.diagnostics[0].path" == "quantity"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "quantity": 1.5
@@ -108,6 +122,7 @@ jsonpath "$.diagnostics[0].path" == "quantity"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "in_stock": "true"
@@ -122,6 +137,7 @@ jsonpath "$.diagnostics[0].path" == "in_stock"
 POST http://127.0.0.1:{{port}}/data/items/add
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "ghost": "x",
@@ -137,6 +153,7 @@ jsonpath "$.diagnostics" count == 3
 PUT http://127.0.0.1:{{port}}/data/items/update/{{ok_id}}
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "weight": 42
@@ -151,6 +168,7 @@ jsonpath "$.diagnostics[0].path" == "weight"
 PUT http://127.0.0.1:{{port}}/data/items/update/{{ok_id}}
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "in_stock": 1
@@ -164,6 +182,7 @@ jsonpath "$.diagnostics[0].kind" == "type_mismatch"
 PUT http://127.0.0.1:{{port}}/data/items/update/{{ok_id}}
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "quantity": 25
@@ -179,6 +198,7 @@ jsonpath "$.diagnostics" not exists
 PUT http://127.0.0.1:{{port}}/data/items/update/no-such-record-id
 X-Project-Id: testuser/testapp
 X-Site-Id: dev
+Authorization: Bearer {{token}}
 Content-Type: application/json
 {
   "ghost": "x"

@@ -92,9 +92,13 @@ impl ProjectConfig {
         let prefix = format!("{}/", self.project_id());
         let versions_prefix = format!("{}/versions/", self.project_id());
 
-        // Cascade fields + collections + manifests for every version.
+        // Cascade versioned metadata for every version.
         let _ = self.store.fields().delete_by_prefix(&versions_prefix);
         let _ = self.store.collections().delete_by_prefix(&versions_prefix);
+        let _ = self
+            .store
+            .permission_sets()
+            .delete_by_prefix(&versions_prefix);
         let _ = self.store.manifests().delete_by_prefix(&versions_prefix);
 
         let mut dataset_names = Vec::new();
@@ -205,11 +209,17 @@ impl ProjectConfig {
         }
         let fields_prefix = format!("{}/versions/{version}/fields/", self.project_id());
         let collections_prefix = format!("{}/versions/{version}/collections/", self.project_id());
+        let permission_sets_prefix =
+            format!("{}/versions/{version}/permission_sets/", self.project_id());
         let _ = self.store.fields().delete_by_prefix(&fields_prefix);
         let _ = self
             .store
             .collections()
             .delete_by_prefix(&collections_prefix);
+        let _ = self
+            .store
+            .permission_sets()
+            .delete_by_prefix(&permission_sets_prefix);
         self.store.manifests().delete(&manifest_path)
     }
 }

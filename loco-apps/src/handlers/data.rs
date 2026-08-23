@@ -30,7 +30,7 @@ pub async fn add(
     State(state): State<Arc<AppState>>,
     Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
-    if let Err(resp) = scope.site.require_can_write_data() {
+    if let Err(resp) = scope.require_can_create_data() {
         return resp;
     }
     let report = scope.validate(&fields, ValidationMode::Create);
@@ -52,6 +52,9 @@ pub async fn add(
 }
 
 pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) -> Response {
+    if let Err(resp) = scope.require_can_read_data() {
+        return resp;
+    }
     match state
         .data_adapter
         .list(&scope.dataset_id(), &scope.collection_key)
@@ -68,6 +71,9 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
 }
 
 pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Response {
+    if let Err(resp) = scope.collection.require_can_read_data() {
+        return resp;
+    }
     match state
         .data_adapter
         .get(&scope.dataset_id(), scope.collection_key(), &scope.id)
@@ -82,7 +88,7 @@ pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Resp
 }
 
 pub async fn delete(scope: RecordScope, State(state): State<Arc<AppState>>) -> Response {
-    if let Err(resp) = scope.collection.site.require_can_write_data() {
+    if let Err(resp) = scope.collection.require_can_write_data() {
         return resp;
     }
     match state
@@ -99,7 +105,7 @@ pub async fn update(
     State(state): State<Arc<AppState>>,
     Json(fields): Json<HashMap<String, Value>>,
 ) -> Response {
-    if let Err(resp) = scope.collection.site.require_can_write_data() {
+    if let Err(resp) = scope.collection.require_can_write_data() {
         return resp;
     }
     let report = scope.validate(&fields, ValidationMode::Update);
