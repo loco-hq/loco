@@ -1,19 +1,79 @@
-const BASE = '/api';
+import { API_ORIGIN } from './config.js';
+
+/** In-memory API origin for this page load. `''` means same-origin. */
+let apiOrigin = '';
+
+function normalizeApiOrigin(raw) {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return '';
+  let u;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (u.username || u.password) return null;
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  let path = u.pathname;
+  if (path.endsWith('/') && path.length > 1) path = path.slice(0, -1);
+  if (path === '' || path === '/') return u.origin;
+  return `${u.origin}${path}`;
+}
+
+function canonicalizeSameOrigin(origin) {
+  if (!origin) return '';
+  let u;
+  try {
+    u = new URL(origin);
+  } catch {
+    return origin;
+  }
+  const pathOk = u.pathname === '/' || u.pathname === '';
+  if (u.origin === window.location.origin && pathOk && !u.search && !u.hash) {
+    return '';
+  }
+  return origin;
+}
+
+function applyOrigin(raw) {
+  const normalized = normalizeApiOrigin(raw);
+  if (normalized === null) {
+    console.error('Invalid API origin', raw);
+    apiOrigin = '';
+    return;
+  }
+  apiOrigin = canonicalizeSameOrigin(normalized);
+}
+
+applyOrigin(API_ORIGIN);
+
+function apiUrl(path) {
+  return `${apiOrigin}${path}`;
+}
+
+function sessionKey() {
+  return `loco_session:${apiOrigin || 'same-origin'}`;
+}
 
 function getSession() {
-  return localStorage.getItem('loco_session');
+  return localStorage.getItem(sessionKey());
 }
 
 export function setSession(token) {
-  localStorage.setItem('loco_session', token);
+  localStorage.setItem(sessionKey(), token);
 }
 
 export function clearSession() {
-  localStorage.removeItem('loco_session');
+  localStorage.removeItem(sessionKey());
 }
 
 export function isLoggedIn() {
   return !!getSession();
+}
+
+function displayOrigin() {
+  return apiOrigin || window.location.origin;
 }
 
 async function request(path, options = {}) {
@@ -23,8 +83,15 @@ async function request(path, options = {}) {
   };
   const session = getSession();
   if (session) headers['Authorization'] = `Bearer ${session}`;
-  const res = await fetch(`${BASE}${path}`, { ...options, headers });
-  const json = await res.json();
+  let res;
+  try {
+    res = await fetch(apiUrl(path), { ...options, headers });
+  } catch {
+    throw new Error(`Cannot reach API at ${displayOrigin()}`);
+  }
+  const json = await res.json().catch(() => {
+    throw new Error(`API at ${displayOrigin()} returned non-JSON`);
+  });
   if (res.status === 401 && session && path !== '/auth/login') {
     clearSession();
     if (window.location.hash !== '#/login') {

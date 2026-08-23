@@ -9,7 +9,8 @@ cargo test                    # Workspace tests, including Hurl API suites
 cargo test -p loco-gen-schema # Schema/codegen crate only
 cargo clippy --workspace      # Lint everything
 cargo run -p loco-apps        # API server on :3000
-npm run dev -w loco-studio    # Studio on :5174 (proxies /api → :3000)
+npm run dev -w loco-studio    # Studio on :5174 (proxies /auth /config /schema /data → :3000)
+npm run build -w loco-studio  # Static SPA in loco-studio/dist/ (no Node at runtime)
 python3 -m http.server 5176 --directory examples/public-page
                               # public page on :5176 (CORS → :3000)
 npm run dev -w loco-ui        # loco-ui playground on :5175
@@ -155,7 +156,7 @@ All frontend apps use the same stack:
 - **TanStack Query**
 - API client in `src/api.js` (plain JS, not a hook). Auth helpers in `src/auth.js`.
 - Components in `src/components/` as `.jsx` files
-- Proxy `/api` to `localhost:3000` in `vite.config.js` (studio strips the `/api` prefix)
+- Dev-only Vite proxy of `/auth` `/config` `/schema` `/data` to `localhost:3000` (no `/api` prefix; production bundle uses `API_ORIGIN` in `loco-studio/src/config.js`)
 
 ### Frontend locations
 

@@ -26,6 +26,7 @@ export default function Login() {
           <TextField
             placeholder="Username"
             required
+            autoComplete="username"
             value={username}
             onChange={setUsername}
           />
@@ -33,6 +34,7 @@ export default function Login() {
             type="password"
             placeholder="Password"
             required
+            autoComplete="current-password"
             value={password}
             onChange={setPassword}
           />

@@ -10,8 +10,12 @@ Studio (`loco-studio`) is a React app for editing schemas and records. It is its
 # API server — http://localhost:3000
 cargo run -p loco-apps
 
-# Studio — http://localhost:5174  (proxies /api to :3000)
+# Studio (dev) — http://localhost:5174  (proxies /auth /config /schema /data → :3000)
 npm run dev -w loco-studio
+
+# Studio (production build, no Node) — http://localhost:5174
+npm run build -w loco-studio
+python3 -m http.server 5174 --directory loco-studio/dist
 
 # Cross-origin public page — http://localhost:5176  (talks to :3000, CORS)
 python3 -m http.server 5176 --directory examples/public-page
@@ -88,7 +92,7 @@ An instance's key **is** its path relative to `schemas/instances/` with `.yaml` 
 
 ## REST API
 
-The server listens on `:3000`. Studio rewrites `/api/…` to these paths.
+The server listens on `:3000`. Browser clients call `/auth`, `/config`, `/schema`, and `/data` directly. Studio is a static SPA: `npm run build -w loco-studio` emits `loco-studio/dist/` (HTML/JS/CSS). Runtime has no Node; producing `dist/` still needs `npm run build`. The API origin is `API_ORIGIN` in `loco-studio/src/config.js` (default `http://localhost:3000`). Dev (`npm run dev -w loco-studio`) keeps a Vite proxy of those four prefixes for HMR; the same constant is used so the built SPA talks to `:3000` over CORS.
 
 Browser clients on another origin are allowed: CORS is `*` origin, method, and header. Sessions are `Authorization: Bearer`, not cookies, so `*` is legal. `examples/public-page/` is a static page that lists `loco/demo` guestbook with `{ apiUrl, projectId, siteId }` and no token.
 
@@ -164,7 +168,7 @@ curl -X POST 'http://localhost:3000/data/pet/add' \
 
 ## Frontends
 
-- **loco-studio** (5174) — project / version / collection / field / record UI. API client is `src/api.js`; session token in `localStorage`.
+- **loco-studio** (5174 in dev) — project / version / collection / field / record UI. Static production build in `dist/`. API client is `src/api.js`; session token in `localStorage`. API origin is `API_ORIGIN` in `src/config.js`.
 - **loco-ui** (5175 playground) — field primitives (`TextField`, `NumberField`, `CheckboxField`, `ToggleField`, `SelectField`) plus a `<Field field={meta} />` dispatcher. Consumed by studio as an npm workspace package.
 
 ## Tests

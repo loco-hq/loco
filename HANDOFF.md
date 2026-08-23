@@ -4,15 +4,17 @@ For the next session. Read `README.md` + `CLAUDE.md` + [`docs/identity.md`](docs
 
 ## Last session
 
-PR 5 — standalone frontend. CORS on the API (`*` origin / method / header, no cookies). `examples/public-page/` lists `loco/demo` guestbook from another origin with `{ apiUrl, projectId, siteId }` and no token. Studio’s Vite proxy is unchanged. Spec: `tests/suites/authorization/cors.hurl`. `cargo test` is green.
+Studio production build (PR 1 of the Node-free Studio design). Dropped the `/api` Vite rewrite. `api.js` talks to `/auth` `/config` `/schema` `/data`. API origin is the `API_ORIGIN` constant in `loco-studio/src/config.js` (default `http://localhost:3000`). Dev still uses a passthrough Vite proxy of those four prefixes. `npm run build -w loco-studio` emits a static `dist/` that can be served with `python3 -m http.server` — no Node at runtime.
 
-Identity stack (PRs 1–5) is done. Next is the field-metadata / schema→form loop.
+Identity stack (PRs 1–5) is done. Next is the field-metadata / schema→form loop. Serving `dist/` from Axum (`cargo run` = API + Studio) is the leftover Studio follow-up, not blocking schema→form.
 
 ## Servers
 
 ```bash
 cargo run -p loco-apps          # :3000
-npm run dev -w loco-studio      # :5174  (proxies /api → :3000)
+npm run dev -w loco-studio      # :5174  (proxies /auth /config /schema /data → :3000)
+npm run build -w loco-studio && python3 -m http.server 5174 --directory loco-studio/dist
+                                # static Studio → :3000 via API_ORIGIN
 python3 -m http.server 5176 --directory examples/public-page
                                 # :5176  (static page → :3000, CORS)
 ```
@@ -37,7 +39,11 @@ Anonymous `/data` is principal `public`. Grants are permission sets assigned on 
 
 ### PR 5 — Prove the standalone frontend — done
 
-CORS on the API (`*` origin / method / header, no cookies). `examples/public-page/` is a static page on `:5176` that lists `loco/demo` guestbook with `{ apiUrl, projectId, siteId }` and no token. Studio’s Vite proxy is unchanged. Spec: `tests/suites/authorization/cors.hurl`.
+CORS on the API (`*` origin / method / header, no cookies). `examples/public-page/` is a static page on `:5176` that lists `loco/demo` guestbook with `{ apiUrl, projectId, siteId }` and no token. Spec: `tests/suites/authorization/cors.hurl`.
+
+## Studio static SPA
+
+PR 1 (client origin, drop `/api`) is this session. PR 2 (Axum `ServeDir` of `loco-studio/dist`) is not done. Field-metadata remains next for product work.
 
 ## After this stack
 

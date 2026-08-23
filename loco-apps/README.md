@@ -8,7 +8,7 @@ Axum server that exposes generated schema types and a schemaless record lake ove
 cargo run -p loco-apps
 ```
 
-Listens on `http://localhost:3000`. Studio on `:5174` proxies `/api` here. A static page on another origin (`examples/public-page/`, typically `:5176`) talks to this server directly; CORS is `*` origin, method, and header (no cookies).
+Listens on `http://localhost:3000`. Studio in dev (`:5174`) proxies `/auth` `/config` `/schema` `/data` here; a production build of Studio is a static SPA that calls these paths over CORS (or same-origin once Axum serves `dist/`). A static page on another origin (`examples/public-page/`, typically `:5176`) talks to this server directly; CORS is `*` origin, method, and header (no cookies).
 
 ### Environment Variables
 
