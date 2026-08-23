@@ -28,7 +28,7 @@ Ben merges. You do not.
 | Org | `loco-hq` (free). Repo is `loco-hq/loco` (public) |
 | Merge | Human (Ben) in phase 1. `main` requires a PR + 1 approving review; stale reviews dismissed; admins included. **No GitHub Actions yet** — merge on an approval plus tests the reviewer ran locally. |
 | Cadence | One issue at a time. Do not fan out; vendor plan limits. Herdr has no usage/quota API. |
-| Active work | Product: issue #2 → PR #21 (`loco-claude[bot]`), `loco-grok[bot]` approved, waiting on Ben. Process: first-cycle lessons PR (this file). |
+| Active work | Product: issue #2 → PR #21 (`loco-claude[bot]`), `loco-grok[bot]` approved, waiting on Ben. Process: PR #22 (this file), awaiting Claude review. |
 | Next | After Ben merges #21: teardown the issue-2 worktree and reviewer pane. Then pick the next issue. Do not spawn a product implementer while a product PR is waiting on Ben. |
 
 ## Why this exists
