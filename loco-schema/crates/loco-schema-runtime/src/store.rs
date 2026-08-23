@@ -95,7 +95,10 @@ impl<T: SchemaInstance> InstanceStore<T> {
         updated.apply_update(&patch);
         self.adapter.write(key, &updated)?;
         let arc = Arc::new(updated);
-        self.cache.write().unwrap().insert(key.to_string(), arc.clone());
+        self.cache
+            .write()
+            .unwrap()
+            .insert(key.to_string(), arc.clone());
         Ok(arc)
     }
 
@@ -201,7 +204,9 @@ mod tests {
     fn create_and_get() {
         let (dir, store) = fresh_store();
 
-        let v = store.create(sample("ben/crm", "account", "Account")).unwrap();
+        let v = store
+            .create(sample("ben/crm", "account", "Account"))
+            .unwrap();
         assert_eq!(v.label, "Account");
 
         let got = store.get("ben/crm/items/account").unwrap();

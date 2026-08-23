@@ -36,7 +36,10 @@ impl DataAdapter for InMemoryAdapter {
     ) -> Result<Record, Error> {
         let record = Record::new_for_insert(dataset_id, req);
         let key = Self::scoped_key(dataset_id, collection);
-        let mut store = self.store.write().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut store = self
+            .store
+            .write()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let coll = store.entry(key).or_default();
         if coll.contains_key(&record.id) {
             return Err(Error::AlreadyExists);
@@ -47,7 +50,10 @@ impl DataAdapter for InMemoryAdapter {
 
     fn get(&self, dataset_id: &str, collection: &str, id: &str) -> Result<Option<Record>, Error> {
         let key = Self::scoped_key(dataset_id, collection);
-        let store = self.store.read().map_err(|e| Error::Internal(e.to_string()))?;
+        let store = self
+            .store
+            .read()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         Ok(store.get(&key).and_then(|coll| coll.get(id).cloned()))
     }
 
@@ -59,7 +65,10 @@ impl DataAdapter for InMemoryAdapter {
         patch: UpdatePatch,
     ) -> Result<Record, Error> {
         let key = Self::scoped_key(dataset_id, collection);
-        let mut store = self.store.write().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut store = self
+            .store
+            .write()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let coll = store.get_mut(&key).ok_or(Error::NotFound)?;
         let existing = coll.get(id).cloned().ok_or(Error::NotFound)?;
         let record = existing.apply_patch(patch);
@@ -69,7 +78,10 @@ impl DataAdapter for InMemoryAdapter {
 
     fn delete(&self, dataset_id: &str, collection: &str, id: &str) -> Result<(), Error> {
         let key = Self::scoped_key(dataset_id, collection);
-        let mut store = self.store.write().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut store = self
+            .store
+            .write()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let coll = store.get_mut(&key).ok_or(Error::NotFound)?;
         coll.remove(id).ok_or(Error::NotFound)?;
         Ok(())
@@ -77,7 +89,10 @@ impl DataAdapter for InMemoryAdapter {
 
     fn list(&self, dataset_id: &str, collection: &str) -> Result<Vec<Record>, Error> {
         let key = Self::scoped_key(dataset_id, collection);
-        let store = self.store.read().map_err(|e| Error::Internal(e.to_string()))?;
+        let store = self
+            .store
+            .read()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         Ok(store
             .get(&key)
             .map(|coll| coll.values().cloned().collect())
@@ -86,7 +101,10 @@ impl DataAdapter for InMemoryAdapter {
 
     fn delete_dataset(&self, dataset_id: &str) -> Result<(), Error> {
         let prefix = format!("{dataset_id}::");
-        let mut store = self.store.write().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut store = self
+            .store
+            .write()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         store.retain(|key, _| !key.starts_with(&prefix));
         Ok(())
     }
@@ -120,11 +138,19 @@ mod tests {
     #[test]
     fn test_insert_and_get() {
         let adapter = InMemoryAdapter::new();
-        let inserted = adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
+        let inserted = adapter
+            .insert(DATASET, "users", make_request("Alice"))
+            .unwrap();
 
-        let retrieved = adapter.get(DATASET, "users", &inserted.id).unwrap().unwrap();
+        let retrieved = adapter
+            .get(DATASET, "users", &inserted.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(retrieved.id, inserted.id);
-        assert_eq!(retrieved.fields.get("name").unwrap(), &Value::String("Alice".to_string()));
+        assert_eq!(
+            retrieved.fields.get("name").unwrap(),
+            &Value::String("Alice".to_string())
+        );
         assert_eq!(retrieved.created_by, "test");
         assert_eq!(retrieved.owner, "test");
     }
@@ -168,7 +194,10 @@ mod tests {
             .unwrap();
 
         // patched field overwritten, untouched field preserved
-        assert_eq!(updated.fields.get("name").unwrap(), &Value::String("Bob".to_string()));
+        assert_eq!(
+            updated.fields.get("name").unwrap(),
+            &Value::String("Bob".to_string())
+        );
         assert_eq!(updated.fields.get("age").unwrap(), &Value::Integer(30));
         // creator/owner preserved, updated_by stamped
         assert_eq!(updated.created_by, "creator");
@@ -186,7 +215,9 @@ mod tests {
     #[test]
     fn test_delete() {
         let adapter = InMemoryAdapter::new();
-        let inserted = adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
+        let inserted = adapter
+            .insert(DATASET, "users", make_request("Alice"))
+            .unwrap();
         adapter.delete(DATASET, "users", &inserted.id).unwrap();
         let result = adapter.get(DATASET, "users", &inserted.id).unwrap();
         assert!(result.is_none());
@@ -202,8 +233,12 @@ mod tests {
     #[test]
     fn test_list() {
         let adapter = InMemoryAdapter::new();
-        adapter.insert(DATASET, "users", make_request("Alice")).unwrap();
-        adapter.insert(DATASET, "users", make_request("Bob")).unwrap();
+        adapter
+            .insert(DATASET, "users", make_request("Alice"))
+            .unwrap();
+        adapter
+            .insert(DATASET, "users", make_request("Bob"))
+            .unwrap();
 
         let records = adapter.list(DATASET, "users").unwrap();
         assert_eq!(records.len(), 2);
@@ -219,7 +254,9 @@ mod tests {
     #[test]
     fn test_dataset_isolation() {
         let adapter = InMemoryAdapter::new();
-        let inserted = adapter.insert("dataset-a", "users", make_request("Alice")).unwrap();
+        let inserted = adapter
+            .insert("dataset-a", "users", make_request("Alice"))
+            .unwrap();
 
         // dataset-b should not see dataset-a's data
         let result = adapter.get("dataset-b", "users", &inserted.id).unwrap();
@@ -232,9 +269,15 @@ mod tests {
     #[test]
     fn test_delete_dataset() {
         let adapter = InMemoryAdapter::new();
-        adapter.insert("ds", "users", make_request("Alice")).unwrap();
-        adapter.insert("ds", "orders", make_request("Order1")).unwrap();
-        adapter.insert("other", "users", make_request("Bob")).unwrap();
+        adapter
+            .insert("ds", "users", make_request("Alice"))
+            .unwrap();
+        adapter
+            .insert("ds", "orders", make_request("Order1"))
+            .unwrap();
+        adapter
+            .insert("other", "users", make_request("Bob"))
+            .unwrap();
 
         adapter.delete_dataset("ds").unwrap();
 

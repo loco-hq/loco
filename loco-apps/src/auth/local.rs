@@ -1284,7 +1284,10 @@ mod tests {
                 password: TEST_PASSWORD.to_string(),
             })
             .unwrap();
-        assert_eq!(adapter.project_access("bob", "alice/testapp").unwrap(), None);
+        assert_eq!(
+            adapter.project_access("bob", "alice/testapp").unwrap(),
+            None
+        );
         assert!(adapter
             .list_org_members("acme")
             .unwrap()
