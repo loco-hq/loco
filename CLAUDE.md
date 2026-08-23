@@ -120,7 +120,8 @@ Mounted in `server.rs`:
 Handlers sit on request extractors in `http/scope/`:
 
 - `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_developer`, `require_can_write_data`. Access is membership, not the site.
-- `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema`.
+- `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema` writes.
+- `VersionReadScope` — read-only `VersionSchema` for GET `/schema`. Developer/editor on the path project (any version, no site headers). `public` (and authenticated non-members) on a site that assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required).
 - `ConfigProjectScope` / `ConfigUserScope` — `/config` routes. Project-targeted routes require developer; list/create/org do not need site headers.
 - `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the site assigns to `public` grants that verb on that collection.
 

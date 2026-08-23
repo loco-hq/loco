@@ -43,6 +43,23 @@ pub(super) fn read_site_id(parts: &Parts) -> Result<String, Response> {
     })
 }
 
+/// `None` if neither site header is present. If either is present, both are
+/// required (`400` otherwise). The triple is `(account, project, site)`.
+pub(super) fn read_optional_site_headers(
+    parts: &Parts,
+) -> Result<Option<(String, String, String)>, Response> {
+    let has_project = read_header(parts, "x-project-id").is_some();
+    let has_site = read_header(parts, "x-site-id").is_some();
+    match (has_project, has_site) {
+        (false, false) => Ok(None),
+        _ => {
+            let (user, project) = read_project_id(parts)?;
+            let site = read_site_id(parts)?;
+            Ok(Some((user, project, site)))
+        }
+    }
+}
+
 pub(super) async fn read_path_params<T>(
     parts: &mut Parts,
     state: &Arc<AppState>,

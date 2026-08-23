@@ -5,9 +5,14 @@
 //!   The single home for request-time authz (`require_authenticated`,
 //!   `require_developer`, `require_can_write_data`) and the read-only
 //!   schema view used by data routes. Access is membership, not the site.
-//! - [`VersionScope`]: a `SiteScope` plus a writable `VersionSchema` for
-//!   the `{user}/{project}/{version}` triple in the path. Has no authz
-//!   logic of its own — composes `SiteScope`'s checks.
+//! - [`VersionScope`]: writable `VersionSchema` for the path
+//!   `{user}/{project}/{version}`. Developer (or org owner) required.
+//!   Used by `/schema` writes. Site headers are not required.
+//! - [`VersionReadScope`]: read-only view for GET `/schema`. Developers
+//!   and editors can read any version of a project they belong to.
+//!   `public` (and authenticated non-members) can read a site's pinned
+//!   version when that site assigns at least one permission set to
+//!   `public` (`X-Project-Id` + `X-Site-Id` required).
 //! - [`ConfigProjectScope`] / [`ConfigUserScope`]: `/config` routes.
 //!   The first targets an existing `{user}/{project}` (developer required).
 //!   The second is authenticated-only for routes with no project in the
@@ -29,4 +34,4 @@ pub use config::{ConfigProjectScope, ConfigUserScope};
 pub use project::ProjectScope;
 pub use record::RecordScope;
 pub use site::SiteScope;
-pub use version::VersionScope;
+pub use version::{VersionReadScope, VersionScope};

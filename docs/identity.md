@@ -92,7 +92,7 @@ Personal accounts do not have members. If Alice wants a team, she creates an org
 4. `/schema` and `/config` writes: identity with `developer` (or org `owner`) + draft version.
 5. `/data` for a Loco `developer` or `editor`: full CRUD.
 6. `/data` for `public`: each verb (`read` / `create` / `update` / `delete`) if any assigned set grants it on that collection. Authenticated Loco identities that are not members may use the public *read* hole (they are not `public` for writes).
-7. `/schema` reads: `developer` or `editor`, and (once PR 4 lands) `public` on a site that assigns at least one permission set to `public`, pinned version only.
+7. `/schema` reads: `developer` or `editor` on any version of a project they belong to (no site headers). `public` (and authenticated non-members) on a site that assigns at least one permission set to `public`, pinned version only — needs `X-Project-Id` + `X-Site-Id`, and path `{version}` must match the site pin. Any assigned set exposes the whole pinned version; per-collection schema visibility is later. Writes stay `developer` + draft.
 
 API keys are issued to a Loco identity, then scoped to an account or one project, with `developer` or `editor`. Clippy/CI hold a key. Consumer bundles never do.
 

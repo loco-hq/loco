@@ -4,14 +4,14 @@ For the next session. Read `README.md` + `CLAUDE.md` + [`docs/identity.md`](docs
 
 ## Last session
 
-Permission-set reshape (after PR 3, before PR 4). `cargo test` is green.
+PR 4 — schema read vs schema write. `cargo test` is green.
 
-- Grants are `collections: [{ collection, read, create, update, delete }]`. Unspecified verbs are false. Public may do any verb an assigned set grants.
-- Bare collection names match by name (`VersionSchema` prefers self). Qualified `{project}.{name}` (e.g. `ben/crm.contacts`) is accepted and pins the owner.
-- `list` items may be inline objects (`type: object`, `name: collection_grant` → generated `CollectionGrant`). Nested lists still rejected.
-- Spec: `tests/suites/authorization/data_no_auth.hurl`. Guestbook on `dev` is stacked read+create; `wiki` on `open` is all four verbs.
+- GET `/schema` is `VersionReadScope` (read-only). Writes stay `VersionScope` (developer + draft).
+- Developer/editor: any version of a project they belong to, no site headers.
+- `public` (and authenticated non-members): site headers required; path version must match the site pin; the site must assign at least one permission set to `public`. Whole pinned version, no per-collection filter.
+- Spec: `tests/suites/authorization/schema_read.hurl`.
 
-Field-metadata / schema→form loop is still valid work and orthogonal. Park it until after this identity stack. Do not mix it with PR 4.
+Field-metadata / schema→form loop is still valid work and orthogonal. Park it until after this identity stack.
 
 ## Servers
 
@@ -36,18 +36,9 @@ Hard cut, not a migration saga. Each PR leaves `cargo test` green. Do not start 
 
 Anonymous `/data` is principal `public`. Grants are permission sets assigned on the site as `public_permission_sets`. Spec: `tests/suites/authorization/data_no_auth.hurl`.
 
-### PR 4 — Schema read vs schema write
+### PR 4 — Schema read vs schema write — done
 
-Today every `/schema` route uses `VersionScope`: authenticated + `require_developer` on the path project. No site headers. Editors get 403 on GET. Public cannot read schema at all.
-
-- `GET /schema/...` for `developer`, `editor`, and `public` on a site that assigns at least one permission set to `public` (pinned version only).
-- Writes stay `developer` + draft (`VersionScope` as it is).
-- Split a read extractor from `VersionScope`. Public reads need site headers so you can check the pin (`X-Project-Id` + `X-Site-Id`); path `{version}` must match the site's `version`. Developers/editors can keep reading any version of a project they belong to (no site headers required).
-- Do not filter the schema body per collection in this PR — any assigned set → whole pinned version. Per-collection schema visibility is a later question.
-
-**Touch:** `loco-apps/src/http/scope/version.rs` (and a sibling read extractor), `handlers/schema.rs` GET vs POST/PUT/DELETE, `docs/identity.md` item 7, a Hurl spec (token-less GET fields on `alice/testapp` + `open` or `dev`; editor GET; public GET of a non-pinned version 403/404; writes still 401/403).
-
-**Done when:** a token-less (or editor) client can list fields for a public site’s pinned version.
+`GET /schema` uses `VersionReadScope`: developer/editor any version (no site headers); `public` (and authenticated non-members) on a site that assigns at least one permission set, pinned version only. Writes stay `VersionScope` (developer + draft). Spec: `tests/suites/authorization/schema_read.hurl`.
 
 ### PR 5 — Prove the standalone frontend
 

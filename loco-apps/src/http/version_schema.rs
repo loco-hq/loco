@@ -13,11 +13,10 @@
 //! view even if a concurrent write mutates the manifest mid-flight.
 //!
 //! Two construction modes:
-//! - [`VersionSchema::new`] — writable. Used by `VersionScope` for /schema
-//!   routes (gated to metadata-editor sites).
-//! - [`VersionSchema::new_read_only`] — read-only. Used by `SiteScope` so
-//!   data and auth routes can resolve the same metadata view without ever
-//!   being able to mutate it.
+//! - [`VersionSchema::new`] — writable. Used by `VersionScope` for `/schema`
+//!   writes (developer + draft).
+//! - [`VersionSchema::new_read_only`] — read-only. Used by `SiteScope` (data
+//!   routes) and `VersionReadScope` (GET `/schema`).
 
 use std::sync::Arc;
 

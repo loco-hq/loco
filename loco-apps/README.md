@@ -38,7 +38,9 @@ There is no tenant header. A request names a **site**:
 
 `SiteScope` resolves the site, pins the lake to that site's dataset, and builds a read-only `VersionSchema` for the site's version. Missing auth becomes the synthetic `public` user. Anonymous `/data` CRUD is the union of permission sets the site assigns to `public` (`public_permission_sets`); each verb is whatever those sets grant.
 
-`/schema` and `/config` writes additionally require:
+GET `/schema` is allowed for a project `developer` or `editor` (any version, no site headers), and for `public` on a site that assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required). Authenticated non-members may use that public read.
+
+`/schema` writes and `/config` additionally require:
 
 - a real session
 - project `developer` (or org owner) on the path project
@@ -54,7 +56,7 @@ Lake collection keys are `{user}/{project}.{name}`.
 
 ### `/schema/{user}/{project}/{version}/…`
 
-Versioned metadata: manifest, collections, fields, fieldsets. Handlers go through `VersionScope` → `VersionSchema`.
+Versioned metadata: manifest, collections, fields, fieldsets, permission sets. GET goes through `VersionReadScope`; writes through `VersionScope` → `VersionSchema`.
 
 ### `/config/…`
 

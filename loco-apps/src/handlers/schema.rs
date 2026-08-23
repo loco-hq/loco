@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
 use crate::http::response::{error_response, version_schema_error_to_response, ApiResponse};
-use crate::http::scope::VersionScope;
+use crate::http::scope::{VersionReadScope, VersionScope};
 use crate::server::AppState;
 use crate::{
     Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, ManifestUpdate,
@@ -73,7 +73,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
 }
 
-pub async fn get_manifest(scope: VersionScope) -> Response {
+pub async fn get_manifest(scope: VersionReadScope) -> Response {
     match scope.schema.manifest() {
         Some(m) => ApiResponse::success(m).into_response(),
         None => error_response(StatusCode::NOT_FOUND, "manifest not found for this version"),
@@ -94,12 +94,12 @@ pub async fn create_collection(scope: VersionScope, Json(input): Json<Collection
     }
 }
 
-pub async fn list_collections(scope: VersionScope) -> Response {
+pub async fn list_collections(scope: VersionReadScope) -> Response {
     ApiResponse::success(scope.schema.collections()).into_response()
 }
 
 pub async fn get_collection(
-    scope: VersionScope,
+    scope: VersionReadScope,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
 ) -> Response {
     match scope.schema.collection(&name) {
@@ -140,7 +140,7 @@ pub async fn create_field(scope: VersionScope, Json(input): Json<Field>) -> Resp
 }
 
 pub async fn list_fields(
-    scope: VersionScope,
+    scope: VersionReadScope,
     Path((_, _, _, collection)): Path<(String, String, String, String)>,
 ) -> Response {
     ApiResponse::success(scope.schema.fields(&collection)).into_response()
@@ -175,14 +175,14 @@ pub async fn create_fieldset(scope: VersionScope, Json(input): Json<Fieldset>) -
 }
 
 pub async fn list_fieldsets(
-    scope: VersionScope,
+    scope: VersionReadScope,
     Path((_, _, _, collection)): Path<(String, String, String, String)>,
 ) -> Response {
     ApiResponse::success(scope.schema.fieldsets(&collection)).into_response()
 }
 
 pub async fn get_fieldset(
-    scope: VersionScope,
+    scope: VersionReadScope,
     Path((_, _, _, collection, name)): Path<(String, String, String, String, String)>,
 ) -> Response {
     match scope.schema.fieldset(&collection, &name) {
@@ -225,12 +225,12 @@ pub async fn create_permission_set(
     }
 }
 
-pub async fn list_permission_sets(scope: VersionScope) -> Response {
+pub async fn list_permission_sets(scope: VersionReadScope) -> Response {
     ApiResponse::success(scope.schema.permission_sets()).into_response()
 }
 
 pub async fn get_permission_set(
-    scope: VersionScope,
+    scope: VersionReadScope,
     Path((_, _, _, name)): Path<(String, String, String, String)>,
 ) -> Response {
     match scope.schema.permission_set(&name) {

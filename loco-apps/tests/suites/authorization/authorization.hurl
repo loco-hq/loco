@@ -95,7 +95,7 @@ Content-Type: application/json
 {"size": "tiny"}
 HTTP 403
 
-# 3. Alice invites Bob as editor → Bob can /data, cannot /schema
+# 3. Alice invites Bob as editor → Bob can /data and GET /schema, cannot write /schema
 POST http://127.0.0.1:{{port}}/config/member/alice/testapp
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
@@ -122,7 +122,10 @@ bob_widget: jsonpath "$.data.id"
 
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
 Authorization: Bearer {{bob_token}}
-HTTP 403
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data" count == 5
 
 POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection
 Authorization: Bearer {{bob_token}}
@@ -134,7 +137,7 @@ Content-Type: application/json
 }
 HTTP 403
 
-# 4. Promote Bob to developer → Bob can /schema
+# 4. Promote Bob to developer → Bob can write /schema
 PUT http://127.0.0.1:{{port}}/config/member/alice/testapp/bob
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
@@ -212,7 +215,8 @@ HTTP 200
 jsonpath "$.ok" == true
 jsonpath "$.data" count == 2
 
-# No token → 401 on schema/config
+# No token and no site headers → 401 on schema/config.
+# Token-less GET with public site headers is schema_read.hurl.
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
 HTTP 401
 [Asserts]
