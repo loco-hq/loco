@@ -6,12 +6,11 @@ use axum::http::StatusCode;
 use axum::response::Response;
 
 use crate::auth::{AuthSession, AuthUser, AuthenticatedUser, ProjectRole, PUBLIC_USERNAME};
-use crate::http::authz::{forbidden, validate_collection};
-use crate::http::paths::collection_key;
+use crate::http::authz::forbidden;
 use crate::http::response::error_response;
 use crate::http::version_schema::VersionSchema;
 use crate::server::AppState;
-use crate::Site;
+use crate::{Collection, Site};
 
 use super::helpers::{read_project_id, read_site_id};
 use super::project::ProjectScope;
@@ -47,21 +46,25 @@ impl SiteScope {
         format!("{}/{}", self.project.project_id(), ds)
     }
 
-    /// Lake key for a collection inside this site's project.
-    pub fn collection_key(&self, name: &str) -> String {
-        collection_key(&self.project.user, &self.project.project, name)
-    }
-
-    /// Returns the validated `collection_key` if the collection exists in this
-    /// site's project, otherwise an HTTP error response.
-    pub fn require_collection(&self, name: &str) -> Result<String, Response> {
-        validate_collection(
-            &self.project.state.schema,
-            &self.project.user,
-            &self.project.project,
-            name,
-        )?;
-        Ok(self.collection_key(name))
+    /// The collection `name` refers to in this site's pinned version.
+    ///
+    /// Resolving through the site's `VersionSchema` rather than the global
+    /// `SchemaStore` is what keeps existence agreeing with validation. A prefix
+    /// scan of `{user}/{project}/` matches *every* version of the project, so a
+    /// site pinned to a published version could reach a collection that only
+    /// exists in a draft — and a permission set naming it made that an
+    /// unauthenticated read. The scoped view sees only what the site pins.
+    ///
+    /// Self-only on purpose: a bare name means this project (CLAUDE.md, "Name
+    /// resolution"). A dependency's collection needs qualified addressing,
+    /// which is #28.
+    pub fn require_collection(&self, name: &str) -> Result<Arc<Collection>, Response> {
+        self.schema.own_collection(name).ok_or_else(|| {
+            error_response(
+                StatusCode::NOT_FOUND,
+                &format!("unknown collection: {name}"),
+            )
+        })
     }
 
     // --- Authz checks ---

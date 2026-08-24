@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::auth::AuthUser;
 use crate::http::authz::{forbidden, public_may, DataVerb};
+use crate::http::paths::collection_key;
 use crate::server::AppState;
 use crate::validation::{validate_record, validate_records, ValidationMode, ValidationReport};
 use crate::PermissionSet;
@@ -27,10 +28,16 @@ struct CollectionPathParams {
 /// `collection_key` so handlers don't repeat the validation dance.
 pub struct CollectionScope {
     pub site: SiteScope,
+    /// Lake `collection` column — `{owner_project}.{name}`. See
+    /// [`collection_key`].
     pub collection_key: String,
     /// Bare collection name (e.g. "account") — needed for schema lookups
-    /// where `collection_key` (`"user/project.name"`) is the wrong shape.
+    /// where `collection_key` is the wrong shape.
     pub collection_name: String,
+    /// Project that owns the resolved collection: this site's project, or a
+    /// direct dependency's. Resolved once in the extractor, since a qualified
+    /// grant (`{project}.{name}`) and the lake key both need it.
+    pub collection_project: String,
 }
 
 impl CollectionScope {
@@ -82,22 +89,11 @@ impl CollectionScope {
             .collect()
     }
 
-    /// Owning project of the resolved collection (self or a direct dep).
-    /// Used so a qualified grant `{project}.{name}` can pin the owner;
-    /// bare names ignore this and match by collection name only.
-    fn collection_project(&self) -> String {
-        self.site
-            .schema
-            .collection(&self.collection_name)
-            .map(|c| c.project().to_string())
-            .unwrap_or_else(|| self.project_id())
-    }
-
     fn public_allowed(&self, verb: DataVerb) -> bool {
         public_may(
             self.public_sets().iter().map(|s| s.as_ref()),
             &self.collection_name,
-            &self.collection_project(),
+            &self.collection_project,
             verb,
         )
     }
@@ -154,11 +150,13 @@ impl FromRequestParts<Arc<AppState>> for CollectionScope {
     ) -> Result<Self, Self::Rejection> {
         let site = SiteScope::from_request_parts(parts, state).await?;
         let CollectionPathParams { name } = read_path_params(parts, state).await?;
-        let collection_key = site.require_collection(&name)?;
+        let collection = site.require_collection(&name)?;
+        let collection_project = collection.project().to_string();
         Ok(CollectionScope {
-            site,
-            collection_key,
+            collection_key: collection_key(&collection_project, &name),
             collection_name: name,
+            collection_project,
+            site,
         })
     }
 }

@@ -1,0 +1,13 @@
+label: "Public read"
+description: "Grants read on a collection in this version and on one that only exists in 1-draft"
+collections:
+  - collection: "tasks"
+    read: true
+    create: false
+    update: false
+    delete: false
+  - collection: "secrets"
+    read: true
+    create: false
+    update: false
+    delete: false
