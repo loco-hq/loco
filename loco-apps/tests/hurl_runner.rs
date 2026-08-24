@@ -227,6 +227,48 @@ fn suite_auth_credentials() {
 }
 
 #[test]
+fn suite_auth_sessions() {
+    let tmp = run_suite_with(&suites_dir().join("auth_sessions"), AppOptions::default());
+    let sessions = tmp.path().join("auth/sessions");
+
+    // Two logins, one logout: the logged-out session leaves nothing behind.
+    let files: Vec<_> = std::fs::read_dir(&sessions)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(
+        files.len(),
+        1,
+        "expected the suite to leave one live session on disk, found {files:?}"
+    );
+
+    // What it does leave carries an absolute expiry a TTL out, so a restart
+    // knows when to stop honoring it.
+    let session: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
+    let created_at = parse_rfc3339(&session, "created_at");
+    let expires_at = parse_rfc3339(&session, "expires_at");
+    assert!(
+        expires_at > chrono::Utc::now(),
+        "live session is already expired: {session}"
+    );
+    assert_eq!(
+        expires_at - created_at,
+        chrono::Duration::days(loco_apps::auth::local::SESSION_TTL_DAYS),
+        "session expiry is not one TTL past creation: {session}"
+    );
+}
+
+fn parse_rfc3339(session: &serde_json::Value, field: &str) -> chrono::DateTime<chrono::Utc> {
+    let raw = session[field]
+        .as_str()
+        .unwrap_or_else(|| panic!("session file has no {field}: {session}"));
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .unwrap_or_else(|e| panic!("session {field} is not rfc3339 ({raw}): {e}"))
+        .with_timezone(&chrono::Utc)
+}
+
+#[test]
 fn suite_auth_no_auto_create() {
     // The rest of the suites set LOCO_AUTH_AUTO_CREATE=1 process-wide; this
     // one pins the production default off and checks nothing was squatted.
