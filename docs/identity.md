@@ -1,6 +1,6 @@
 # Identity and access
 
-Target model. Implementation is the PR stack in `HANDOFF.md`.
+Target model. The implementing PR stack is merged; see the git history and the open issues for what remains.
 
 Loco is Sanity-shaped: schema lives on the server; frontends are standalone and hold no secrets. A Loco account is someone who works *on* a project (Studio, CLI, Clippy). Visitors of a project's CloudFront app are not Loco users.
 

@@ -1,19 +1,19 @@
 # Filing work on Loco
 
-This is the contract for turning reviews into GitHub issues. Implementation conventions live in [`CLAUDE.md`](CLAUDE.md). Agent process lives in [`orchestration.md`](orchestration.md). There is no project board; issues and milestones are the backlog.
+This is the contract for turning reviews into GitHub issues. Implementation conventions live in [`CLAUDE.md`](CLAUDE.md). Agent process lives in [`CLAUDE.md`](CLAUDE.md); the opt-in two-vendor mode is [`orchestration.md`](orchestration.md). There is no project board; issues and milestones are the backlog.
 
 Repo: `loco-hq/loco`. Use `gh` against that remote.
 
 ## Who does what
 
-One orchestrator reads the source documents, deduplicates, creates **milestones**, then files **issues**. Do not file issues before milestones exist. Do not invent a parallel tracker.
+Whoever Ben has asked to file — in direct mode that is the agent in the session, in orchestration mode the sitting orchestrator — reads the source documents, deduplicates, creates **milestones**, then files **issues**. Do not file issues before milestones exist. Do not invent a parallel tracker.
 
 Current review sources:
 
 - [`docs/architecture_review/2026-08-23_claude.md`](docs/architecture_review/2026-08-23_claude.md)
 - [`docs/architecture_review/2026-08-23_grok.md`](docs/architecture_review/2026-08-23_grok.md)
 
-Also read [`ROADMAP.md`](ROADMAP.md) and [`HANDOFF.md`](HANDOFF.md) so the backlog does not fight existing intent.
+Also read [`ROADMAP.md`](ROADMAP.md) and the open issues so the backlog does not fight existing intent.
 
 ## Milestones first
 

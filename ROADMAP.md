@@ -24,7 +24,7 @@ Loco is a low-code backend for structured data — think Salesforce or Airtable,
 
 ## Next
 
-In order. Detail and PR slices live in [`HANDOFF.md`](HANDOFF.md). The identity target model is [`docs/identity.md`](docs/identity.md).
+In order. Detail lives in the [issue list](https://github.com/loco-hq/loco/issues). The identity target model is [`docs/identity.md`](docs/identity.md).
 
 1. **Finish the schema → form loop.** Collection fields need `description`, `required`, and maybe `variant`. Validate required fields on create/update. Drive record forms (and keep tables) from the `auto_add` fieldset. Register `SelectField` on the dispatcher. Stop offering `list` as a record field type until the validator and a control exist.
 

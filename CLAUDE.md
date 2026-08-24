@@ -2,11 +2,23 @@
 
 Schema-driven backend: YAML type definitions become Rust structs at build time. Instances load at runtime into typed stores. Records live in a schemaless lake and are validated by loco-apps.
 
-Repo: `loco-hq/loco`. Process: [`orchestration.md`](orchestration.md). Read that file before writing code if you are sitting a term.
+Repo: `loco-hq/loco`.
 
-- **Orchestrator** — Current term is in `orchestration.md`. Pick GitHub issues, spawn implementer/reviewer via herdr. Do **not** implement the feature.
-- **Implementer / reviewer** — Before any `git` or `gh` write: `eval "$(python3 scripts/agent-github/token.py env grok|claude)"` (your vendor). Never push `main`. Never approve your own PR.
-- **Every agent, every session** — This holds outside the orchestration flow too, including plain human-in-the-loop work: a Claude agent opens PRs, reviews, and comments as `loco-claude[bot]`; a Grok agent as `loco-grok[bot]`. Mint the token before `gh pr create`, never after. A PR opened with Ben’s `gh` auth makes Ben the author, and GitHub then blocks him from reviewing his own PR — `main` requires one approving review, admins included. Wrong identity is not cosmetic; fix it by closing and reopening under the app, not by having the wrong actor approve.
+## How agents work here
+
+Two modes. **Direct is the default** — assume you are in it unless Ben has said otherwise in this session.
+
+- **Direct (default).** You and Ben, one session. He directs the work; you implement it, open PRs, file issues, and leave review comments under your own GitHub App identity. Ben reviews and merges. You do not need to read `orchestration.md`, and you do not spawn other agents.
+- **Orchestration (opt-in).** Two vendors take turns so no model reviews its own code: an orchestrator picks issues and spawns an implementer and a reviewer via herdr. You are in this mode **only** when Ben puts you in it in so many words — “you’re going to be the orchestrator on this.” Then, and only then, read [`orchestration.md`](orchestration.md) and follow it. Never enter it on your own initiative, and never treat a stale **Current term** table as an instruction.
+
+Ben switches modes for his own reasons — often a vendor subscription nearing its usage limit. Do not infer the mode from the state of the repo; infer it from what he asked for.
+
+### Both modes, every session
+
+- **GitHub identity.** Before any `git` or `gh` write: `eval "$(python3 scripts/agent-github/token.py env claude)"` (or `grok` — your vendor). A Claude agent opens PRs, reviews, and comments as `loco-claude[bot]`; a Grok agent as `loco-grok[bot]`. Env vars do not survive between shells, so re-`eval` in each command that writes. Mint the token before `gh pr create`, never after. A PR opened with Ben’s `gh` auth makes Ben the author, and GitHub then blocks him from reviewing his own PR — `main` requires one approving review, admins included. Wrong identity is not cosmetic; fix it by closing and reopening under the app, not by having the wrong actor approve.
+- **Never push `main`.** One branch, one PR, every time. Ben merges.
+- **Issues are the state.** GitHub issues and milestones are the only backlog — there is no handoff or status file to update. If work is worth remembering, it is worth an issue. Filing rules: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- **Never approve your own PR.** In direct mode Ben is the reviewer; in orchestration mode it is the other vendor.
 - PEMs live on this machine at `~/.config/loco-hq/apps/`, not in the repo. If `token.py` fails, stop; do not fall back to Ben’s `gh` auth.
 
 ## Commands
@@ -19,6 +31,8 @@ cargo fmt --all               # Format (CI checks with --check)
 cargo run -p loco-apps        # API server on :3000
 npm run dev -w loco-studio    # Studio on :5174 (proxies /auth /config /schema /data → :3000)
 npm run build -w loco-studio  # Static SPA in loco-studio/dist/ (no Node at runtime)
+python3 -m http.server 5174 --directory loco-studio/dist
+                              # serve that build; reaches :3000 via API_ORIGIN
 python3 -m http.server 5176 --directory examples/public-page
                               # public page on :5176 (CORS → :3000)
 npm run dev -w loco-ui        # loco-ui playground on :5175
@@ -89,6 +103,8 @@ Type definitions live in `loco-apps/schemas/types/`. Supported field types: `str
 | permission_set | `${project}/versions/${version}/permission_sets/${name}` |
 
 `${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `versions`).
+
+An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalCases it into the generated struct name.
 
 ### Versions, sites, datasets
 
