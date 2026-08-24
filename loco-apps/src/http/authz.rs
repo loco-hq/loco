@@ -4,7 +4,7 @@ use axum::response::Response;
 use crate::auth::auth_error_to_response;
 use crate::http::response::error_response;
 use crate::server::AppState;
-use crate::{CollectionGrant, PermissionSet, SchemaStore};
+use crate::{CollectionGrant, PermissionSet};
 
 pub fn forbidden() -> Response {
     error_response(
@@ -89,27 +89,6 @@ where
                 && grant_allows(g, verb)
         })
     })
-}
-
-pub fn validate_collection(
-    schema: &SchemaStore,
-    user: &str,
-    project: &str,
-    name: &str,
-) -> Result<(), Response> {
-    let found = schema
-        .collections()
-        .list(&format!("{user}/{project}/"))
-        .into_iter()
-        .any(|(_, c)| c.name() == name);
-    if found {
-        Ok(())
-    } else {
-        Err(error_response(
-            StatusCode::NOT_FOUND,
-            &format!("unknown collection: {user}/{project}.{name}"),
-        ))
-    }
 }
 
 pub fn is_draft_version(version: &str) -> bool {

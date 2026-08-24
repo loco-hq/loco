@@ -143,6 +143,11 @@ fn suite_data_crud() {
 }
 
 #[test]
+fn suite_data_version_pinning() {
+    run_suite(&suites_dir().join("data_version_pinning"));
+}
+
+#[test]
 fn suite_schema_introspect() {
     run_suite(&suites_dir().join("schema_introspect"));
 }

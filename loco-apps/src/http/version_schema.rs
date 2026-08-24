@@ -60,9 +60,17 @@ pub struct VersionSchema {
     store: Arc<SchemaStore>,
     project_id: String,
     version: String,
-    /// Self entry plus direct deps as `(project_id, version)` pairs.
-    /// Order is not significant — collections and fields are fully qualified,
-    /// so reads can't collide across deps.
+    /// Self entry plus direct deps as `(project_id, version)` pairs. Self is
+    /// always index 0.
+    ///
+    /// Order **is** significant. Every lookup below (`collection`, `field`,
+    /// `fieldset`, `permission_set`) returns the first match walking this
+    /// list, so self shadows a dep and an earlier dep shadows a later one —
+    /// which also means a dep owning a name no one else uses is reachable by
+    /// that bare name. That is not the intended semantic ("Name resolution"
+    /// in CLAUDE.md: a bare name means self, deps must be qualified), but it
+    /// is the behavior today; issue #28 changes it. Do not write new code
+    /// that relies on the fall-through.
     dependencies: Vec<(String, String)>,
     read_only: bool,
 }
@@ -150,6 +158,20 @@ impl VersionSchema {
                 .collections()
                 .get(&Collection::to_path(project_id, version, name))
         })
+    }
+
+    /// The collection owned by *this* version's own project, ignoring deps.
+    ///
+    /// `/data` resolves through this rather than [`Self::collection`] so record
+    /// access already follows the rule a bare name means self ("Name
+    /// resolution" in CLAUDE.md). A dependency's collection becomes reachable
+    /// when #28 adds a way to name it qualified — not by falling through here
+    /// in the meantime, which would make dep records addressable under a bare
+    /// name and then take that away again.
+    pub fn own_collection(&self, name: &str) -> Option<Arc<Collection>> {
+        self.store
+            .collections()
+            .get(&Collection::to_path(&self.project_id, &self.version, name))
     }
 
     /// Every field across self + direct deps that targets the given
