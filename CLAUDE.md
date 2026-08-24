@@ -6,6 +6,7 @@ Repo: `loco-hq/loco`. Process: [`orchestration.md`](orchestration.md). Read that
 
 - **Orchestrator** — Current term is in `orchestration.md`. Pick GitHub issues, spawn implementer/reviewer via herdr. Do **not** implement the feature.
 - **Implementer / reviewer** — Before any `git` or `gh` write: `eval "$(python3 scripts/agent-github/token.py env grok|claude)"` (your vendor). Never push `main`. Never approve your own PR.
+- **Every agent, every session** — This holds outside the orchestration flow too, including plain human-in-the-loop work: a Claude agent opens PRs, reviews, and comments as `loco-claude[bot]`; a Grok agent as `loco-grok[bot]`. Mint the token before `gh pr create`, never after. A PR opened with Ben’s `gh` auth makes Ben the author, and GitHub then blocks him from reviewing his own PR — `main` requires one approving review, admins included. Wrong identity is not cosmetic; fix it by closing and reopening under the app, not by having the wrong actor approve.
 - PEMs live on this machine at `~/.config/loco-hq/apps/`, not in the repo. If `token.py` fails, stop; do not fall back to Ben’s `gh` auth.
 
 ## Commands
