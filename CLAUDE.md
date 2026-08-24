@@ -106,6 +106,24 @@ Dependency grammar and the scoped view live in `loco-apps/src/http/version_schem
 
 `ProjectConfig` (`http/project_config.rs`) is the same idea for unversioned config: projects, datasets, sites, version create/delete.
 
+#### Name resolution
+
+**Rule: an unqualified name always means _self_ — the project that owns the running
+version. A dependency's collection, field, fieldset, or permission set must be named
+fully qualified (`{user}/{project}.{name}`) to be reachable.**
+
+The point is that installing a dependency can never silently change what an existing
+bare name resolves to. Resolution is a property of the name, not of manifest order.
+
+**This rule is not implemented yet.** Every `VersionSchema` lookup
+(`collection`, `field`, `fieldset`, `permission_set`) currently walks self first and
+then falls through to direct deps in manifest order, returning the first match. That
+means a bare name *can* resolve into a dependency today, and two deps that share a
+name make the second unreachable. `collection_grant_matches` (`http/authz.rs`) is the
+only place that already accepts the qualified form. Issue #28 tracks making the rule
+real across `/data`, `/schema`, and permission-set references. Do not write new code
+that relies on the fall-through.
+
 ### Fieldsets
 
 A fieldset is an ordered named subset of a collection's fields. `auto_add: true` marks the set that new fields are appended to. `VersionSchema::fields(collection)` returns fields in auto-add fieldset order (then leftover fields alphabetically). Studio uses that order for the collection table; record create/edit forms currently render the same list as returned by `/schema/.../field/{collection}/list`.
