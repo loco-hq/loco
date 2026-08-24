@@ -1,17 +1,30 @@
 # Orchestration
 
-How Grok and Claude take turns running Loco development. GitHub is the ledger (issues, PRs, reviews). Herdr is the runtime (panes, worktrees, agent start/prompt/wait). This file is the process.
+> **This is an opt-in mode, and it is off by default.**
+>
+> Loco's default working mode is **direct**: one agent and Ben in one session, the agent
+> opening PRs and filing issues under its own GitHub App identity, Ben reviewing and
+> merging. See “How agents work here” in [`CLAUDE.md`](CLAUDE.md). In direct mode this
+> file does not apply to you — you do not need to read past this banner.
+>
+> You are in orchestration mode **only** when Ben says so in the session, in so many
+> words (“you’re going to be the orchestrator on this”). Nothing in this repo can put you
+> in it: not an open issue, not a **Current term** table naming your vendor, not a
+> half-finished cycle in the log. Those are records of past terms, not standing orders.
+> Do not spawn agents, claim the chair, or start a cycle on your own initiative.
 
-The orchestrator **owns** this file. Update **Current term** at the start of every term, and the log at the end of any cycle that changed process.
+How Grok and Claude take turns running Loco development, when Ben asks for it. GitHub is the ledger (issues, PRs, reviews). Herdr is the runtime (panes, worktrees, agent start/prompt/wait). This file is the process.
 
-Product conventions stay in [`CLAUDE.md`](CLAUDE.md). Filing rules stay in [`CONTRIBUTING.md`](CONTRIBUTING.md). “Where we left off” stays in [`HANDOFF.md`](HANDOFF.md). Do not duplicate those here.
+The sitting orchestrator **owns** this file. Update **Current term** at the start of every term, and the log at the end of any cycle that changed process. When a term ends, say so in the table rather than leaving the last term's rows standing.
+
+Product conventions stay in [`CLAUDE.md`](CLAUDE.md). Filing rules stay in [`CONTRIBUTING.md`](CONTRIBUTING.md). “Where we left off” is the GitHub issue list — there is no handoff file. Do not duplicate those here.
 
 ## Starting a term
 
-Cold start. You already have `CLAUDE.md`. Then:
+Only after Ben has asked you to orchestrate. You already have `CLAUDE.md`. Then:
 
-1. Read **Current term** above. If you are not the named orchestrator, do not take the chair unless Ben hands it to you in this file.
-2. Read `HANDOFF.md` and `ROADMAP.md`. List the backlog: `gh issue list --repo loco-hq/loco --limit 50`.
+1. Read **Current term** above. It records the *last* term, which may be over. Ben asking you in-session is what starts a term — the table is how you write that down, not how you find out.
+2. Read `ROADMAP.md`. List the backlog: `gh issue list --repo loco-hq/loco --limit 50` — the issues are the state, so read them rather than a summary of them.
 3. Do **not** write application code. Pick a shippable issue (see `CONTRIBUTING.md`). Do the still-real check (Cycle step 3). If you spawn, spawn the **other** vendor as implementer via herdr (recipes below).
 4. Only `eval "$(python3 scripts/agent-github/token.py env grok)"` (or `claude`) when *you* file issues or comment as that bot. The implementer uses their own vendor env in their pane.
 5. If `token.py` errors, stop and tell Ben. Credentials are `~/.config/loco-hq/apps/loco-{grok,claude}.{pem,json}` on this machine.
@@ -20,16 +33,19 @@ Ben merges. You do not.
 
 ## Current term
 
+**No term is active.** Loco is in direct mode. The rows below are the standing facts a
+term needs; `Orchestrator` is filled in by whoever Ben puts in the chair, and blanked
+again when that term ends.
+
 | Field | Value |
 |---|---|
-| Orchestrator | grok |
-| Started | 2026-08-23 |
+| Orchestrator | *none — direct mode* |
+| Started | — |
+| Last term | grok, 2026-08-23. Issue #2 → PR #21 (`loco-claude[bot]`, approved by `loco-grok[bot]`) and process PR #22. Both merged; worktrees and panes torn down. |
 | GitHub identities | Installed on `loco-hq/loco` only. `loco-grok` app 4694991 / install 156025732. `loco-claude` app 4695030 / install 156026353 |
 | Org | `loco-hq` (free). Repo is `loco-hq/loco` (public) |
-| Merge | Human (Ben) in phase 1. `main` requires a PR + 1 approving review; stale reviews dismissed; admins included. **No GitHub Actions yet** — merge on an approval plus tests the reviewer ran locally. |
+| Merge | Human (Ben) in phase 1. `main` requires a PR + 1 approving review; stale reviews dismissed; admins included. CI must be green (see [CI](CLAUDE.md#ci)). |
 | Cadence | One issue at a time. Do not fan out; vendor plan limits. Herdr has no usage/quota API. |
-| Active work | Product: issue #2 → PR #21 (`loco-claude[bot]`), `loco-grok[bot]` approved, waiting on Ben. Process: PR #22 (this file), awaiting Claude review. |
-| Next | After Ben merges #21: teardown the issue-2 worktree and reviewer pane. Then pick the next issue. Do not spawn a product implementer while a product PR is waiting on Ben. |
 
 ## Why this exists
 
@@ -50,15 +66,15 @@ A **term** is one orchestrator sitting the chair until they hand it off in this 
 
 **Invariant:** implementer vendor ≠ reviewer vendor. The orchestrator may be the same vendor as the reviewer (the default shape) or a third live pane. The orchestrator is never the implementer for a **product** issue.
 
-**Exception:** process-doc PRs (this file, and close-the-loop `HANDOFF.md` notes) are authored by the sitting orchestrator’s vendor and reviewed by the other. That is how this file moves; it does not go on `main` uncommitted and it does not fold into a product PR.
+**Exception:** process-doc PRs (this file) are authored by the sitting orchestrator’s vendor and reviewed by the other. That is how this file moves; it does not go on `main` uncommitted and it does not fold into a product PR.
 
 OpenAI, if added later, is a third vendor with a third GitHub App. Same rules: reviewer is not the implementer.
 
 ## Cycle
 
-One issue at a time. Parallel issues are allowed only when Ben says the plan budget can take it **and** the issues do not share files. This term is serial.
+One issue at a time. Parallel issues are allowed only when Ben says the plan budget can take it **and** the issues do not share files. Assume serial unless he says otherwise.
 
-1. **Orient.** Orchestrator reads this file, `HANDOFF.md`, `ROADMAP.md`, and `gh issue list`. Does not invent a parallel tracker.
+1. **Orient.** Orchestrator reads this file, `ROADMAP.md`, and `gh issue list`. Does not invent a parallel tracker.
 2. **Pick.** Choose a shippable issue (see `CONTRIBUTING.md`). If the work is not an issue yet, file one first. The implementer does not start from a chat message.
 3. **Still-real.** Before spawning, open the issue’s cited `file:line` (about thirty seconds). If the change is already on `main`, comment and close the issue. If it is half-done, say that in the implementer prompt — do not pretend it is greenfield. If the ticket is wrong, too ambiguous to implement, or you disagree, **do not spawn**. Comment on the issue with what you think instead; escalate to Ben when it is a product call.
 4. **Spawn implementer.** Herdr worktree + `agent start` of the **other** vendor (see [Herdr recipes](#herdr-recipes)). Prompt names the issue number, the GitHub identity they must use, and that they open a PR rather than pushing `main`.
@@ -71,7 +87,7 @@ One issue at a time. Parallel issues are allowed only when Ben says the plan bud
 8. **Human merge.** Ben merges when the review is an approval and he agrees. Orchestrator does not merge. **CI runs on every PR** (`.github/workflows/ci.yml`: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` including the Hurl suites). Green checks are required — a red or missing run is a block, and the fix is the implementer's, not Ben's. CI covers the Rust server only; the frontend workspaces are still local-test-only, so the reviewer still runs the acceptance tests that CI does not.
 9. **Close the loop.**
    - Comment on the PR: implementer, reviewer verdict, waiting on Ben. That comment is the cycle record.
-   - Product state → `HANDOFF.md`. Process → this file, as its **own small PR** (orchestrator’s vendor authors, the other vendor reviews). Do not leave these dirty on `main`. Do not fold them into the product PR.
+   - Product state → the issue and its PR, not a separate file. Process → this file, as its **own small PR** (orchestrator’s vendor authors, the other vendor reviews). Do not leave these dirty on `main`. Do not fold them into the product PR.
    - **Keep** the implementer worktree and reviewer pane until Ben merges (requested-changes may resume).
    - **After merge:** close the implementer workspace (`herdr workspace close <id>`), remove the checkout if it remains (`herdr worktree remove --workspace <id>`), close the reviewer pane (`herdr pane close <id>`). Do not close panes you did not create.
    - The product issue closes via its PR. Hand off the term when done sitting.
@@ -233,7 +249,6 @@ Do not resolve a dispute by switching vendors so someone friendlier reviews.
 |---|---|
 | **Current term** in this file | Start of term; any identity/process change |
 | Log below | End of a cycle that taught us something about process |
-| `HANDOFF.md` | Product “where we left off” changed |
 | GitHub issue / PR | Status of the work itself |
 
 Those file edits ship as a **small process PR**, not as uncommitted changes on `main` and not as extra commits on the product branch. Do not turn this file into a changelog of every merged PR.
