@@ -1,13 +1,19 @@
 # Public is a policy, not a hole. Grants live on permission sets, stacked
-# by union, assigned to `public` on the site.
+# by union, assigned to `public` on the pinned **version's manifest** — not
+# on the site. A site is a URL pointing at (version, dataset).
 #
-# Fixtures:
-#   widgets   — no grants
-#   guestbook — guestbook_read + guestbook_create stacked on site `dev`
-#   secrets   — secrets_read assigned only on site `open`
-#   wiki      — wiki_public (all four verbs) assigned on site `open`
-#   site `dev`  — public_permission_sets: [guestbook_read, guestbook_create]
-#   site `open` — public_permission_sets: [secrets_read, wiki_public]
+# Fixtures: alice/testapp has two snapshots that differ only in policy, and
+# a site pinning each. Different policy is a different version.
+#   0-draft  manifest public_permission_sets: [guestbook_read, guestbook_create]
+#   1-draft  manifest public_permission_sets: [secrets_read, wiki_public]
+#   site `dev`  → 0-draft   site `open` → 1-draft   (both on dataset `dev`)
+#
+# Both versions declare all four collections and all four sets, so every
+# difference below is the assignment and nothing else:
+#   widgets   — never assigned
+#   guestbook — guestbook_read + guestbook_create stacked, on 0-draft only
+#   secrets   — secrets_read, on 1-draft only
+#   wiki      — wiki_public (all four verbs), on 1-draft only
 #
 # Token-less requests are principal `public`. Each verb is whatever the
 # assigned sets grant; unspecified flags are false.
@@ -120,8 +126,10 @@ HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 
-# 5. Assignment is per site: secrets is readable on `open`, not on `dev`.
-#    create is not granted on either site.
+# 5. Assignment is per version: `secrets_read` is assigned by 1-draft, which
+#    `open` pins, and not by 0-draft, which `dev` pins. Both versions define
+#    the collection and the set — only the manifest assignment differs.
+#    create is not granted by either.
 GET http://127.0.0.1:{{port}}/data/secrets/list
 X-Project-Id: alice/testapp
 X-Site-Id: dev
@@ -144,7 +152,8 @@ HTTP 403
 [Asserts]
 jsonpath "$.ok" == false
 
-# Guestbook grants on `dev` do not follow the visitor to `open`
+# Guestbook grants on 0-draft do not follow the visitor to a site pinning
+# 1-draft, which defines the same collection and set but assigns neither.
 GET http://127.0.0.1:{{port}}/data/guestbook/list
 X-Project-Id: alice/testapp
 X-Site-Id: open

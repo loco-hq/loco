@@ -168,13 +168,14 @@ impl FromRequestParts<Arc<AppState>> for VersionReadScope {
             return Err(forbidden());
         }
 
-        if site.public_permission_sets().is_empty() {
+        let schema = VersionSchema::new_read_only(state.schema.clone(), &project_id, &version);
+        if schema.public_permission_sets().is_empty() {
             return Err(forbidden());
         }
 
         Ok(VersionReadScope {
             user: auth.user,
-            schema: VersionSchema::new_read_only(state.schema.clone(), &project_id, &version),
+            schema,
         })
     }
 }

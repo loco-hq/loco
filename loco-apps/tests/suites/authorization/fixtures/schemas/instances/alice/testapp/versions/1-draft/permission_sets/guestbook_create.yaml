@@ -1,0 +1,5 @@
+label: "Guestbook create"
+description: "Public may insert guestbook entries"
+collections:
+  - collection: guestbook
+    create: true

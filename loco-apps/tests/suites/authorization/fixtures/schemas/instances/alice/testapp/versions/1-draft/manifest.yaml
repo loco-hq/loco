@@ -1,0 +1,4 @@
+dependencies: []
+public_permission_sets:
+  - secrets_read
+  - wiki_public

@@ -1,0 +1,6 @@
+label: "Public contacts"
+description: "Recommended set. The package ships it; a consumer opts in by name."
+collections:
+  - collection: contacts
+    read: true
+    create: true

@@ -14,6 +14,3 @@ properties:
     type: string
   dataset:
     type: string
-  public_permission_sets:
-    type: list
-    items: string

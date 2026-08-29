@@ -110,13 +110,13 @@ An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalC
 
 - A **version** is a schema snapshot under `{project}/versions/{version}/`. A version whose name contains `-` is a draft (`0.0.1-dev`); only drafts accept `/schema` writes.
 - A **dataset** is a lake partition. Record keys are `(dataset_id, collection, id)` where `dataset_id` is `{user}/{project}/{dataset_name}`.
-- A **site** pins a `version` + `dataset`. Requests identify the site with `X-Project-Id: {user}/{project}` and `X-Site-Id: {site}`. There is no tenant header. Token-less `public` may perform any `/data` verb a permission set the site assigns (`public_permission_sets`) grants. Grants are not on the collection. Unspecified verbs default to false.
+- A **site** pins a `version` + `dataset`. Requests identify the site with `X-Project-Id: {user}/{project}` and `X-Site-Id: {site}`. There is no tenant header. Token-less `public` may perform any `/data` verb a permission set the **pinned version's manifest** assigns (`public_permission_sets`) grants. Policy is on the version, not the site: two sites pinning one version cannot disagree. Grants are not on the collection. Unspecified verbs default to false.
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
 ### Manifests and dependency visibility
 
-Each version has a `manifest` instance declaring `dependencies` as `{user}/{project}@{version}` strings. `manifest` is a regular schema type — loco-gen treats it no differently than `collection` or `site`.
+Each version has a `manifest` instance declaring `dependencies` as `{user}/{project}@{version}` strings and `public_permission_sets` as the names of the permission sets this version assigns to `public`. A consuming version opts into a set a dependency ships by naming it here. `manifest` is a regular schema type — loco-gen treats it no differently than `collection` or `site`.
 
 Dependency grammar and the scoped view live in `loco-apps/src/http/version_schema.rs` (`VersionSchema`). Reads see the version itself plus **direct** dependencies only (not transitive). Writes go to the version's own project, and only when the `VersionSchema` was constructed writable and the version is a draft.
 
@@ -176,9 +176,9 @@ Handlers sit on request extractors in `http/scope/`:
 
 - `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_developer`, `require_can_write_data`. Access is membership, not the site.
 - `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema` writes.
-- `VersionReadScope` — read-only `VersionSchema` for GET `/schema`. Developer/editor on the path project (any version, no site headers). `public` (and authenticated non-members) on a site that assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required).
+- `VersionReadScope` — read-only `VersionSchema` for GET `/schema`. Developer/editor on the path project (any version, no site headers). `public` (and authenticated non-members) on a site whose pinned version assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required).
 - `ConfigProjectScope` / `ConfigUserScope` — `/config` routes. Project-targeted routes require developer; list/create/org do not need site headers.
-- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the site assigns to `public` grants that verb on that collection.
+- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the pinned version's manifest assigns to `public` grants that verb on that collection.
 
 Membership: `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Effective project access = org owner ∪ project role, plus implicit developer when the identity owns the person account (`alice` → `alice/*`).
 

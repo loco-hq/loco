@@ -1,6 +1,3 @@
 label: "Alice Dev Site"
 version: "0-draft"
 dataset: "dev"
-public_permission_sets:
-  - guestbook_read
-  - guestbook_create

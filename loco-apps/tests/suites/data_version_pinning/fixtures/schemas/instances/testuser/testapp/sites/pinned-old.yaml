@@ -1,5 +1,3 @@
 label: "Site pinned to 0-draft"
 version: "0-draft"
 dataset: "dev"
-public_permission_sets:
-  - "public_read"

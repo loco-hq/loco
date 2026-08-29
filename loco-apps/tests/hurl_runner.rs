@@ -158,6 +158,11 @@ fn suite_authorization() {
 }
 
 #[test]
+fn suite_public_policy_on_manifest() {
+    run_suite(&suites_dir().join("public_policy_on_manifest"));
+}
+
+#[test]
 fn suite_project_lifecycle() {
     run_suite(&suites_dir().join("project_lifecycle"));
 }

@@ -78,11 +78,15 @@ impl CollectionScope {
         validate_records(&self.site.schema, &self.collection_name, records, mode)
     }
 
-    /// Permission sets the site assigns to `public`, resolved against the
-    /// pinned version (self + direct deps). Unknown names are skipped.
+    /// Permission sets the pinned version's manifest assigns to `public`,
+    /// resolved against that version (self + direct deps). Unknown names are
+    /// skipped.
+    ///
+    /// Policy is a property of the snapshot, not of the URL: two sites that
+    /// pin the same version cannot disagree about what `public` may do.
     fn public_sets(&self) -> Vec<Arc<PermissionSet>> {
         self.site
-            .site
+            .schema
             .public_permission_sets()
             .iter()
             .filter_map(|name| self.site.schema.permission_set(name))

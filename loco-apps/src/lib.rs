@@ -96,30 +96,34 @@ mod generated_tests {
         assert!(!ps.collections()[0].delete());
     }
 
+    /// Public policy is a property of the version, not of the URL that pins
+    /// it — so the assignment parses off the manifest.
     #[test]
-    fn site_yaml_public_permission_sets() {
+    fn manifest_yaml_public_permission_sets() {
         let vars = std::collections::HashMap::from([
             ("project".into(), "alice/testapp".into()),
-            ("name".into(), "dev".into()),
+            ("version".into(), "0-draft".into()),
         ]);
-        let s = Site::from_yaml(
-            "label: Dev\nversion: 0-draft\ndataset: dev\npublic_permission_sets:\n  - guestbook_read\n  - guestbook_create\n",
+        let m = Manifest::from_yaml(
+            "dependencies:\n  - acme/crm@1.0\npublic_permission_sets:\n  - guestbook_read\n  - guestbook_create\n",
             &vars,
         )
         .unwrap();
+        assert_eq!(m.dependencies(), &["acme/crm@1.0".to_string()]);
         assert_eq!(
-            s.public_permission_sets(),
+            m.public_permission_sets(),
             &["guestbook_read".to_string(), "guestbook_create".to_string()]
         );
     }
 
+    /// A version that assigns nothing gives `public` nothing.
     #[test]
-    fn site_yaml_public_permission_sets_default_empty() {
+    fn manifest_yaml_public_permission_sets_default_empty() {
         let vars = std::collections::HashMap::from([
             ("project".into(), "alice/testapp".into()),
-            ("name".into(), "dev".into()),
+            ("version".into(), "0-draft".into()),
         ]);
-        let s = Site::from_yaml("label: Dev\nversion: 0-draft\ndataset: dev\n", &vars).unwrap();
-        assert!(s.public_permission_sets().is_empty());
+        let m = Manifest::from_yaml("dependencies: []\n", &vars).unwrap();
+        assert!(m.public_permission_sets().is_empty());
     }
 }
