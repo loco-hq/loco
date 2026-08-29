@@ -33,14 +33,14 @@ Ben merges. You do not.
 
 ## Current term
 
-**No term is active.** Loco is in direct mode. The rows below are the standing facts a
-term needs; `Orchestrator` is filled in by whoever Ben puts in the chair, and blanked
-again when that term ends.
+Ben put grok in the chair for [milestone 5](https://github.com/loco-hq/loco/milestone/5)
+(*A process can host an app*) on 2026-08-29. Direct mode is off for this term.
 
 | Field | Value |
 |---|---|
-| Orchestrator | *none — direct mode* |
-| Started | — |
+| Orchestrator | grok. Implementer default: claude. Reviewer: grok in a sibling pane. |
+| Started | 2026-08-29 |
+| Focus | Milestone 5. First issue: #34. |
 | Last term | grok, 2026-08-23. Issue #2 → PR #21 (`loco-claude[bot]`, approved by `loco-grok[bot]`) and process PR #22. Both merged; worktrees and panes torn down. |
 | GitHub identities | Installed on `loco-hq/loco` only. `loco-grok` app 4694991 / install 156025732. `loco-claude` app 4695030 / install 156026353 |
 | Org | `loco-hq` (free). Repo is `loco-hq/loco` (public) |
@@ -220,7 +220,7 @@ EOF
 )" --wait --timeout 600000
 ```
 
-`agent start` does not create layout — the pane must already exist and be at a shell prompt. `agent prompt --wait` returns on idle/done/blocked; blocked means go look at the pane. Orchestrator `agent read` does **not** mark a `done` agent as seen.
+`agent start` does not create layout — the pane must already exist and be at a shell prompt. A just-created worktree pane can return `agent_pane_busy` / "not an available shell"; wait a second and retry. `agent prompt --wait` returns on idle/done/blocked; blocked means go look at the pane. Orchestrator `agent read` does **not** mark a `done` agent as seen.
 
 ## Review bar
 
