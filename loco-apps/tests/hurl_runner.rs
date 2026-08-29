@@ -143,6 +143,26 @@ fn suite_bundle() {
 }
 
 #[test]
+fn suite_hosting() {
+    run_suite(&suites_dir().join("hosting"));
+}
+
+#[test]
+fn suite_hosting_apex() {
+    // The apex serves a bundle only when a default site names one. Pinned
+    // here rather than through the environment so this suite and
+    // `suite_hosting` (which asserts the apex is API-only) can run in the
+    // same process without racing on a process-global variable.
+    run_suite_with(
+        &suites_dir().join("hosting_apex"),
+        AppOptions {
+            default_site: Some("alice/blog/www".to_string()),
+            ..AppOptions::default()
+        },
+    );
+}
+
+#[test]
 fn suite_data_crud() {
     run_suite(&suites_dir().join("data_crud"));
 }
@@ -291,6 +311,7 @@ fn suite_auth_no_auto_create() {
         &suites_dir().join("auth_no_auto_create"),
         AppOptions {
             auth_auto_create: Some(false),
+            ..AppOptions::default()
         },
     );
     for dir in ["accounts", "identities"] {

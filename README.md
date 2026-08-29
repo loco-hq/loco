@@ -13,9 +13,12 @@ cargo run -p loco-apps
 # Studio (dev) — http://localhost:5174  (proxies /auth /config /schema /data → :3000)
 npm run dev -w loco-studio
 
-# Studio (production build, no Node) — http://localhost:5174
+# Studio (production build, no Node) — deployed as a bundle, served by :3000
 npm run build -w loco-studio
-python3 -m http.server 5174 --directory loco-studio/dist
+(cd loco-studio/dist && zip -qr ../../studio.zip .)
+curl -X PUT http://localhost:3000/schema/loco/studio/0.0.1-dev/bundle \
+  -H "Authorization: Bearer <token>" --data-binary @studio.zip
+LOCO_DEFAULT_SITE=loco/studio/studio cargo run -p loco-apps   # Studio at /
 
 # Cross-origin public page — http://localhost:5176  (talks to :3000, CORS)
 python3 -m http.server 5176 --directory examples/public-page
@@ -92,7 +95,7 @@ An instance's key **is** its path relative to `schemas/instances/` with `.yaml` 
 
 ## REST API
 
-The server listens on `:3000`. Browser clients call `/auth`, `/config`, `/schema`, and `/data` directly. Studio is a static SPA: `npm run build -w loco-studio` emits `loco-studio/dist/` (HTML/JS/CSS). Runtime has no Node; producing `dist/` still needs `npm run build`. The API origin is `API_ORIGIN` in `loco-studio/src/config.js` (default `http://localhost:3000`). Dev (`npm run dev -w loco-studio`) keeps a Vite proxy of those four prefixes for HMR; the same constant is used so the built SPA talks to `:3000` over CORS.
+The server listens on `:3000`. Browser clients call `/auth`, `/config`, `/schema`, and `/data` directly. Studio is a static SPA: `npm run build -w loco-studio` emits `loco-studio/dist/` (HTML/JS/CSS). Runtime has no Node; producing `dist/` still needs `npm run build`. The API origin is `API_ORIGIN` in `loco-studio/src/config.js`, which is `''` — the page's own origin. That is what both the dev proxy (`npm run dev -w loco-studio`, which forwards those four prefixes to `:3000`) and a bundle served from a site URL need. Set it to an absolute origin only for a build you deliberately serve from somewhere else; CORS is `*`, so that is legal.
 
 Browser clients on another origin are allowed: CORS is `*` origin, method, and header. Sessions are `Authorization: Bearer`, not cookies, so `*` is legal. `examples/public-page/` is a static page that lists `loco/demo` guestbook with `{ apiUrl, projectId, siteId }` and no token.
 
@@ -102,7 +105,19 @@ Every request that needs a site sends:
 - `X-Site-Id: {site}`
 - `Authorization: Bearer <token>` when authenticated
 
+…or omits the first two and lets the URL say which site it is (below).
+
 Missing auth becomes a synthetic `public` user. Anonymous `/data` CRUD is the union of permission sets the site assigns to `public`; unspecified verbs default to false. GET `/schema` is allowed for project `developer` / `editor`, and for `public` on a site that assigns at least one permission set (pinned version, site headers required). `/schema` writes and `/config` require a real session and project `developer` (or org owner).
+
+### Site URLs — the pinned version's frontend
+
+Anything the four prefixes above do not claim is served from the request's site's **pinned version bundle** (`docs/hosting.md`). A site is a URL: `{site}.{project}.{account}.<listen-host>`, so `www` on `ben/blog` is `http://www.blog.ben.localhost:3000`. Set `LOCO_DEFAULT_SITE={account}/{project}/{site}` and the apex serves that one site at `/` — the "this process *is* the blog" case. Unset, the apex is API-only, which is what it has always been.
+
+The URL fills in `X-Project-Id` / `X-Site-Id` when they are absent, so a hosted frontend does not have to know its own address. On a subdomain they are also pinned: sending one that names a different site is a 400.
+
+`/` is the bundle's `index.html`. A miss falls back to it when the path is extensionless or `Accept` asks for HTML, so client-side routes work; a missing hashed asset is a 404, because answering it with the HTML shell turns a bad deploy into a syntax error in the console. The four API prefixes always answer JSON. Served files need no token. A published version's assets are `immutable`; `index.html` revalidates, since the pin is what moves. A version with no bundle 404s and never blocks boot.
+
+Rolling forward or back is repinning the site at another version. Nothing moves on disk.
 
 ### `/data` — records (scoped by the site's dataset + version)
 
@@ -166,10 +181,11 @@ curl -X POST 'http://localhost:3000/data/pet/add' \
 | `LOCO_DB_PATH` | `loco.db` | SQLite file (created next to the process cwd) |
 | `LOCO_AUTH_ADAPTER` | `local` | Auth adapter. Only `local` exists. |
 | `LOCO_AUTH_AUTO_CREATE` | unset | If `1`/`true`, login of an unknown handle creates a person account (Hurl sets this). |
+| `LOCO_DEFAULT_SITE` | unset | `{account}/{project}/{site}`. Which site the apex serves at `/`. Unset is an API-only process. |
 
 ## Frontends
 
-- **loco-studio** (5174 in dev) — project / version / collection / field / record UI. Static production build in `dist/`. API client is `src/api.js`; session token in `localStorage`. API origin is `API_ORIGIN` in `src/config.js`.
+- **loco-studio** (5174 in dev) — project / version / collection / field / record UI. Static production build in `dist/`, deployed like any other frontend: a zip PUT to a version's bundle. API client is `src/api.js`; session token in `localStorage`. API origin is `API_ORIGIN` in `src/config.js` (`''`, same origin).
 - **loco-ui** (5175 playground) — field primitives (`TextField`, `NumberField`, `CheckboxField`, `ToggleField`, `SelectField`) plus a `<Field field={meta} />` dispatcher. Consumed by studio as an npm workspace package.
 
 ## Tests
