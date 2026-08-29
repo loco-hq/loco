@@ -1,0 +1,25 @@
+# Compile-and-run check for generated code. Every other crate that includes
+# `loco_generated.rs` ships real schema types; this one exists so codegen for
+# both kinds — `document` and `files` — is exercised by `cargo test` without
+# adding fixture types to a production schema directory.
+[package]
+name = "loco-gen-schema-fixtures"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "loco_gen_schema_fixtures"
+path = "src/lib.rs"
+
+[dependencies]
+loco-schema-runtime = { path = "../../../loco-schema/crates/loco-schema-runtime" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+loco-gen-schema = { path = "../loco-gen-schema" }

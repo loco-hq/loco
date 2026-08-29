@@ -70,6 +70,7 @@ fn generate_object_struct(out: &mut String, name: &str, properties: &[Property])
     let type_def = TypeDef {
         name: name.to_string(),
         description: String::new(),
+        kind: crate::types::Kind::Document,
         path_template: String::new(),
         properties: properties.to_vec(),
     };
@@ -83,6 +84,9 @@ fn generate_object_struct(out: &mut String, name: &str, properties: &[Property])
 
 /// Generate Rust source code for a single TypeDef.
 pub fn generate(type_def: &TypeDef) -> String {
+    if type_def.is_files() {
+        return generate_file_tree(type_def);
+    }
     let name = &type_def.name;
     let fields = type_def.all_fields();
     let mut out = String::new();
@@ -534,9 +538,14 @@ fn generate_store_alias(out: &mut String, type_def: &TypeDef) {
     let name = &type_def.name;
     let plural = plural_field(name);
     let store = format!("{name}Store");
+    let generic = if type_def.is_files() {
+        "FileTreeStore"
+    } else {
+        "InstanceStore"
+    };
 
     out.push_str(&format!(
-        "pub type {store} = loco_schema_runtime::InstanceStore<{name}>;\n\n"
+        "pub type {store} = loco_schema_runtime::{generic}<{name}>;\n\n"
     ));
 
     out.push_str("impl SchemaStore {\n");
@@ -544,6 +553,80 @@ fn generate_store_alias(out: &mut String, type_def: &TypeDef) {
     out.push_str(&format!("        &self.{plural}\n"));
     out.push_str("    }\n");
     out.push_str("}\n");
+}
+
+/// A `kind: files` type: identity only. The bytes live in the store's adapter,
+/// so there is no `from_yaml`, no `to_map`, and no `Update` patch — every
+/// property is a createOnly template variable, and a write replaces the tree.
+fn generate_file_tree(type_def: &TypeDef) -> String {
+    let name = &type_def.name;
+    let fields = type_def.all_fields();
+    let mut out = String::new();
+
+    out.push_str(
+        "#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]\n",
+    );
+    out.push_str(&format!("pub struct {name} {{\n"));
+    for (field_name, field_type) in &fields {
+        out.push_str("    #[serde(default)]\n");
+        out.push_str(&format!(
+            "    pub {}: {},\n",
+            rust_ident(field_name),
+            field_type.rust_type()
+        ));
+    }
+    out.push_str("}\n\n");
+
+    out.push_str(&format!("impl {name} {{\n"));
+    generate_new(&mut out, type_def, &fields);
+    for (field_name, field_type) in &fields {
+        generate_accessor(&mut out, field_name, field_type);
+    }
+    generate_to_path_static(&mut out, type_def);
+    generate_from_path(&mut out, type_def);
+    out.push_str("}\n\n");
+
+    generate_file_tree_instance_impl(&mut out, type_def);
+    generate_store_alias(&mut out, type_def);
+
+    out
+}
+
+fn generate_file_tree_instance_impl(out: &mut String, type_def: &TypeDef) {
+    let name = &type_def.name;
+    let vars = type_def.template_vars();
+    let to_path_args: Vec<String> = vars
+        .iter()
+        .map(|v| format!("&self.{}", rust_ident(v)))
+        .collect();
+
+    out.push_str(&format!(
+        "impl loco_schema_runtime::FileTreeInstance for {name} {{\n"
+    ));
+    out.push_str("    fn to_path(&self) -> String {\n");
+    out.push_str(&format!(
+        "        {name}::to_path({})\n",
+        to_path_args.join(", ")
+    ));
+    out.push_str("    }\n");
+    // Inherent methods win over trait methods at concrete types, so delegating
+    // here is not recursive.
+    out.push_str(
+        "    fn from_path(path: &str) -> Option<std::collections::HashMap<String, String>> {\n",
+    );
+    out.push_str(&format!("        {name}::from_path(path)\n"));
+    out.push_str("    }\n");
+    out.push_str("    fn from_vars(vars: &std::collections::HashMap<String, String>) -> Self {\n");
+    out.push_str(&format!("        {name} {{\n"));
+    for (field_name, _) in &type_def.all_fields() {
+        out.push_str(&format!(
+            "            {}: vars.get(\"{field_name}\").cloned().unwrap_or_default(),\n",
+            rust_ident(field_name)
+        ));
+    }
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
 }
 
 fn generate_preamble(type_defs: &[TypeDef]) -> String {
@@ -563,15 +646,26 @@ fn generate_preamble(type_defs: &[TypeDef]) -> String {
         let type_name = &td.name;
         let plural = plural_field(type_name);
         let store = format!("{type_name}Store");
+        let (trait_name, adapter, scan) = if td.is_files() {
+            (
+                "FileTreePersistence",
+                "FileTreeFsAdapter",
+                format!("{plural}_adapter.list_trees()?"),
+            )
+        } else {
+            (
+                "SchemaPersistence",
+                "YamlFsAdapter",
+                format!("{plural}_adapter.load_all()?"),
+            )
+        };
         out.push_str(&format!(
-            "        let {plural}_adapter: std::sync::Arc<dyn loco_schema_runtime::SchemaPersistence<{type_name}>> = std::sync::Arc::new(loco_schema_runtime::YamlFsAdapter::<{type_name}>::new(instances_dir.to_path_buf()));\n"
+            "        let {plural}_adapter: std::sync::Arc<dyn loco_schema_runtime::{trait_name}<{type_name}>> = std::sync::Arc::new(loco_schema_runtime::{adapter}::<{type_name}>::new(instances_dir.to_path_buf()));\n"
         ));
         out.push_str(&format!(
             "        let {plural} = {store}::new({plural}_adapter.clone());\n"
         ));
-        out.push_str(&format!(
-            "        for (key, inst) in {plural}_adapter.load_all()? {{\n"
-        ));
+        out.push_str(&format!("        for (key, inst) in {scan} {{\n"));
         out.push_str(&format!(
             "            {plural}.insert_loaded(key, std::sync::Arc::new(inst));\n"
         ));
@@ -604,12 +698,13 @@ pub fn generate_all(type_defs: &[TypeDef]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{FieldType, Property, TypeDef};
+    use crate::types::{FieldType, Kind, Property, TypeDef};
 
     fn sample_type_def() -> TypeDef {
         TypeDef {
             name: "Collection".to_string(),
             description: "A named collection".to_string(),
+            kind: Kind::Document,
             path_template: "${namespace}/versions/${version}/collection/${name}".to_string(),
             properties: vec![
                 Property {
@@ -789,6 +884,7 @@ mod tests {
         let td = TypeDef {
             name: "Site".to_string(),
             description: "A site".to_string(),
+            kind: Kind::Document,
             path_template: "${project}/sites/${name}".to_string(),
             properties: vec![
                 Property {
@@ -847,6 +943,7 @@ mod tests {
         let td = TypeDef {
             name: "Manifest".to_string(),
             description: "".to_string(),
+            kind: Kind::Document,
             path_template: "${project}/versions/${version}/manifest".to_string(),
             properties: vec![
                 Property {
@@ -879,6 +976,7 @@ mod tests {
         let td = TypeDef {
             name: "PermissionSet".to_string(),
             description: "".to_string(),
+            kind: Kind::Document,
             path_template: "${project}/versions/${version}/permission_sets/${name}".to_string(),
             properties: vec![
                 Property {
@@ -969,6 +1067,7 @@ mod tests {
         let td = TypeDef {
             name: "Thing".to_string(),
             description: "".to_string(),
+            kind: Kind::Document,
             path_template: "${type}/items/${name}".to_string(),
             properties: vec![
                 Property {
@@ -986,5 +1085,86 @@ mod tests {
         let code = generate(&td);
         assert!(code.contains("pub fn to_path(r#type: &str, name: &str) -> String"));
         assert!(code.contains(r#"format!("{0}/items/{1}", r#type, name)"#));
+    }
+
+    fn files_type_def() -> TypeDef {
+        TypeDef {
+            name: "Bundle".to_string(),
+            description: "Static file tree shipped with a version".to_string(),
+            kind: Kind::Files,
+            path_template: "${project}/versions/${version}/bundle".to_string(),
+            properties: vec![
+                Property {
+                    name: "project".to_string(),
+                    field_type: FieldType::Slug { segments: 2 },
+                    create_only: true,
+                },
+                Property {
+                    name: "version".to_string(),
+                    field_type: FieldType::Slug { segments: 1 },
+                    create_only: true,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_files_kind_generates_path_helpers_only() {
+        let code = generate(&files_type_def());
+        assert!(code.contains("pub struct Bundle {"));
+        assert!(code.contains("pub project: String,"));
+        assert!(code.contains("pub version: String,"));
+        assert!(code.contains("pub fn new(project: String, version: String) -> Self"));
+        assert!(code.contains("pub fn project(&self) -> &str"));
+        assert!(code.contains("pub fn to_path(project: &str, version: &str) -> String"));
+        assert!(code.contains(r#"format!("{0}/versions/{1}/bundle", project, version)"#));
+        assert!(code.contains(
+            "pub fn from_path(path: &str) -> Option<std::collections::HashMap<String, String>>"
+        ));
+        assert!(code.contains(r#"if segs.get(i) != Some(&"bundle")"#));
+
+        // A file tree is opaque bytes: no YAML body, no patch type, no map form.
+        assert!(!code.contains("from_yaml"));
+        assert!(!code.contains("BundleUpdate"));
+        assert!(!code.contains("apply_update"));
+        assert!(!code.contains("pub fn to_map"));
+        assert!(!code.contains("pub fn from_map"));
+        assert!(!code.contains("loco_schema_runtime::SchemaInstance"));
+    }
+
+    #[test]
+    fn test_files_kind_generates_file_tree_store() {
+        let code = generate(&files_type_def());
+        assert!(code.contains("impl loco_schema_runtime::FileTreeInstance for Bundle {"));
+        assert!(code.contains("Bundle::to_path(&self.project, &self.version)"));
+        assert!(code.contains("Bundle::from_path(path)"));
+        assert!(
+            code.contains("fn from_vars(vars: &std::collections::HashMap<String, String>) -> Self")
+        );
+        assert!(code.contains(r#"project: vars.get("project").cloned().unwrap_or_default(),"#));
+        // Keyed by the path, holding a directory rather than a struct of fields.
+        assert!(code.contains("pub type BundleStore = loco_schema_runtime::FileTreeStore<Bundle>;"));
+        assert!(code.contains("pub fn bundles(&self) -> &BundleStore"));
+    }
+
+    #[test]
+    fn test_preamble_loads_file_trees_and_documents_side_by_side() {
+        let code = generate_all(&[files_type_def(), sample_type_def()]);
+        assert!(code.contains("bundles: BundleStore,"));
+        assert!(code.contains("collections: CollectionStore,"));
+
+        // File trees get the file-tree adapter and are scanned, not parsed.
+        assert!(code.contains("loco_schema_runtime::FileTreePersistence<Bundle>"));
+        assert!(code.contains(
+            "loco_schema_runtime::FileTreeFsAdapter::<Bundle>::new(instances_dir.to_path_buf())"
+        ));
+        assert!(code.contains("bundles_adapter.list_trees()?"));
+
+        // Document types are untouched.
+        assert!(code.contains("loco_schema_runtime::SchemaPersistence<Collection>"));
+        assert!(code.contains(
+            "loco_schema_runtime::YamlFsAdapter::<Collection>::new(instances_dir.to_path_buf())"
+        ));
+        assert!(code.contains("collections_adapter.load_all()?"));
     }
 }

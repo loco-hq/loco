@@ -1,0 +1,12 @@
+description: "An ordinary YAML document type"
+pathTemplate: "${project}/widgets/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string

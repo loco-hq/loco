@@ -90,6 +90,8 @@ properties:
     createOnly: true
 ```
 
+**Status:** the `kind` itself is built (issue #35) — parser, codegen, and the file-tree persistence layer, including atomic whole-tree replace and prefix delete/copy. What is not built is everything below it: `bundle.yaml`, the HTTP verbs, and serving.
+
 No body properties. Codegen still emits `to_path` / `from_path` and a store keyed by that path. The store holds a directory, not a struct of fields. Later file-tree types (seed fixtures, a shipped icon set) are the same kind, different pathTemplate.
 
 What this is not:

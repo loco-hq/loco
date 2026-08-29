@@ -25,6 +25,17 @@ pub enum Error {
         parent: String,
         field: String,
     },
+    /// `kind:` is `document` (default) or `files`.
+    UnknownKind {
+        type_name: String,
+        kind: String,
+    },
+    /// A `kind: files` instance is a directory of opaque bytes — the only
+    /// properties it may declare are its pathTemplate variables.
+    FilesTypeBodyProperty {
+        type_name: String,
+        property: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -49,6 +60,17 @@ impl fmt::Display for Error {
             Error::ObjectMissingName { parent, field } => write!(
                 f,
                 "object type used by '{parent}.{field}' must declare name:"
+            ),
+            Error::UnknownKind { type_name, kind } => write!(
+                f,
+                "type '{type_name}' has unknown kind '{kind}' (expected 'document' or 'files')"
+            ),
+            Error::FilesTypeBodyProperty {
+                type_name,
+                property,
+            } => write!(
+                f,
+                "type '{type_name}' is kind: files and may only declare pathTemplate variables, but declares '{property}'"
             ),
         }
     }

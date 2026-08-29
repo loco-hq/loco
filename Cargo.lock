@@ -538,6 +538,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "loco-gen-schema-fixtures"
+version = "0.1.0"
+dependencies = [
+ "loco-gen-schema",
+ "loco-schema-runtime",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+]
+
+[[package]]
 name = "loco-lake"
 version = "0.1.0"
 dependencies = [

@@ -1,13 +1,20 @@
 //! Pluggable persistence adapters for `InstanceStore<T>`.
 //!
 //! `SchemaPersistence<T>` decouples the cache (in `InstanceStore`) from the
-//! on-disk format and storage backend. Today only [`yaml_fs::YamlFsAdapter`] is
-//! provided — it reads/writes YAML files under a directory tree, matching the
-//! behavior the codebase had before the adapter split.
+//! on-disk format and storage backend. [`yaml_fs::YamlFsAdapter`] reads/writes
+//! one YAML file per instance, matching the behavior the codebase had before
+//! the adapter split.
+//!
+//! `kind: files` types are the other half: their instance is a directory of
+//! opaque bytes rather than a document, persisted through
+//! [`FileTreePersistence`] (filesystem implementation:
+//! [`file_tree_fs::FileTreeFsAdapter`]).
 
+pub mod file_tree_fs;
 pub mod yaml_fs;
 
 use crate::error::Error;
+use crate::file_tree::{FileTree, FileTreeInstance};
 use crate::store::SchemaInstance;
 
 /// Persists instances of `T` somewhere — filesystem, database, network store.
@@ -26,4 +33,29 @@ pub trait SchemaPersistence<T: SchemaInstance>: Send + Sync {
     fn delete(&self, key: &str) -> Result<(), Error>;
 }
 
+/// Persists file-tree instances of `T` — a directory of opaque bytes at the
+/// instance's key, with no `.yaml` suffix.
+///
+/// `FileTreeStore<T>` calls `list_trees` once at startup to learn which trees
+/// exist, and delegates every read and write here; it never caches file bytes.
+pub trait FileTreePersistence<T: FileTreeInstance>: Send + Sync {
+    /// Every persisted tree, as `(key, identity)` pairs. Content is not read.
+    /// Called once during `SchemaStore::load`.
+    fn list_trees(&self) -> Result<Vec<(String, T)>, Error>;
+
+    /// Read the whole tree at `key`. `None` when it does not exist.
+    fn read_tree(&self, key: &str) -> Result<Option<FileTree>, Error>;
+
+    /// Read one file out of the tree at `key`. `None` when either is absent.
+    fn read_file(&self, key: &str, path: &str) -> Result<Option<Vec<u8>>, Error>;
+
+    /// Replace the tree at `key` with `tree`. Whole-tree replace, atomic: a
+    /// concurrent reader sees the old tree or the new one, never a mix.
+    fn write_tree(&self, key: &str, tree: &FileTree) -> Result<(), Error>;
+
+    /// Remove the tree at `key`. No-op if it does not exist.
+    fn delete(&self, key: &str) -> Result<(), Error>;
+}
+
+pub use file_tree_fs::FileTreeFsAdapter;
 pub use yaml_fs::YamlFsAdapter;

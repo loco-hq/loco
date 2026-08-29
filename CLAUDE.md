@@ -50,7 +50,8 @@ frontend workspaces are not built in CI yet.
 ```
 loco/
 ├── loco-gen/crates/loco-gen-schema/           # YAML parsing, TypeDef, Rust codegen, build.rs helper
-├── loco-schema/crates/loco-schema-runtime/    # SchemaInstance, InstanceStore, YamlFsAdapter
+├── loco-gen/crates/loco-gen-schema-fixtures/  # Compiles generated code for both kinds (test-only)
+├── loco-schema/crates/loco-schema-runtime/    # InstanceStore + YamlFsAdapter, FileTreeStore + FileTreeFsAdapter
 ├── loco-lake/crates/loco-lake/                # DataAdapter + InMemoryAdapter + SqliteAdapter
 ├── loco-apps/                                 # Axum server consuming generated types
 ├── loco-studio/                               # Schema + record editor
@@ -88,6 +89,17 @@ An instance's namespace IS its path relative to `schemas/instances/` with `.yaml
 ## Schema Files
 
 Type definitions live in `loco-apps/schemas/types/`. Supported field types: `string`, `integer`, `float`, `boolean`, `slug`, and `list` (a `list` requires an `items:` sub-key naming a scalar type, or an inline `object` with `name:` and `properties:` — nested lists are rejected at parse time). Every type has a required `pathTemplate` that controls where instance files live under `schemas/instances/` and how template variables are extracted from file paths. The template is purely logical — it never contains `.yaml`; the storage layer appends that extension when writing to disk.
+
+### Kinds
+
+A type is one of two `kind`s. `kind` is optional and defaults to `document`; any other value is rejected at parse.
+
+- **`document`** (default) — a YAML file at `pathTemplate + ".yaml"`. Everything in `loco-apps/schemas/types/` today.
+- **`files`** — a *directory* at `pathTemplate`, no `.yaml`, holding opaque bytes. The files are the instance: codegen emits `to_path` / `from_path` and a `FileTreeStore`, but no `from_yaml`, no `Update` patch, and no field accessors beyond the template variables. A `files` type may declare only its template variables — any other property is a parse error.
+
+Persistence is `FileTreeFsAdapter` (`loco-schema-runtime`). Writes are whole-tree replace and atomic (staged in a sibling temp dir, swapped in with `rename`). Keys and member paths are validated — no `..`, no absolute paths — and symlinks are never followed. A missing tree reads as `None`; it is not a boot failure. `delete_by_prefix` and `copy_by_prefix` on the store see file-tree keys, so a project or version delete cascades and a later copy-version has its copy primitive.
+
+No production type uses `kind: files` yet — the first will be the frontend bundle ([`docs/hosting.md`](docs/hosting.md)). `loco-gen-schema-fixtures` is a test-only crate that runs codegen over one type of each kind so the generated code is compiled and exercised by `cargo test`.
 
 ### pathTemplate examples
 
