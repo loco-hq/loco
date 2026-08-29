@@ -7,6 +7,9 @@ pub enum Error {
     AlreadyExists(String),
     NotFound(String),
     MissingField(&'static str),
+    /// A file-tree key or member path that is not a safe relative path
+    /// (absolute, `..`, empty segment) or that traverses a symlink.
+    InvalidPath(String),
 }
 
 impl fmt::Display for Error {
@@ -17,6 +20,7 @@ impl fmt::Display for Error {
             Error::AlreadyExists(name) => write!(f, "already exists: {name}"),
             Error::NotFound(name) => write!(f, "not found: {name}"),
             Error::MissingField(name) => write!(f, "missing required field: {name}"),
+            Error::InvalidPath(path) => write!(f, "invalid path: {path}"),
         }
     }
 }

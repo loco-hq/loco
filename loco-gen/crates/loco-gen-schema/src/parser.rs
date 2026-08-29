@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 
 use crate::error::Error;
-use crate::types::{FieldType, Property, TypeDef};
+use crate::types::{FieldType, Kind, Property, TypeDef};
 
 // ── Raw deserialization structs (serde shapes) ────────────────────────────────
 
@@ -13,7 +13,11 @@ use crate::types::{FieldType, Property, TypeDef};
 struct TypeDefRaw {
     #[serde(default)]
     description: String,
+    /// `document` (default) or `files`.
+    #[serde(default)]
+    kind: Option<String>,
     path_template: String,
+    #[serde(default)]
     properties: IndexMap<String, PropertyRaw>,
 }
 
@@ -49,6 +53,17 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
     let raw: TypeDefRaw = serde_yaml::from_str(yaml)?;
     let type_name_pascal = to_pascal_case(type_name);
 
+    let kind = match raw.kind.as_deref() {
+        None | Some("document") => Kind::Document,
+        Some("files") => Kind::Files,
+        Some(other) => {
+            return Err(Error::UnknownKind {
+                type_name: type_name_pascal,
+                kind: other.to_string(),
+            })
+        }
+    };
+
     let mut properties = Vec::new();
     for (name, prop) in raw.properties {
         properties.push(parse_property(name, prop, &type_name_pascal)?);
@@ -57,6 +72,7 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
     let type_def = TypeDef {
         name: type_name_pascal,
         description: raw.description,
+        kind,
         path_template: raw.path_template,
         properties,
     };
@@ -84,6 +100,17 @@ pub fn parse_schema(yaml: &str, type_name: &str) -> Result<TypeDef, Error> {
                 })
             }
             _ => {}
+        }
+    }
+
+    // A file tree's identity is its path; there is no document to hold a body.
+    if type_def.is_files() {
+        let vars = type_def.template_vars();
+        if let Some(extra) = type_def.properties.iter().find(|p| !vars.contains(&p.name)) {
+            return Err(Error::FilesTypeBodyProperty {
+                type_name: type_def.name.clone(),
+                property: extra.name.clone(),
+            });
         }
     }
 
@@ -173,7 +200,7 @@ fn to_pascal_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::FieldType;
+    use crate::types::{FieldType, Kind};
 
     const SAMPLE_YAML: &str = r#"
 version: 1
@@ -494,5 +521,117 @@ properties:
 "#;
         let err = parse_schema(yaml, "test").unwrap_err();
         assert!(err.to_string().contains("datetime"));
+    }
+
+    const BUNDLE_YAML: &str = r#"
+description: "Static file tree shipped with a version"
+kind: files
+pathTemplate: "${project}/versions/${version}/bundle"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+"#;
+
+    #[test]
+    fn test_kind_defaults_to_document() {
+        let type_def = parse_schema(SAMPLE_YAML, "collection").unwrap();
+        assert_eq!(type_def.kind, Kind::Document);
+        assert!(!type_def.is_files());
+    }
+
+    #[test]
+    fn test_parse_kind_files() {
+        let type_def = parse_schema(BUNDLE_YAML, "bundle").unwrap();
+        assert_eq!(type_def.kind, Kind::Files);
+        assert!(type_def.is_files());
+        assert_eq!(
+            type_def.path_template,
+            "${project}/versions/${version}/bundle"
+        );
+        // Only the template variables — a file tree has no body.
+        assert_eq!(type_def.template_vars(), vec!["project", "version"]);
+        assert_eq!(type_def.properties.len(), 2);
+    }
+
+    #[test]
+    fn test_kind_files_rejects_body_properties() {
+        let yaml = r#"
+kind: files
+pathTemplate: "${project}/versions/${version}/bundle"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+"#;
+        let err = parse_schema(yaml, "bundle").unwrap_err();
+        assert!(matches!(err, Error::FilesTypeBodyProperty { .. }));
+        assert!(err.to_string().contains("label"));
+    }
+
+    #[test]
+    fn test_kind_files_still_requires_declared_template_vars() {
+        let yaml = r#"
+kind: files
+pathTemplate: "${project}/versions/${version}/bundle"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+"#;
+        let err = parse_schema(yaml, "bundle").unwrap_err();
+        assert!(matches!(err, Error::TemplateVarNotDeclared { .. }));
+        assert!(err.to_string().contains("version"));
+    }
+
+    #[test]
+    fn test_unknown_kind_rejected() {
+        let yaml = r#"
+kind: directory
+pathTemplate: "${project}/versions/${version}/bundle"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+"#;
+        let err = parse_schema(yaml, "bundle").unwrap_err();
+        assert!(matches!(err, Error::UnknownKind { .. }));
+        assert!(err.to_string().contains("directory"));
+    }
+
+    #[test]
+    fn test_explicit_document_kind_is_accepted() {
+        let yaml = r#"
+kind: document
+pathTemplate: "${project}/sites/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+"#;
+        let type_def = parse_schema(yaml, "site").unwrap();
+        assert_eq!(type_def.kind, Kind::Document);
+        assert_eq!(type_def.properties.len(), 3);
     }
 }

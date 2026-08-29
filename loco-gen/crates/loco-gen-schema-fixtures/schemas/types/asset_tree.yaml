@@ -1,0 +1,11 @@
+description: "A file tree living inside a version"
+kind: files
+pathTemplate: "${project}/versions/${version}/asset_tree"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true

@@ -50,15 +50,33 @@ pub struct Property {
     pub create_only: bool,
 }
 
+/// What an instance of a type *is* on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Kind {
+    /// A YAML document at `pathTemplate + ".yaml"`. The default.
+    #[default]
+    Document,
+    /// A directory of opaque files at `pathTemplate`, with no `.yaml` suffix.
+    /// Has no body properties — only the template variables that name it.
+    Files,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDef {
     pub name: String,
     pub description: String,
+    pub kind: Kind,
     pub path_template: String,
     pub properties: Vec<Property>,
 }
 
 impl TypeDef {
+    /// True for `kind: files` types, whose instance is a directory of bytes
+    /// rather than a document.
+    pub fn is_files(&self) -> bool {
+        self.kind == Kind::Files
+    }
+
     /// Extract `${var}` names from `path_template` in order of first appearance.
     pub fn template_vars(&self) -> Vec<String> {
         let mut result = Vec::new();
