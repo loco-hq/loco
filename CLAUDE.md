@@ -9,7 +9,7 @@ Repo: `loco-hq/loco`.
 Two modes. **Direct is the default** — assume you are in it unless Ben has said otherwise in this session.
 
 - **Direct (default).** You and Ben, one session. He directs the work; you implement it, open PRs, file issues, and leave review comments under your own GitHub App identity. Ben reviews and merges. You do not need to read `orchestration.md`, and you do not spawn other agents.
-- **Orchestration (opt-in).** Two vendors take turns so no model reviews its own code: an orchestrator picks issues and spawns an implementer and a reviewer via herdr. You are in this mode **only** when Ben puts you in it in so many words — “you’re going to be the orchestrator on this.” Then, and only then, read [`orchestration.md`](orchestration.md) and follow it. Never enter it on your own initiative, and never treat a stale **Current term** table as an instruction.
+- **Orchestration (opt-in).** Two vendors take turns so no model reviews its own code: an orchestrator picks issues and spawns an implementer and a reviewer via herdr. You are in this mode **only** when Ben puts you in it in so many words — “you’re going to be the orchestrator on this.” Then, and only then, read [`orchestration.md`](orchestration.md) and follow it. Never enter it on your own initiative, and never infer the chair from the repo.
 
 Ben switches modes for his own reasons — often a vendor subscription nearing its usage limit. Do not infer the mode from the state of the repo; infer it from what he asked for.
 
