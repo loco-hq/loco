@@ -53,6 +53,11 @@ pub trait FileTreePersistence<T: FileTreeInstance>: Send + Sync {
     /// concurrent reader sees the old tree or the new one, never a mix.
     fn write_tree(&self, key: &str, tree: &FileTree) -> Result<(), Error>;
 
+    /// When the tree at `key` was last replaced. `None` when it does not
+    /// exist. Whole-tree replace is the only write, so this is the moment the
+    /// current bytes arrived.
+    fn modified_at(&self, key: &str) -> Result<Option<std::time::SystemTime>, Error>;
+
     /// Remove the tree at `key`. No-op if it does not exist.
     fn delete(&self, key: &str) -> Result<(), Error>;
 }

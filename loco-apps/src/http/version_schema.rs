@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::http::authz::is_draft_version;
 use crate::{
-    Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest,
+    Bundle, Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest,
     ManifestUpdate, PermissionSet, PermissionSetUpdate, SchemaStore,
 };
 
@@ -328,7 +328,10 @@ impl VersionSchema {
 
     // --- Writes: scoped to (self.project_id, self.version), draft-only ---
 
-    fn require_writable(&self) -> Result<(), VersionSchemaError> {
+    /// `Ok` only when this view was built writable AND the version is a
+    /// draft. Public so a handler can refuse a published version before it
+    /// does expensive work on the request body.
+    pub fn require_writable(&self) -> Result<(), VersionSchemaError> {
         if self.read_only {
             return Err(VersionSchemaError::NotWritable(format!(
                 "schema for {} is read-only in this scope",
@@ -342,6 +345,42 @@ impl VersionSchema {
             )));
         }
         Ok(())
+    }
+
+    // --- Bundle: the version's own static file tree ---
+    //
+    // Unlike collections and fields, the bundle is never read through a
+    // dependency. A version ships its own frontend; installing a package does
+    // not import the package's HTML.
+
+    fn bundle_key(&self) -> String {
+        Bundle::to_path(&self.project_id, &self.version)
+    }
+
+    /// The bundle tree for this version. `None` when the version has none —
+    /// which is every version until something is uploaded.
+    pub fn bundle(&self) -> Result<Option<loco_schema_runtime::FileTree>, VersionSchemaError> {
+        Ok(self.store.bundles().read_tree(&self.bundle_key())?)
+    }
+
+    /// When the current bundle tree was written. `None` when there is none.
+    pub fn bundle_uploaded_at(&self) -> Result<Option<std::time::SystemTime>, VersionSchemaError> {
+        Ok(self.store.bundles().modified_at(&self.bundle_key())?)
+    }
+
+    /// Replace the whole bundle tree. Draft-only, like every other write here.
+    pub fn put_bundle(
+        &self,
+        tree: &loco_schema_runtime::FileTree,
+    ) -> Result<Arc<Bundle>, VersionSchemaError> {
+        self.require_writable()?;
+        Ok(self.store.bundles().put(&self.bundle_key(), tree)?)
+    }
+
+    /// Drop the bundle tree. `Error::NotFound` when the version has none.
+    pub fn delete_bundle(&self) -> Result<(), VersionSchemaError> {
+        self.require_writable()?;
+        Ok(self.store.bundles().delete(&self.bundle_key())?)
     }
 
     pub fn update_manifest(

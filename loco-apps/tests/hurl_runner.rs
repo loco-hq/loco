@@ -138,6 +138,11 @@ fn suite_schema_crud() {
 }
 
 #[test]
+fn suite_bundle() {
+    run_suite(&suites_dir().join("bundle"));
+}
+
+#[test]
 fn suite_data_crud() {
     run_suite(&suites_dir().join("data_crud"));
 }

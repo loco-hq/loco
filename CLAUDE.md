@@ -99,7 +99,7 @@ A type is one of two `kind`s. `kind` is optional and defaults to `document`; any
 
 Persistence is `FileTreeFsAdapter` (`loco-schema-runtime`). Writes are whole-tree replace and atomic (staged in a sibling temp dir, swapped in with `rename`). Keys and member paths are validated — no `..`, no absolute paths — and symlinks are never followed. A missing tree reads as `None`; it is not a boot failure. `delete_by_prefix` and `copy_by_prefix` on the store see file-tree keys, so a project or version delete cascades and a later copy-version has its copy primitive.
 
-No production type uses `kind: files` yet — the first will be the frontend bundle ([`docs/hosting.md`](docs/hosting.md)). `loco-gen-schema-fixtures` is a test-only crate that runs codegen over one type of each kind so the generated code is compiled and exercised by `cargo test`.
+`bundle` is the one production type of this kind — a version's frontend, written by `PUT /schema/{account}/{project}/{version}/bundle` ([`docs/hosting.md`](docs/hosting.md)). `loco-gen-schema-fixtures` is a test-only crate that runs codegen over one type of each kind so the generated code is compiled and exercised by `cargo test`.
 
 ### pathTemplate examples
 
@@ -108,6 +108,7 @@ No production type uses `kind: files` yet — the first will be the frontend bun
 | project | `${project}/project` |
 | dataset | `${project}/datasets/${name}` |
 | site | `${project}/sites/${name}` |
+| bundle | `${project}/versions/${version}/bundle` (a directory — `kind: files`) |
 | manifest | `${project}/versions/${version}/manifest` |
 | collection | `${project}/versions/${version}/collections/${name}` |
 | field | `${project}/versions/${version}/fields/${collection}/${name}` |
@@ -178,7 +179,7 @@ Mounted in `server.rs`:
 | Prefix | Role |
 |--------|------|
 | `/data` | Record CRUD. Site-scoped via headers. Strict validation on write; diagnostics on read. |
-| `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets). |
+| `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, bundle). |
 | `/config` | Unversioned project / dataset / site / version lifecycle. |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
 

@@ -173,6 +173,12 @@ impl<T: FileTreeInstance> FileTreeStore<T> {
         Ok(arc)
     }
 
+    /// When the tree at `key` was last replaced. `None` when it does not
+    /// exist.
+    pub fn modified_at(&self, key: &str) -> Result<Option<std::time::SystemTime>, Error> {
+        self.adapter.modified_at(key)
+    }
+
     pub fn delete(&self, key: &str) -> Result<(), Error> {
         {
             let cache = self.cache.read().unwrap();
