@@ -1,0 +1,11 @@
+description: "Static file tree shipped with a version (a Vite dist/ snapshot)"
+kind: files
+pathTemplate: "${project}/versions/${version}/bundle"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true

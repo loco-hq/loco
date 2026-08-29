@@ -18,7 +18,7 @@ use std::sync::Arc;
 use loco_schema_runtime::Error;
 
 use crate::{
-    Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate,
+    Bundle, Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate,
 };
 
 pub struct ProjectConfig {
@@ -100,6 +100,9 @@ impl ProjectConfig {
             .permission_sets()
             .delete_by_prefix(&versions_prefix);
         let _ = self.store.manifests().delete_by_prefix(&versions_prefix);
+        // File trees cascade too, or a deleted project leaves its frontends on
+        // disk for a same-named project to inherit.
+        let _ = self.store.bundles().delete_by_prefix(&versions_prefix);
 
         let mut dataset_names = Vec::new();
         for (ds_id, ds) in self.store.datasets().list_all() {
@@ -220,6 +223,12 @@ impl ProjectConfig {
             .store
             .permission_sets()
             .delete_by_prefix(&permission_sets_prefix);
+        // The version's bundle goes with it; a recreated version must not
+        // inherit the frontend of the one that was deleted.
+        let _ = self
+            .store
+            .bundles()
+            .delete(&Bundle::to_path(&self.project_id(), version));
         self.store.manifests().delete(&manifest_path)
     }
 }

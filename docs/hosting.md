@@ -90,7 +90,7 @@ properties:
     createOnly: true
 ```
 
-**Status:** the `kind` itself is built (issue #35) — parser, codegen, and the file-tree persistence layer, including atomic whole-tree replace and prefix delete/copy. What is not built is everything below it: `bundle.yaml`, the HTTP verbs, and serving.
+**Status:** the `kind` (issue #35), `bundle.yaml`, and the three HTTP verbs below (issue #36) are built. What is not built is serving the files at a site URL (#30) and copy-version carrying a bundle into a published snapshot (#37) — until that lands, only a draft can hold one.
 
 No body properties. Codegen still emits `to_path` / `from_path` and a store keyed by that path. The store holds a directory, not a struct of fields. Later file-tree types (seed fixtures, a shipped icon set) are the same kind, different pathTemplate.
 
@@ -149,6 +149,8 @@ There is no `/host` prefix. The bundle is schema. Deploy is a draft write:
 | PUT | `/schema/{account}/{project}/{version}/bundle` | developer, draft only | Replace the file tree (zip) |
 | GET | `/schema/{account}/{project}/{version}/bundle` | same as other `/schema` reads | `{ hash, uploaded_at, size }` (not the files) |
 | DELETE | `/schema/{account}/{project}/{version}/bundle` | developer, draft only | Drop the tree |
+
+The PUT body is a zip of `dist/` with `index.html` at the zip root, and the tree it holds replaces the old one whole. It is refused with 400 over 32 MiB of body, 64 MiB unpacked, 16 MiB in one file, or 2000 files; likewise when an entry escapes the tree (`..`, an absolute path), is a symlink, or when no `index.html` sits at the root. GET answers `{ hash, uploaded_at, size, files }` — `hash` is a SHA-256 over the tree's contents, so two identical uploads hash alike whatever the zip did. A version with no bundle 404s the GET; a published version refuses PUT and DELETE the way it refuses any other `/schema` write.
 
 Serving the files is not a `/schema` GET. It is the site URL (below).
 

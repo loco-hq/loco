@@ -4,6 +4,7 @@
 include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"));
 
 pub mod auth;
+pub mod bundle;
 pub mod handlers;
 pub mod http;
 pub mod server;

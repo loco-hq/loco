@@ -123,6 +123,16 @@ impl<T: FileTreeInstance> FileTreePersistence<T> for FileTreeFsAdapter<T> {
         Ok(())
     }
 
+    fn modified_at(&self, key: &str) -> Result<Option<std::time::SystemTime>, Error> {
+        let Some(root) = self.open_tree(key)? else {
+            return Ok(None);
+        };
+        // The tree directory is renamed into place by `write_tree`, so its own
+        // mtime is when the current bytes landed — not when some file inside
+        // it was last touched.
+        Ok(Some(std::fs::metadata(&root)?.modified()?))
+    }
+
     fn delete(&self, key: &str) -> Result<(), Error> {
         let root = self.resolve(key)?;
         if is_symlink(&root) {
@@ -350,6 +360,26 @@ mod tests {
         assert!(a.read_file(KEY, "index.html").unwrap().is_none());
         // Nothing on disk at all — boot must not fail.
         assert!(a.list_trees().unwrap().is_empty());
+        assert!(a.modified_at(KEY).unwrap().is_none());
+    }
+
+    #[test]
+    fn modified_at_tracks_the_last_whole_tree_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = adapter(dir.path());
+
+        let before = std::time::SystemTime::now();
+        a.write_tree(KEY, &tree(&[("index.html", "v1")])).unwrap();
+        let first = a.modified_at(KEY).unwrap().expect("tree exists");
+        // Filesystem timestamps can be coarser than the clock this test reads,
+        // so allow a second of slack on either side rather than asserting an
+        // exact ordering.
+        let slack = std::time::Duration::from_secs(1);
+        assert!(first + slack >= before);
+        assert!(first <= std::time::SystemTime::now() + slack);
+
+        a.write_tree(KEY, &tree(&[("index.html", "v2")])).unwrap();
+        assert!(a.modified_at(KEY).unwrap().unwrap() >= first);
     }
 
     #[test]
