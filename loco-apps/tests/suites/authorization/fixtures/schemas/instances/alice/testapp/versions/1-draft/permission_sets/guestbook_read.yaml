@@ -1,0 +1,5 @@
+label: "Guestbook read"
+description: "Public may list and get guestbook entries"
+collections:
+  - collection: guestbook
+    read: true

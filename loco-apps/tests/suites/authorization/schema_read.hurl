@@ -1,11 +1,12 @@
-# Schema GET vs write. Reads: developer/editor any version; public on a
-# site that assigns at least one permission set, pinned version only.
-# Writes stay developer + draft.
+# Schema GET vs write. Reads: developer/editor any version; public on a site
+# whose **pinned version's manifest** assigns at least one permission set,
+# pinned version only. Writes stay developer + draft.
 #
-# Fixtures (shared with data_no_auth.hurl):
-#   site `dev`  — version 0-draft, public_permission_sets: [guestbook_read, guestbook_create]
-#   site `open` — version 0-draft, public_permission_sets: [secrets_read, wiki_public]
-#   site `cards` — version 0-draft, no public sets
+# Fixtures (shared with data_no_auth.hurl) — the assignment is on the
+# manifest, so which sites are publicly readable follows from what they pin:
+#   site `dev`   → 0-draft, manifest assigns [guestbook_read, guestbook_create]
+#   site `open`  → 1-draft, manifest assigns [secrets_read, wiki_public]
+#   site `cards` → 2-draft, manifest assigns nothing
 #   widgets has a `size` field even though it has no public data grant.
 
 # 1. Token-less GET of the pinned version on a public site.
@@ -18,7 +19,7 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "message"
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/1-draft/collection/list
 X-Project-Id: alice/testapp
 X-Site-Id: open
 HTTP 200
@@ -36,8 +37,8 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "size"
 
-# 2. Site with no public sets is not a public schema read.
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/guestbook/list
+# 2. A site whose pinned version assigns nothing is not a public schema read.
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/2-draft/field/guestbook/list
 X-Project-Id: alice/testapp
 X-Site-Id: cards
 HTTP 403
@@ -127,6 +128,15 @@ HTTP 200
 alice_token: jsonpath "$.data.token"
 
 GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/guestbook/list
+Authorization: Bearer {{alice_token}}
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data[0].name" == "message"
+
+# 2-draft is a real, readable version — so the 403 in section 2 is the empty
+# public assignment on its manifest and not a missing fixture.
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/2-draft/field/guestbook/list
 Authorization: Bearer {{alice_token}}
 HTTP 200
 [Asserts]

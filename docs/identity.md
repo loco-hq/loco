@@ -1,6 +1,6 @@
 # Identity and access
 
-Target model. The implementing PR stack is merged; see the git history and the open issues for what remains. Public assignment has one more move, in [`hosting.md`](hosting.md): off the site, onto the consuming version's manifest. Code still reads `site.public_permission_sets` until that ships.
+Target model. The implementing PR stack is merged; see the git history and the open issues for what remains. Public assignment now lives on the consuming version's manifest (`manifest.public_permission_sets`); `site` no longer carries the field.
 
 Loco is Sanity-shaped: schema lives on the server; frontends are standalone and hold no secrets. A Loco account is someone who works *on* a project (Studio, CLI, Clippy). Visitors of a project's CloudFront app are not Loco users.
 

@@ -1,4 +1,4 @@
-description: "A versioned project manifest declaring dependencies"
+description: "A versioned project manifest declaring dependencies and the permission sets assigned to public"
 pathTemplate: "${project}/versions/${version}/manifest"
 properties:
   project:
@@ -9,5 +9,8 @@ properties:
     type: slug
     createOnly: true
   dependencies:
+    type: list
+    items: string
+  public_permission_sets:
     type: list
     items: string

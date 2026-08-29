@@ -1,0 +1,8 @@
+label: "Public wiki"
+description: "Public may CRUD wiki pages"
+collections:
+  - collection: wiki
+    read: true
+    create: true
+    update: true
+    delete: true

@@ -1,4 +1,4 @@
-description: "An additive named bundle of collection grants. Stacked by union; assigned to public on a site."
+description: "An additive named bundle of collection grants. Stacked by union; assigned to public on a version's manifest."
 pathTemplate: "${project}/versions/${version}/permission_sets/${name}"
 properties:
   project:

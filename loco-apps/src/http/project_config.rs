@@ -196,7 +196,7 @@ impl ProjectConfig {
     }
 
     pub fn create_version(&self, version: String) -> Result<Arc<Manifest>, Error> {
-        let manifest = Manifest::new(self.project_id(), version, Vec::new());
+        let manifest = Manifest::new(self.project_id(), version, Vec::new(), Vec::new());
         self.store.manifests().create(manifest)
     }
 

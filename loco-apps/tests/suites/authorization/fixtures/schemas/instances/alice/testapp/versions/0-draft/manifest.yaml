@@ -1,0 +1,4 @@
+dependencies: []
+public_permission_sets:
+  - guestbook_read
+  - guestbook_create

@@ -9,8 +9,9 @@
 //! - **write** to its own `(project_id, version)` *only* when constructed
 //!   writable AND the version is a draft (`-dev` suffix).
 //!
-//! The dep set is snapshotted at construction so a request gets a coherent
-//! view even if a concurrent write mutates the manifest mid-flight.
+//! The dep set — and the public permission-set assignment that sits beside it
+//! on the manifest — is snapshotted at construction so a request gets a
+//! coherent view even if a concurrent write mutates the manifest mid-flight.
 //!
 //! Two construction modes:
 //! - [`VersionSchema::new`] — writable. Used by `VersionScope` for `/schema`
@@ -72,6 +73,15 @@ pub struct VersionSchema {
     /// is the behavior today; issue #28 changes it. Do not write new code
     /// that relies on the fall-through.
     dependencies: Vec<(String, String)>,
+    /// Names of the permission sets this version's manifest assigns to
+    /// `public`, snapshotted with `dependencies` for the same reason.
+    ///
+    /// Assignment lives on the manifest, not on the site: a site is a URL
+    /// pointing at `(version, dataset)`, so two sites pinning one version
+    /// share its public policy. Names resolve through
+    /// [`Self::permission_set`], which is what lets a consuming version opt
+    /// into a set a dependency ships.
+    public_permission_sets: Vec<String>,
     read_only: bool,
 }
 
@@ -104,12 +114,19 @@ impl VersionSchema {
     ) -> Self {
         let project_id = project_id.into();
         let version = version.into();
-        let dependencies = direct_dependencies(&store, &project_id, &version);
+        let manifest = store
+            .manifests()
+            .get(&Manifest::to_path(&project_id, &version));
+        let dependencies = direct_dependencies(&project_id, &version, manifest.as_deref());
+        let public_permission_sets = manifest
+            .map(|m| m.public_permission_sets().to_vec())
+            .unwrap_or_default();
         Self {
             store,
             project_id,
             version,
             dependencies,
+            public_permission_sets,
             read_only,
         }
     }
@@ -124,6 +141,13 @@ impl VersionSchema {
 
     pub fn dependencies(&self) -> &[(String, String)] {
         &self.dependencies
+    }
+
+    /// Permission-set names this version's manifest assigns to `public`.
+    /// Snapshotted at construction; unknown names stay inert because
+    /// [`Self::permission_set`] simply won't resolve them.
+    pub fn public_permission_sets(&self) -> &[String] {
+        &self.public_permission_sets
     }
 
     // --- Reads: union across self + every installed dependency ---
@@ -553,15 +577,12 @@ impl VersionSchema {
 /// pairs. Dep strings are `user/project@version`; malformed entries are
 /// skipped — they shouldn't reach the store once write-time validation lands.
 fn direct_dependencies(
-    store: &SchemaStore,
     project_id: &str,
     version: &str,
+    manifest: Option<&Manifest>,
 ) -> Vec<(String, String)> {
     let mut deps = vec![(project_id.to_string(), version.to_string())];
-    if let Some(manifest) = store
-        .manifests()
-        .get(&Manifest::to_path(project_id, version))
-    {
+    if let Some(manifest) = manifest {
         for child in manifest.dependencies() {
             if let Some((namespace, v)) = child.split_once('@') {
                 deps.push((namespace.to_string(), v.to_string()));

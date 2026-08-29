@@ -37,9 +37,9 @@ There is no tenant header. A request names a **site**:
 - `X-Site-Id: {site}`
 - `Authorization: Bearer <session or api key>` (optional)
 
-`SiteScope` resolves the site, pins the lake to that site's dataset, and builds a read-only `VersionSchema` for the site's version. Missing auth becomes the synthetic `public` user. Anonymous `/data` CRUD is the union of permission sets the site assigns to `public` (`public_permission_sets`); each verb is whatever those sets grant.
+`SiteScope` resolves the site, pins the lake to that site's dataset, and builds a read-only `VersionSchema` for the site's version. Missing auth becomes the synthetic `public` user. Anonymous `/data` CRUD is the union of permission sets the **pinned version's manifest** assigns to `public` (`public_permission_sets`); each verb is whatever those sets grant. The assignment is on the version, not the site, so two sites pinning one version cannot disagree about it.
 
-GET `/schema` is allowed for a project `developer` or `editor` (any version, no site headers), and for `public` on a site that assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required). Authenticated non-members may use that public read.
+GET `/schema` is allowed for a project `developer` or `editor` (any version, no site headers), and for `public` on a site whose pinned version assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required). Authenticated non-members may use that public read.
 
 `/schema` writes and `/config` additionally require:
 
