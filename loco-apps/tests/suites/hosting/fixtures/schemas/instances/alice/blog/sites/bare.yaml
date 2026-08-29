@@ -1,0 +1,3 @@
+label: "A site whose version has no bundle"
+version: "2-dev"
+dataset: "dev"

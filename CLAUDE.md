@@ -31,8 +31,10 @@ cargo fmt --all               # Format (CI checks with --check)
 cargo run -p loco-apps        # API server on :3000
 npm run dev -w loco-studio    # Studio on :5174 (proxies /auth /config /schema /data → :3000)
 npm run build -w loco-studio  # Static SPA in loco-studio/dist/ (no Node at runtime)
-python3 -m http.server 5174 --directory loco-studio/dist
-                              # serve that build; reaches :3000 via API_ORIGIN
+                              # to serve it, zip dist/ and PUT it to a draft's
+                              # bundle, then point a site at that version
+                              # (docs/hosting.md). API_ORIGIN is '' — the built
+                              # SPA talks to whatever origin serves it.
 python3 -m http.server 5176 --directory examples/public-page
                               # public page on :5176 (CORS → :3000)
 npm run dev -w loco-ui        # loco-ui playground on :5175
@@ -182,8 +184,20 @@ Mounted in `server.rs`:
 | `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, bundle). |
 | `/config` | Unversioned project / dataset / site / version lifecycle. |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
+| *(fallback)* | Files from the request's site's **pinned version** bundle. `handlers/hosting.rs`. |
 
 CORS is `*` origin, method, and header. No cookies; clients send `Authorization: Bearer`. Studio's Vite proxy is unchanged.
+
+### Site hosting
+
+`http/host.rs` resolves the request's site from `Host` before routing; `handlers/hosting.rs` is the router fallback that serves that site's pinned version bundle. Full model: [`docs/hosting.md`](docs/hosting.md).
+
+- **Which site.** `{site}.{project}.{account}.<listen-host>` — `www.blog.ben.localhost:3000` is site `www` on `ben/blog`. The listen host is not configured: a host is a site host exactly when its first three labels name a site that exists. Anything else (the apex, an IP, a stale subdomain) is no site, and then `LOCO_DEFAULT_SITE={account}/{project}/{site}` decides whether `/` serves anything. There is no default for it in the binary and there must not be one — a Loco process is not a Studio process.
+- **Site headers.** Both cases fill in absent `X-Project-Id` / `X-Site-Id`, so a hosted frontend need not know its own address. A subdomain additionally *pins* them: a header naming another site is a 400. The apex default does not — a sent header wins, which is what keeps the apex usable by Studio and local Vite apps.
+- **Serving.** Reserved prefixes (`/data` `/schema` `/config` `/auth`) always answer JSON, never HTML, so a mistyped API path stays a JSON 404. Otherwise `/` is the tree's `index.html`; a miss falls back to it when the path is extensionless or `Accept` asks for HTML, and 404s otherwise (a missing hashed asset must not come back as an HTML shell). Files are public — no token. A published version's assets go out `immutable`; `index.html` and everything in a draft revalidate, because the pin is what moves.
+- **Missing bundle** is an ordinary state: one warning at boot if the default site has none, then `/` 404s. Never a boot failure.
+
+Studio is not special-cased anywhere: it is a bundle on a `loco/studio` version like any other frontend, and no path in `server.rs` names it. Vite-dev on `:5174` stays the inner loop.
 
 Handlers sit on request extractors in `http/scope/`:
 
@@ -218,7 +232,7 @@ All frontend apps use the same stack:
 - **TanStack Query**
 - API client in `src/api.js` (plain JS, not a hook). Auth helpers in `src/auth.js`.
 - Components in `src/components/` as `.jsx` files
-- Dev-only Vite proxy of `/auth` `/config` `/schema` `/data` to `localhost:3000` (no `/api` prefix; production bundle uses `API_ORIGIN` in `loco-studio/src/config.js`)
+- Dev-only Vite proxy of `/auth` `/config` `/schema` `/data` to `localhost:3000` (no `/api` prefix). `API_ORIGIN` in `loco-studio/src/config.js` is `''` — same origin — which is what both the proxy and a hosted bundle need; set it absolute only for a deliberately cross-origin build like `examples/public-page`
 
 ### Frontend locations
 

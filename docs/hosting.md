@@ -90,7 +90,7 @@ properties:
     createOnly: true
 ```
 
-**Status:** the `kind` (issue #35), `bundle.yaml`, and the three HTTP verbs below (issue #36) are built. What is not built is serving the files at a site URL (#30) and copy-version carrying a bundle into a published snapshot (#37) — until that lands, only a draft can hold one.
+**Status:** the `kind` (issue #35), `bundle.yaml`, the three HTTP verbs below (issue #36), and serving the tree at a site URL (issue #30) are built. What is not built is copy-version carrying a bundle into a published snapshot (#37) — until that lands, only a draft can be deployed to, so a published version holds a bundle only if the tree was written under it on disk.
 
 No body properties. Codegen still emits `to_path` / `from_path` and a store keyed by that path. The store holds a directory, not a struct of fields. Later file-tree types (seed fixtures, a shipped icon set) are the same kind, different pathTemplate.
 
@@ -177,7 +177,11 @@ No `public_permission_sets`. No `host` field until custom domains need an overri
 Request routing:
 
 1. If `Host` matches `{site}.{project}.{account}.<listen-host>`, that site is the request's site. `/data` and `/schema` may omit `X-Project-Id` / `X-Site-Id`; the host filled them in. Headers, if sent, must agree.
-2. If `Host` is the apex (`localhost:3000`, the listen address), there is no site. API only, unless `LOCO_DEFAULT_SITE` names one — then the apex serves that site's bundle at `/` the same way a subdomain would. This is the "one process is the blog" case, and the generic form of issue #30.
+2. If `Host` names no site — the apex (`localhost:3000`), an IP, a stale subdomain — there is no site. API only, unless `LOCO_DEFAULT_SITE` names one, in which case the apex serves that site's bundle at `/` the same way a subdomain would. This is the "one process is the blog" case, and the generic form of issue #30.
+
+   The listen host is not configured anywhere, and must not be: a host is a *site* host exactly when its first three labels name a site that exists, so `localhost:3000`, `127.0.0.1:3000`, and a real domain all work with no extra flag.
+
+   Both cases fill in absent `X-Project-Id` / `X-Site-Id`, so a hosted frontend never has to know its own address. They differ on headers the client *does* send: a subdomain is an assertion about which site this is, so a header naming another site is a 400 — one site's URL can never reach another site's data. `LOCO_DEFAULT_SITE` is a default rather than a constraint, so there a sent header wins, which is what keeps the apex usable by Studio and by local Vite apps talking to it about whichever site they are browsing.
 3. Fallback after API nests: files from the **pinned version's bundle**. SPA fallback to that tree's `index.html` for extensionless / `Accept: text/html` misses. Missing hashed assets 404. Missing bundle 404s `/`, does not fail boot.
 
 Apex without a default site is today's API-only process. Vite-dev talks to the apex with headers (or its proxy). Hosting is not involved.
@@ -224,6 +228,8 @@ That is serving *a pinned version's bundle* at a URL, with reserved prefixes win
 | Vite-dev on `:5174` unchanged | Local column. Hosting is not involved |
 
 Do not read `loco-studio/dist` from `server.rs`. Do not default `LOCO_DEFAULT_SITE` inside the binary. The README can show Studio as the apex default for people working on Loco; a blog process sets it to `ben/blog/www`. Close #30 when a site URL serves a version's file tree with those rules — not when a `ServeDir` lands.
+
+**Built.** `http/host.rs` resolves the host to a site before routing; `handlers/hosting.rs` is the router fallback that serves the pinned version's tree. `server.rs` names no frontend. A published version's assets go out `immutable`; `index.html` and everything in a draft revalidate, because the pin is what moves.
 
 ## Studio
 
