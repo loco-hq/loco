@@ -220,7 +220,7 @@ EOF
 )" --wait --timeout 600000
 ```
 
-`agent start` does not create layout — the pane must already exist and be at a shell prompt. `agent prompt --wait` returns on idle/done/blocked; blocked means go look at the pane. Orchestrator `agent read` does **not** mark a `done` agent as seen.
+`agent start` does not create layout — the pane must already exist and be at a shell prompt. A just-created worktree pane can return `agent_pane_busy` / "not an available shell"; wait a second and retry. `agent prompt --wait` returns on idle/done/blocked; blocked means go look at the pane. Orchestrator `agent read` does **not** mark a `done` agent as seen.
 
 ## Review bar
 
