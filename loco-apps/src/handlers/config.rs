@@ -307,22 +307,48 @@ pub async fn delete_site(
 #[derive(Deserialize)]
 pub struct CreateVersionBody {
     version: String,
+    /// Optional source version to snapshot into `version`. Absent means a
+    /// blank version, which is what every caller before publishing wanted.
+    #[serde(default)]
+    from: Option<String>,
 }
 
 pub async fn create_version(
     scope: ConfigProjectScope,
     Json(body): Json<CreateVersionBody>,
 ) -> Response {
-    if body.version.is_empty() || body.version.contains('/') {
+    if !is_single_segment(&body.version) {
         return error_response(
             StatusCode::BAD_REQUEST,
             "version must be a single path segment",
         );
     }
-    match scope.config.create_version(body.version) {
+    let Some(from) = body.from else {
+        return match scope.config.create_version(body.version) {
+            Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
+            Err(e) => schema_error_to_response(e),
+        };
+    };
+    if !is_single_segment(&from) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "from must be a single path segment",
+        );
+    }
+    if from == body.version {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "from and version must differ; a version cannot be copied onto itself",
+        );
+    }
+    match scope.config.copy_version(&from, &body.version) {
         Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
         Err(e) => schema_error_to_response(e),
     }
+}
+
+fn is_single_segment(version: &str) -> bool {
+    !version.is_empty() && !version.contains('/')
 }
 
 pub async fn list_versions(scope: ConfigProjectScope) -> Response {
