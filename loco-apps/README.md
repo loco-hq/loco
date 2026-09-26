@@ -73,10 +73,9 @@ Unversioned config: projects, datasets, sites, version create/list/delete. Creat
 schemas/
 ├── types/                 # Type definitions (rebuild to change)
 └── instances/
-    └── loco/              # Committed: core, studio, cards, demo
+    └── loco/              # Committed: core, studio, demo
         ├── core/
         ├── studio/
-        ├── cards/
         └── demo/          # public guestbook (`www`)
 ```
 

@@ -102,7 +102,7 @@ API keys are issued to a Loco identity, then scoped to an account or one project
 | Today | After |
 |---|---|
 | Users/sessions/keys under `{user}/{project}/{site}/` | Identity is global. Login does not take a site. |
-| `METADATA_EDITOR_SITES` (`loco/studio/studio`, `loco/cards/cards`) | Capability is on the member, not the site. |
+| `METADATA_EDITOR_SITES` (an allowlist of editor sites, e.g. `loco/studio/studio`) | Capability is on the member, not the site. |
 | `require_can_edit_user` (session name == path segment) | Membership. `ben/pets` is a handle, not an ACL. |
 | Studio logs into `loco/studio`, then overrides headers for data | One token. Headers only select the site. |
 | Anonymous `/data` can create/update/delete as `public` | Version-assigned permission sets. Default: no public access. Verbs are whatever the set grants. |

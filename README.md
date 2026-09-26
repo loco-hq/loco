@@ -79,7 +79,6 @@ Shipped projects (committed under `schemas/instances/loco/`):
 
 - `loco/core` — framework collections (`user`)
 - `loco/studio` — the editor site (`studio`)
-- `loco/cards` — another metadata-editor site
 - `loco/demo` — public guestbook site (`www`) for the standalone frontend example
 
 User-scoped instances (`ben/…`) are gitignored scratch data. Test suites carry their own fixtures.
