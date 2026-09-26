@@ -85,14 +85,16 @@ impl ProjectConfig {
     }
 
     /// Schema-level cascade: removes every version (manifest + its
-    /// collections + fields), every dataset, and every site under this
+    /// collections, fields, and fieldsets), every dataset, and every site under this
     /// project, then the project record itself. Returns the dataset names
     /// that were removed so callers can purge their records from the lake.
     pub fn delete_project(&self) -> Result<Vec<String>, Error> {
         let prefix = format!("{}/", self.project_id());
         let versions_prefix = format!("{}/versions/", self.project_id());
 
-        // Cascade versioned metadata for every version.
+        // Cascade versioned metadata for every version. Fieldsets first, and
+        // fatal: an orphan would hand a same-named project stale ordering.
+        self.store.fieldsets().delete_by_prefix(&versions_prefix)?;
         let _ = self.store.fields().delete_by_prefix(&versions_prefix);
         let _ = self.store.collections().delete_by_prefix(&versions_prefix);
         let _ = self
@@ -203,17 +205,22 @@ impl ProjectConfig {
         self.store.manifests().create(manifest)
     }
 
-    /// Delete a version: cascade-removes the manifest plus all collections
-    /// and fields scoped to that version.
+    /// Delete a version: cascade-removes the manifest plus all collections,
+    /// fields, fieldsets, permission sets, and the bundle scoped to that
+    /// version.
     pub fn delete_version(&self, version: &str) -> Result<(), Error> {
         let manifest_path = Manifest::to_path(&self.project_id(), version);
         if !self.store.manifests().has(&manifest_path) {
             return Err(Error::NotFound(manifest_path));
         }
+        let fieldsets_prefix = format!("{}/versions/{version}/fieldsets/", self.project_id());
         let fields_prefix = format!("{}/versions/{version}/fields/", self.project_id());
         let collections_prefix = format!("{}/versions/{version}/collections/", self.project_id());
         let permission_sets_prefix =
             format!("{}/versions/{version}/permission_sets/", self.project_id());
+        // Fatal, unlike the rest: an orphaned fieldset would hand a
+        // recreated version the deleted one's field ordering.
+        self.store.fieldsets().delete_by_prefix(&fieldsets_prefix)?;
         let _ = self.store.fields().delete_by_prefix(&fields_prefix);
         let _ = self
             .store
