@@ -47,8 +47,9 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 /// Metadata for the stored tree: `{ hash, uploaded_at, size, files }`. 404 when
-/// the version has no bundle — including every published version until
-/// copy-version can carry one forward.
+/// the version has no bundle. A published version has one when copy-version
+/// carried it over from the draft it was cut from (or when the tree was written
+/// under it on disk).
 pub async fn get_bundle(scope: VersionReadScope) -> Response {
     let tree = match scope.schema.bundle() {
         Ok(Some(tree)) => tree,
