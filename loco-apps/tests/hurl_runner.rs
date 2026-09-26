@@ -47,6 +47,21 @@ fn run_suite(suite_dir: &Path) -> tempfile::TempDir {
 /// environment. Returns the server root so a caller can assert on what the
 /// suite did (or did not) write to disk.
 fn run_suite_with(suite_dir: &Path, options: AppOptions) -> tempfile::TempDir {
+    run_suite_in(suite_dir, options, &[])
+}
+
+/// As `run_suite`, with the named accounts' committed instance trees
+/// (`schemas/instances/{account}/`) copied in beside the suite's fixtures, so
+/// the suite exercises what the server really loads on boot.
+fn run_suite_over_committed(suite_dir: &Path, accounts: &[&str]) -> tempfile::TempDir {
+    run_suite_in(suite_dir, AppOptions::default(), accounts)
+}
+
+fn run_suite_in(
+    suite_dir: &Path,
+    options: AppOptions,
+    committed_accounts: &[&str],
+) -> tempfile::TempDir {
     // 1. Build server root in a tempdir
     let tmp = tempfile::TempDir::new().unwrap();
 
@@ -64,6 +79,12 @@ fn run_suite_with(suite_dir: &Path, options: AppOptions) -> tempfile::TempDir {
         } else {
             std::fs::create_dir_all(&dst).ok();
         }
+    }
+    for account in committed_accounts {
+        copy_dir_all(
+            &crate_dir().join("schemas/instances").join(account),
+            &tmp.path().join("schemas/instances").join(account),
+        );
     }
 
     // 2. Use in-memory adapter (no SQLite needed for tests). Set once across all suites.
@@ -160,6 +181,11 @@ fn suite_hosting_apex() {
             ..AppOptions::default()
         },
     );
+}
+
+#[test]
+fn suite_brickos_inventory() {
+    run_suite_over_committed(&suites_dir().join("brickos_inventory"), &["brickos"]);
 }
 
 #[test]
