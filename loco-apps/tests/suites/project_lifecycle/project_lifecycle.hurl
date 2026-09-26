@@ -1,6 +1,7 @@
 # Project lifecycle integration test
 # Verifies: creating a project auto-bootstraps a default "dev" site + dataset,
-#           and deleting a project cascades to all its sites and datasets.
+#           and deleting a project cascades to all its sites and datasets,
+#           and to its versions' fieldsets, so a same-named project starts clean.
 #
 # Fixture: loco/cards hosts the metadata-editor "cards" site that alice logs
 # into; alice/bootstrap is a pre-existing project owned by alice that should
@@ -121,6 +122,32 @@ HTTP 200
 [Asserts]
 jsonpath "$.data.version" == "1.0.0"
 
+# 6b. A collection + field on the bootstrap version, so its default fieldset
+#     has ordering for the cascade to clean up.
+POST http://127.0.0.1:{{port}}/schema/alice/newapp/0.0.1-dev/collection
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+Content-Type: application/json
+{"name": "task", "label": "Task", "label_plural": "Tasks"}
+HTTP 201
+
+POST http://127.0.0.1:{{port}}/schema/alice/newapp/0.0.1-dev/field
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+Content-Type: application/json
+{"collection": "task", "name": "title", "type": "string"}
+HTTP 201
+
+GET http://127.0.0.1:{{port}}/schema/alice/newapp/0.0.1-dev/fieldset/task/default
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data.fields" count == 1
+
 # 7. Delete the project — should cascade to all sites and datasets under it
 DELETE http://127.0.0.1:{{port}}/config/project/alice/newapp
 Authorization: Bearer {{token}}
@@ -178,6 +205,32 @@ X-Site-Id: cards
 HTTP 200
 
 GET http://127.0.0.1:{{port}}/config/site/alice/bootstrap/cards
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+
+# 12. Recreate a project at the same path. Its bootstrapped 0.0.1-dev must
+#     not inherit the deleted project's fieldsets.
+POST http://127.0.0.1:{{port}}/config/project
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+Content-Type: application/json
+{"name": "newapp", "label": "New App", "description": "Same path, new project"}
+HTTP 201
+
+GET http://127.0.0.1:{{port}}/schema/alice/newapp/0.0.1-dev/fieldset/task/list
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data" count == 0
+
+# 13. Delete it again; the runner then checks no fieldset YAML is left on
+#     disk under alice/newapp, so a reload cannot resurrect one.
+DELETE http://127.0.0.1:{{port}}/config/project/alice/newapp
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards

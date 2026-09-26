@@ -5,7 +5,8 @@
 #   2. GET /config/version/.../list reflects it
 #   3. GET /schema/.../manifest returns dependencies
 #   4. PUT /schema/.../manifest updates dependencies
-#   5. DELETE /config/version/.../{version} cascades to collections + fields
+#   5. DELETE /config/version/.../{version} cascades to collections, fields,
+#      and fieldsets — a recreated version starts with no stale ordering
 #
 # Fixture: loco/cards hosts the metadata-editor "cards" site that alice logs
 # into; alice/lab is a pre-existing project with no versions yet.
@@ -123,7 +124,7 @@ Content-Type: application/json
 {"collection": "task", "name": "title", "type": "string"}
 HTTP 201
 
-# 10. Sanity: collection + field exist before cascade
+# 10. Sanity: collection + field + default fieldset exist before cascade
 GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/collection/list
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
@@ -141,6 +142,15 @@ HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "title"
+
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/fieldset/task/default
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data.fields" count == 1
+jsonpath "$.data.fields[0]" == "title"
 
 # 11. DELETE cascades the version
 DELETE http://127.0.0.1:{{port}}/config/version/alice/lab/0-draft
@@ -182,3 +192,47 @@ Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
 HTTP 404
+
+# 16. Recreate the same version id. It must start empty: the deleted version's
+#     fieldsets are gone, not waiting to be inherited.
+POST http://127.0.0.1:{{port}}/config/version/alice/lab
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+Content-Type: application/json
+{"version": "0-draft"}
+HTTP 201
+
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/fieldset/task/list
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data" count == 0
+
+# 17. Recreating the collection gets a fresh default fieldset, not the old
+#     one still ordering a field that no longer exists.
+POST http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/collection
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+Content-Type: application/json
+{"name": "task", "label": "Task", "label_plural": "Tasks"}
+HTTP 201
+
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/fieldset/task/default
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data.fields" count == 0
+
+# 18. Delete it again; the runner then checks no fieldset YAML is left on
+#     disk under alice/lab, so a reload cannot resurrect one.
+DELETE http://127.0.0.1:{{port}}/config/version/alice/lab/0-draft
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200

@@ -39,8 +39,8 @@ fn crate_dir() -> &'static Path {
 /// - `schemas/types/` always comes from the real crate (core type definitions)
 /// - `schemas/instances/`, `auth/` come from the suite's `fixtures/` folder
 ///   if present, otherwise empty dirs are created
-fn run_suite(suite_dir: &Path) {
-    run_suite_with(suite_dir, AppOptions::default());
+fn run_suite(suite_dir: &Path) -> tempfile::TempDir {
+    run_suite_with(suite_dir, AppOptions::default())
 }
 
 /// As `run_suite`, with app options pinned instead of read from the
@@ -189,7 +189,8 @@ fn suite_public_policy_on_manifest() {
 
 #[test]
 fn suite_project_lifecycle() {
-    run_suite(&suites_dir().join("project_lifecycle"));
+    let tmp = run_suite(&suites_dir().join("project_lifecycle"));
+    assert_no_fieldset_files(tmp.path(), "alice/newapp");
 }
 
 #[test]
@@ -204,7 +205,33 @@ fn suite_data_validation_reads() {
 
 #[test]
 fn suite_version_lifecycle() {
-    run_suite(&suites_dir().join("version_lifecycle"));
+    let tmp = run_suite(&suites_dir().join("version_lifecycle"));
+    assert_no_fieldset_files(tmp.path(), "alice/lab");
+}
+
+/// A delete that only clears the in-memory store would pass the Hurl
+/// assertions and still leave YAML for the next `SchemaStore::load` to pick
+/// up. Check the disk: no fieldset file may survive under `project`.
+fn assert_no_fieldset_files(root: &Path, project: &str) {
+    fn walk(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.components().any(|c| c.as_os_str() == "fieldsets") {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&root.join("schemas/instances").join(project), &mut found);
+    assert!(
+        found.is_empty(),
+        "fieldset YAML survived deleting {project}: {found:?}"
+    );
 }
 
 #[test]
