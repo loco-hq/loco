@@ -30,12 +30,12 @@ jsonpath "$.data" count == 0
 POST http://127.0.0.1:{{port}}/config/version/alice/lab
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"version": "0-draft"}
+{"version": "0-dev"}
 HTTP 201
 [Asserts]
 jsonpath "$.ok" == true
 jsonpath "$.data.project" == "alice/lab"
-jsonpath "$.data.version" == "0-draft"
+jsonpath "$.data.version" == "0-dev"
 jsonpath "$.data.dependencies" count == 0
 
 # 3. Empty version body fails
@@ -60,20 +60,20 @@ Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
-jsonpath "$.data[0][1].version" == "0-draft"
+jsonpath "$.data[0][1].version" == "0-dev"
 
 # 6. GET manifest via the /schema route
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/manifest
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/manifest
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 jsonpath "$.data.project" == "alice/lab"
-jsonpath "$.data.version" == "0-draft"
+jsonpath "$.data.version" == "0-dev"
 jsonpath "$.data.dependencies" count == 0
 
 # 7. PUT manifest updates dependencies
-PUT http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/manifest
+PUT http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/manifest
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"dependencies": ["other/proj@v1", "more/proj@v2"]}
@@ -84,41 +84,41 @@ jsonpath "$.data.dependencies[0]" == "other/proj@v1"
 jsonpath "$.data.dependencies[1]" == "more/proj@v2"
 
 # 8. GET reflects updated deps
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/manifest
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/manifest
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data.dependencies" count == 2
 
 # 9. Add a collection + field at this version (so cascade has something to clean)
-POST http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/collection
+POST http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/collection
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"name": "task", "label": "Task", "label_plural": "Tasks"}
 HTTP 201
 
-POST http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/field
+POST http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/field
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"collection": "task", "name": "title", "type": "string"}
 HTTP 201
 
 # 10. Sanity: collection + field + default fieldset exist before cascade
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/collection/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "task"
 
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/field/task/list
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/field/task/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "title"
 
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/fieldset/task/default
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/fieldset/task/default
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
@@ -128,19 +128,19 @@ jsonpath "$.data.fields" count == 1
 jsonpath "$.data.fields[0]" == "title"
 
 # 11. DELETE cascades the version
-DELETE http://127.0.0.1:{{port}}/config/version/alice/lab/0-draft
+DELETE http://127.0.0.1:{{port}}/config/version/alice/lab/0-dev
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 
 # 12. Manifest gone
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/manifest
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/manifest
 Authorization: Bearer {{token}}
 HTTP 404
 
 # 13. Collections + fields gone
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/collection/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -154,7 +154,7 @@ HTTP 200
 jsonpath "$.data" count == 0
 
 # 15. Re-deleting an absent version errors
-DELETE http://127.0.0.1:{{port}}/config/version/alice/lab/0-draft
+DELETE http://127.0.0.1:{{port}}/config/version/alice/lab/0-dev
 Authorization: Bearer {{token}}
 HTTP 404
 
@@ -165,10 +165,10 @@ Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
 Content-Type: application/json
-{"version": "0-draft"}
+{"version": "0-dev"}
 HTTP 201
 
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/fieldset/task/list
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/fieldset/task/list
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
@@ -178,7 +178,7 @@ jsonpath "$.data" count == 0
 
 # 17. Recreating the collection gets a fresh default fieldset, not the old
 #     one still ordering a field that no longer exists.
-POST http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/collection
+POST http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/collection
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
@@ -186,7 +186,7 @@ Content-Type: application/json
 {"name": "task", "label": "Task", "label_plural": "Tasks"}
 HTTP 201
 
-GET http://127.0.0.1:{{port}}/schema/alice/lab/0-draft/fieldset/task/default
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/fieldset/task/default
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
@@ -196,7 +196,7 @@ jsonpath "$.data.fields" count == 0
 
 # 18. Delete it again; the runner then checks no fieldset YAML is left on
 #     disk under alice/lab, so a reload cannot resurrect one.
-DELETE http://127.0.0.1:{{port}}/config/version/alice/lab/0-draft
+DELETE http://127.0.0.1:{{port}}/config/version/alice/lab/0-dev
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards

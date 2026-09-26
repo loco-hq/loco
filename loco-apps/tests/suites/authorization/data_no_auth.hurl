@@ -4,16 +4,16 @@
 #
 # Fixtures: alice/testapp has two snapshots that differ only in policy, and
 # a site pinning each. Different policy is a different version.
-#   0-draft  manifest public_permission_sets: [guestbook_read, guestbook_create]
-#   1-draft  manifest public_permission_sets: [secrets_read, wiki_public]
-#   site `dev`  → 0-draft   site `open` → 1-draft   (both on dataset `dev`)
+#   0-dev  manifest public_permission_sets: [guestbook_read, guestbook_create]
+#   1-dev  manifest public_permission_sets: [secrets_read, wiki_public]
+#   site `dev`  → 0-dev   site `open` → 1-dev   (both on dataset `dev`)
 #
 # Both versions declare all four collections and all four sets, so every
 # difference below is the assignment and nothing else:
 #   widgets   — never assigned
-#   guestbook — guestbook_read + guestbook_create stacked, on 0-draft only
-#   secrets   — secrets_read, on 1-draft only
-#   wiki      — wiki_public (all four verbs), on 1-draft only
+#   guestbook — guestbook_read + guestbook_create stacked, on 0-dev only
+#   secrets   — secrets_read, on 1-dev only
+#   wiki      — wiki_public (all four verbs), on 1-dev only
 #
 # Token-less requests are principal `public`. Each verb is whatever the
 # assigned sets grant; unspecified flags are false.
@@ -126,8 +126,8 @@ HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 
-# 5. Assignment is per version: `secrets_read` is assigned by 1-draft, which
-#    `open` pins, and not by 0-draft, which `dev` pins. Both versions define
+# 5. Assignment is per version: `secrets_read` is assigned by 1-dev, which
+#    `open` pins, and not by 0-dev, which `dev` pins. Both versions define
 #    the collection and the set — only the manifest assignment differs.
 #    create is not granted by either.
 GET http://127.0.0.1:{{port}}/data/secrets/list
@@ -152,8 +152,8 @@ HTTP 403
 [Asserts]
 jsonpath "$.ok" == false
 
-# Guestbook grants on 0-draft do not follow the visitor to a site pinning
-# 1-draft, which defines the same collection and set but assigns neither.
+# Guestbook grants on 0-dev do not follow the visitor to a site pinning
+# 1-dev, which defines the same collection and set but assigns neither.
 GET http://127.0.0.1:{{port}}/data/guestbook/list
 X-Project-Id: alice/testapp
 X-Site-Id: open

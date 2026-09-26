@@ -57,7 +57,7 @@ There is no tenant registry. Isolation is **dataset** (where records live) plus 
 | Concept | What it is |
 |---------|------------|
 | **Project** | A namespace, `{user}/{project}` (e.g. `ben/pets`, `loco/studio`) |
-| **Version** | A snapshot of that project's schema. Drafts have a `-` in the name (`0.0.1-dev`); only drafts are writable |
+| **Version** | A snapshot of that project's schema. Drafts end in `-dev` (`0.0.1-dev`); only drafts are writable |
 | **Manifest** | Per-version file listing direct dependencies (`{user}/{project}@{version}`) |
 | **Collection / field / fieldset** | Schema for a kind of record, its columns, and named ordered subsets of those columns |
 | **Dataset** | A lake partition. Records are keyed `(dataset_id, collection, id)` |

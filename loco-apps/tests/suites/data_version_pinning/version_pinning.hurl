@@ -1,15 +1,15 @@
 # A site can only reach collections in the version it pins.
 #
 # Fixtures: project testuser/testapp with two versions.
-#   0-draft — collection "tasks", and permission set "public_read" granting
+#   0-dev — collection "tasks", and permission set "public_read" granting
 #             public read on BOTH "tasks" and "secrets"
-#   1-draft — collection "secrets" (exists nowhere else)
-#   site "pinned-old" pins 0-draft and assigns public_read to public
-#   site "pinned-new" pins 1-draft
+#   1-dev — collection "secrets" (exists nowhere else)
+#   site "pinned-old" pins 0-dev and assigns public_read to public
+#   site "pinned-new" pins 1-dev
 #
 # Before this was fixed, /data checked collection existence with a prefix scan
 # of {user}/{project}/ over the global SchemaStore, which matches every version
-# of the project. "secrets" therefore resolved on the site pinned to 0-draft,
+# of the project. "secrets" therefore resolved on the site pinned to 0-dev,
 # and the permission set granting its name made that an unauthenticated read of
 # a collection the site does not pin.
 
@@ -54,7 +54,7 @@ HTTP 404
 #
 # public_read grants read on "secrets" and the site assigns it to public, so
 # authorization alone would allow this. It is 404 because the site pins
-# 0-draft, where no such collection exists.
+# 0-dev, where no such collection exists.
 
 GET http://127.0.0.1:{{port}}/data/secrets/list
 X-Project-Id: testuser/testapp
@@ -73,7 +73,7 @@ HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 
-# --- "secrets" really does exist — a site pinned to 1-draft reaches it ---
+# --- "secrets" really does exist — a site pinned to 1-dev reaches it ---
 #
 # Without this the 404s above would also pass if the fixture were simply
 # missing.
@@ -112,7 +112,7 @@ jsonpath "$.data" count == 0
 
 # --- A dependency's collection is not reachable by its bare name ---
 #
-# 0-draft depends on pkg/contacts@1.0, which owns "leads". /schema resolves
+# 0-dev depends on pkg/contacts@1.0, which owns "leads". /schema resolves
 # dep-owned metadata by bare name today, but /data deliberately does not: a
 # bare name means this project. Naming a dependency's collection needs the
 # qualified form, which is #28. This asserts the deferral is real rather than
@@ -130,7 +130,7 @@ jsonpath "$.error" contains "unknown collection"
 # The dependency is genuinely installed and visible to /schema — so the 404
 # above is the resolution rule, not a missing or unlinked fixture.
 
-GET http://127.0.0.1:{{port}}/schema/testuser/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/testuser/testapp/0-dev/collection/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]

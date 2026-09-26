@@ -26,12 +26,12 @@ export default function NewVersion() {
     <div className="form-page">
       <h2>New version</h2>
       <p className="form-help">
-        A version groups collections and fields. A version with a hyphen (e.g. <code>0-draft</code>) is editable; without one it's published and read-only.
+        A version groups collections and fields. A version ending in <code>-dev</code> (e.g. <code>0.0.1-dev</code>) is an editable draft; any other name is published and read-only.
       </p>
       <form onSubmit={handleSubmit}>
         <div className="form-field">
           <label htmlFor="version">Version</label>
-          <input id="version" name="version" required pattern="[a-z0-9._-]+" placeholder="e.g. 0-draft" />
+          <input id="version" name="version" required pattern="[a-z0-9._-]+" placeholder="e.g. 0.0.1-dev" />
           <span className="field-help">Lowercase, single path segment.</span>
         </div>
         {create.error && <p className="error">{create.error.message}</p>}

@@ -73,7 +73,7 @@ jsonpath "$.diagnostics" not exists
 
 # 4. Drop the `extra` field from the schema. Existing records still carry
 # this field in the lake — it just becomes "unknown" now.
-DELETE http://127.0.0.1:{{port}}/schema/testuser/testapp/0-draft/field/items/extra
+DELETE http://127.0.0.1:{{port}}/schema/testuser/testapp/0-dev/field/items/extra
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -111,7 +111,7 @@ jsonpath "$.diagnostics[*].path" includes "{{rec2_id}}/extra"
 
 # 7. Now retype the `quantity` field from integer → string. Existing records
 # stored integers; reads should now warn about the type mismatch.
-PUT http://127.0.0.1:{{port}}/schema/testuser/testapp/0-draft/field/items/quantity
+PUT http://127.0.0.1:{{port}}/schema/testuser/testapp/0-dev/field/items/quantity
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {

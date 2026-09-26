@@ -91,8 +91,12 @@ where
     })
 }
 
+/// A draft is a version whose name ends in `-dev` (`0.0.1-dev`). Only drafts
+/// accept `/schema` writes, and only published versions serve immutable
+/// bundle bytes. The suffix is the rule, not any hyphen: `my-app` is
+/// published.
 pub fn is_draft_version(version: &str) -> bool {
-    version.contains('-')
+    version.ends_with("-dev")
 }
 
 #[cfg(test)]
@@ -112,12 +116,22 @@ mod tests {
     fn set(name: &str, grants: Vec<CollectionGrant>) -> PermissionSet {
         PermissionSet::new(
             "alice/testapp".into(),
-            "0-draft".into(),
+            "0-dev".into(),
             name.into(),
             name.into(),
             String::new(),
             grants,
         )
+    }
+
+    #[test]
+    fn draft_is_a_dev_suffix_not_any_hyphen() {
+        assert!(is_draft_version("0.0.1-dev"));
+        assert!(is_draft_version("0-boot-dev"));
+        assert!(!is_draft_version("my-app"));
+        assert!(!is_draft_version("1.0.0"));
+        assert!(!is_draft_version("0-draft"));
+        assert!(!is_draft_version("0-dev-final"));
     }
 
     #[test]

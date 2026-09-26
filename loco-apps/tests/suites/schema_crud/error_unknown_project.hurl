@@ -12,7 +12,7 @@ HTTP 200
 token: jsonpath "$.data.token"
 
 # 1. Create collection on unknown project (alice's namespace, but project doesn't exist)
-POST http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-draft/collection
+POST http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-dev/collection
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {
@@ -26,7 +26,7 @@ jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown project"
 
 # 2. List collections on unknown project
-GET http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-dev/collection/list
 Authorization: Bearer {{token}}
 HTTP 404
 [Asserts]
@@ -34,7 +34,7 @@ jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown project"
 
 # 3. Get collection on unknown project
-GET http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-draft/collection/widgets
+GET http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-dev/collection/widgets
 Authorization: Bearer {{token}}
 HTTP 404
 [Asserts]
@@ -42,7 +42,7 @@ jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown project"
 
 # 4. Create field on unknown project
-POST http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-draft/field
+POST http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-dev/field
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {
@@ -56,7 +56,7 @@ jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown project"
 
 # 5. List fields on unknown project
-GET http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-draft/field/widgets/list
+GET http://127.0.0.1:{{port}}/schema/alice/nonexistent/0-dev/field/widgets/list
 Authorization: Bearer {{token}}
 HTTP 404
 [Asserts]
@@ -64,7 +64,7 @@ jsonpath "$.ok" == false
 jsonpath "$.error" contains "unknown project"
 
 # 6. Accessing another user's namespace is forbidden
-GET http://127.0.0.1:{{port}}/schema/nobody/fakething/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/nobody/fakething/0-dev/collection/list
 Authorization: Bearer {{token}}
 HTTP 403
 [Asserts]
