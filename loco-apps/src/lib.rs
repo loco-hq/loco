@@ -81,7 +81,7 @@ mod generated_tests {
     fn permission_set_yaml_grants() {
         let vars = std::collections::HashMap::from([
             ("project".into(), "alice/testapp".into()),
-            ("version".into(), "0-draft".into()),
+            ("version".into(), "0-dev".into()),
             ("name".into(), "guestbook_read".into()),
         ]);
         let ps = PermissionSet::from_yaml(
@@ -103,7 +103,7 @@ mod generated_tests {
     fn manifest_yaml_public_permission_sets() {
         let vars = std::collections::HashMap::from([
             ("project".into(), "alice/testapp".into()),
-            ("version".into(), "0-draft".into()),
+            ("version".into(), "0-dev".into()),
         ]);
         let m = Manifest::from_yaml(
             "dependencies:\n  - acme/crm@1.0\npublic_permission_sets:\n  - guestbook_read\n  - guestbook_create\n",
@@ -122,7 +122,7 @@ mod generated_tests {
     fn manifest_yaml_public_permission_sets_default_empty() {
         let vars = std::collections::HashMap::from([
             ("project".into(), "alice/testapp".into()),
-            ("version".into(), "0-draft".into()),
+            ("version".into(), "0-dev".into()),
         ]);
         let m = Manifest::from_yaml("dependencies: []\n", &vars).unwrap();
         assert!(m.public_permission_sets().is_empty());

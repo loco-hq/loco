@@ -9,14 +9,14 @@ HTTP 200
 token: jsonpath "$.data.token"
 
 # 1. Create a collection — should auto-create a "default" fieldset.
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"name": "notes", "label": "Note"}
 HTTP 201
 
 # 2. Default fieldset exists, is auto_add, with empty fields list.
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/fieldset/notes/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/fieldset/notes/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -27,26 +27,26 @@ jsonpath "$.data[0].fields" count == 0
 
 # 3. Create three fields. Each should append to the default fieldset in
 #    the order it was created.
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/field
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"collection": "notes", "name": "title", "type": "string"}
 HTTP 201
 
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/field
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"collection": "notes", "name": "body", "type": "string"}
 HTTP 201
 
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/field
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"collection": "notes", "name": "archived", "type": "boolean"}
 HTTP 201
 
 # 4. Default fieldset now lists fields in creation order.
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/fieldset/notes/default
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/fieldset/notes/default
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -56,7 +56,7 @@ jsonpath "$.data.fields[2]" == "archived"
 
 # 5. /field/list returns fields in fieldset order, not alphabetical.
 #    (Alphabetical would be archived, body, title.)
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/notes/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/field/notes/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -66,13 +66,13 @@ jsonpath "$.data[1].name" == "body"
 jsonpath "$.data[2].name" == "archived"
 
 # 6. Reorder via PUT: move "archived" to the front.
-PUT http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/fieldset/notes/default
+PUT http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/fieldset/notes/default
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"fields": ["archived", "title", "body"]}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/notes/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/field/notes/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -81,11 +81,11 @@ jsonpath "$.data[1].name" == "title"
 jsonpath "$.data[2].name" == "body"
 
 # 7. Cascade-delete: removing a field strips it from every fieldset.
-DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/field/notes/title
+DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/field/notes/title
 Authorization: Bearer {{token}}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/fieldset/notes/default
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/fieldset/notes/default
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -94,11 +94,11 @@ jsonpath "$.data.fields[0]" == "archived"
 jsonpath "$.data.fields[1]" == "body"
 
 # 8. Deleting the collection cascades to fieldsets too.
-DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/notes
+DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/notes
 Authorization: Bearer {{token}}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/fieldset/notes/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/fieldset/notes/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]

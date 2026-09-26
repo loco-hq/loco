@@ -7,7 +7,7 @@ HTTP 200
 [Captures]
 token: jsonpath "$.data.token"
 
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/permission_set
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/permission_set
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {
@@ -27,7 +27,7 @@ jsonpath "$.data.collections[0].create" == true
 jsonpath "$.data.collections[0].update" == false
 jsonpath "$.data.collections[0].delete" == false
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/permission_set/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/permission_set/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -35,13 +35,13 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "public_notes"
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/permission_set/public_notes
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/permission_set/public_notes
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Public notes"
 
-PUT http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/permission_set/public_notes
+PUT http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/permission_set/public_notes
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {
@@ -56,10 +56,10 @@ jsonpath "$.data.label" == "Anonymous notes"
 jsonpath "$.data.collections[0].read" == true
 jsonpath "$.data.collections[0].create" == false
 
-DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/permission_set/public_notes
+DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/permission_set/public_notes
 Authorization: Bearer {{token}}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/permission_set/public_notes
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/permission_set/public_notes
 Authorization: Bearer {{token}}
 HTTP 404

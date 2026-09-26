@@ -26,7 +26,7 @@ header "Access-Control-Allow-Origin" == "*"
 jsonpath "$.ok" == true
 
 # 3. Public schema read also carries CORS (field labels, collection list).
-OPTIONS http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+OPTIONS http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 Origin: http://127.0.0.1:5176
 Access-Control-Request-Method: GET
 Access-Control-Request-Headers: x-project-id, x-site-id
@@ -34,7 +34,7 @@ HTTP 200
 [Asserts]
 header "Access-Control-Allow-Origin" == "*"
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 Origin: http://127.0.0.1:5176
 X-Project-Id: alice/testapp
 X-Site-Id: dev

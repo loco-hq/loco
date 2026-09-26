@@ -1,0 +1,3 @@
+dependencies:
+  - acme/crm@0-dev
+  - base/core@0-dev

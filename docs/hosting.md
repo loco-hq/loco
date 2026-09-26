@@ -13,7 +13,7 @@ Same static tree runs under Vite on a laptop (hosting is not involved) and from 
 | Term | What it is |
 |---|---|
 | **Version** | An immutable-once-published snapshot of a project: YAML instances *and* file trees under `versions/{version}/`. |
-| **Draft** | A version whose name contains `-` (`0.0.1-dev`). Writable. Not infinitely cacheable. |
+| **Draft** | A version whose name ends in `-dev` (`0.0.1-dev`). Writable. Not infinitely cacheable. A hyphen alone (`my-app`) does not make a draft. |
 | **Published version** | A version with no `-`. Bytes never change. Cache forever. |
 | **File-tree instance** | Metadata that is a directory of files, not a YAML document. First one: the frontend bundle. |
 | **Bundle** | The file-tree instance at `${project}/versions/${version}/bundle`. A Vite `dist/` snapshot. |

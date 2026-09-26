@@ -1,4 +1,4 @@
-label: "0-draft"
+label: "0-dev"
 dependencies:
   - "pkg/contacts@1.0"
 public_permission_sets:

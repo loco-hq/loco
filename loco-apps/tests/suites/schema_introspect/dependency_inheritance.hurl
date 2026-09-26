@@ -1,7 +1,7 @@
 # Dependency inheritance via /schema/.../collection/list and field/{c}/list.
 #
 # Fixture dependency graph:
-#   acme/sales@0-draft -> acme/crm@0-draft -> base/core@0-draft
+#   acme/sales@0-dev -> acme/crm@0-dev -> base/core@0-dev
 #
 # acme/sales has: deal (with amount field)
 # acme/crm has:   account (with company field)
@@ -19,8 +19,8 @@ HTTP 200
 [Captures]
 token: jsonpath "$.data.token"
 
-# 1. List collections for acme/sales@0-draft — should see all 3 (self + transitive deps)
-GET http://127.0.0.1:{{port}}/schema/acme/sales/0-draft/collection/list
+# 1. List collections for acme/sales@0-dev — should see all 3 (self + transitive deps)
+GET http://127.0.0.1:{{port}}/schema/acme/sales/0-dev/collection/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -30,8 +30,8 @@ jsonpath "$.data[*].name" includes "deal"
 jsonpath "$.data[*].name" includes "account"
 jsonpath "$.data[*].name" includes "user"
 
-# 2. List collections for acme/crm@0-draft — should see only 2 (no sales)
-GET http://127.0.0.1:{{port}}/schema/acme/crm/0-draft/collection/list
+# 2. List collections for acme/crm@0-dev — should see only 2 (no sales)
+GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/collection/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -43,7 +43,7 @@ jsonpath "$.data[*].name" not includes "deal"
 
 # 3. Field lists per collection resolve across the dep closure for sales.
 #    Each collection in the closure has exactly one field declared.
-GET http://127.0.0.1:{{port}}/schema/acme/sales/0-draft/field/deal/list
+GET http://127.0.0.1:{{port}}/schema/acme/sales/0-dev/field/deal/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -52,7 +52,7 @@ jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "amount"
 jsonpath "$.data[0].type" == "float"
 
-GET http://127.0.0.1:{{port}}/schema/acme/sales/0-draft/field/account/list
+GET http://127.0.0.1:{{port}}/schema/acme/sales/0-dev/field/account/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -61,7 +61,7 @@ jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "company"
 jsonpath "$.data[0].type" == "string"
 
-GET http://127.0.0.1:{{port}}/schema/acme/sales/0-draft/field/user/list
+GET http://127.0.0.1:{{port}}/schema/acme/sales/0-dev/field/user/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
@@ -71,7 +71,7 @@ jsonpath "$.data[0].name" == "email"
 jsonpath "$.data[0].type" == "string"
 
 # 4. Unknown project returns 404
-GET http://127.0.0.1:{{port}}/schema/acme/nonexistent/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/acme/nonexistent/0-dev/collection/list
 Authorization: Bearer {{token}}
 HTTP 404
 [Asserts]

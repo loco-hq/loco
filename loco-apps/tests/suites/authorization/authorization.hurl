@@ -40,7 +40,7 @@ Content-Type: application/json
 HTTP 401
 
 # Collection list includes fixture collections (widgets + guestbook + secrets + wiki)
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 Authorization: Bearer {{alice_token}}
 HTTP 200
 [Asserts]
@@ -48,7 +48,7 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 4
 
 # 1. Alice (developer of alice/testapp) can mutate schema
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
 {
@@ -60,7 +60,7 @@ HTTP 201
 [Asserts]
 jsonpath "$.ok" == true
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 Authorization: Bearer {{alice_token}}
 HTTP 200
 [Asserts]
@@ -68,13 +68,13 @@ jsonpath "$.ok" == true
 jsonpath "$.data" count == 5
 
 # 2. Bob cannot touch Alice's schema
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 Authorization: Bearer {{bob_token}}
 HTTP 403
 [Asserts]
 jsonpath "$.ok" == false
 
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection
 Authorization: Bearer {{bob_token}}
 Content-Type: application/json
 {
@@ -120,14 +120,14 @@ jsonpath "$.data.owner" == "bob"
 [Captures]
 bob_widget: jsonpath "$.data.id"
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 Authorization: Bearer {{bob_token}}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 jsonpath "$.data" count == 5
 
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection
 Authorization: Bearer {{bob_token}}
 Content-Type: application/json
 {
@@ -146,7 +146,7 @@ HTTP 200
 [Asserts]
 jsonpath "$.data.role" == "developer"
 
-POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection
+POST http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection
 Authorization: Bearer {{bob_token}}
 Content-Type: application/json
 {
@@ -217,7 +217,7 @@ jsonpath "$.data" count == 2
 
 # No token and no site headers → 401 on schema/config.
 # Token-less GET with public site headers is schema_read.hurl.
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 HTTP 401
 [Asserts]
 jsonpath "$.ok" == false
@@ -228,11 +228,11 @@ HTTP 401
 jsonpath "$.ok" == false
 
 # Clean up
-DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/notes
+DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/notes
 Authorization: Bearer {{bob_token}}
 HTTP 200
 
-DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/tasks
+DELETE http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/tasks
 Authorization: Bearer {{alice_token}}
 HTTP 200
 

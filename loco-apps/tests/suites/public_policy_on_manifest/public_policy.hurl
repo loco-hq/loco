@@ -9,12 +9,12 @@
 #   acme/crm@1.0        — collection `contacts`, and the recommended set
 #                         `public_contacts` (read + create on `contacts`).
 #                         The package assigns nothing to public itself.
-#   alice/agency@1.0-draft — depends on acme/crm@1.0, manifest assigns
+#   alice/agency@1.0-dev — depends on acme/crm@1.0, manifest assigns
 #                         [public_contacts]
-#   alice/agency@2.0-draft — depends on acme/crm@1.0, manifest assigns nothing
-#   sites: `open` → 1.0-draft + dataset dev
-#          `staging` → 1.0-draft + dataset staging  (same snapshot, other data)
-#          `closed` → 2.0-draft + dataset dev
+#   alice/agency@2.0-dev — depends on acme/crm@1.0, manifest assigns nothing
+#   sites: `open` → 1.0-dev + dataset dev
+#          `staging` → 1.0-dev + dataset staging  (same snapshot, other data)
+#          `closed` → 2.0-dev + dataset dev
 #
 # Both consuming versions also declare their own `contacts` collection:
 # /data resolves a bare name to self today (#28), so the records live in the
@@ -24,7 +24,7 @@
 # --- 1. The dependency really is installed, and its set is what public
 #        assignment is naming.
 
-GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-draft/permission_set/list
+GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-dev/permission_set/list
 X-Project-Id: alice/agency
 X-Site-Id: open
 HTTP 200
@@ -35,7 +35,7 @@ jsonpath "$.data[0].project" == "acme/crm"
 
 # The consuming version declares no permission set of its own — the only one
 # in scope is the package's.
-GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-draft/permission_set/list
+GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-dev/permission_set/list
 X-Project-Id: alice/agency
 X-Site-Id: open
 HTTP 200
@@ -80,7 +80,7 @@ X-Site-Id: open
 HTTP 403
 
 # An assigned set also opens the pinned version to token-less /schema reads.
-GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-dev/collection/list
 X-Project-Id: alice/agency
 X-Site-Id: open
 HTTP 200
@@ -104,14 +104,14 @@ Content-Type: application/json
 {"email": "visitor@example.com"}
 HTTP 403
 
-GET http://127.0.0.1:{{port}}/schema/alice/agency/2.0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/agency/2.0-dev/collection/list
 X-Project-Id: alice/agency
 X-Site-Id: closed
 HTTP 403
 [Asserts]
 jsonpath "$.ok" == false
 
-# 2.0-draft is a real version with the same collection — the 403s above are
+# 2.0-dev is a real version with the same collection — the 403s above are
 # the empty assignment, not a missing fixture.
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
@@ -120,7 +120,7 @@ HTTP 200
 [Captures]
 alice_token: jsonpath "$.data.token"
 
-GET http://127.0.0.1:{{port}}/schema/alice/agency/2.0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/agency/2.0-dev/collection/list
 Authorization: Bearer {{alice_token}}
 HTTP 200
 [Asserts]
@@ -153,7 +153,7 @@ HTTP 200
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].fields.email" == "visitor@example.com"
 
-GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-dev/collection/list
 X-Project-Id: alice/agency
 X-Site-Id: staging
 HTTP 200
@@ -163,14 +163,14 @@ jsonpath "$.ok" == true
 # --- 5. Policy is edited on the manifest (draft-only), and every site
 #        pinning that version moves together.
 
-GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-draft/manifest
+GET http://127.0.0.1:{{port}}/schema/alice/agency/1.0-dev/manifest
 Authorization: Bearer {{alice_token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data.public_permission_sets" count == 1
 jsonpath "$.data.public_permission_sets[0]" == "public_contacts"
 
-PUT http://127.0.0.1:{{port}}/schema/alice/agency/1.0-draft/manifest
+PUT http://127.0.0.1:{{port}}/schema/alice/agency/1.0-dev/manifest
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
 {"public_permission_sets": []}
@@ -192,7 +192,7 @@ X-Site-Id: staging
 HTTP 403
 
 # And the sibling version can opt in the same way.
-PUT http://127.0.0.1:{{port}}/schema/alice/agency/2.0-draft/manifest
+PUT http://127.0.0.1:{{port}}/schema/alice/agency/2.0-dev/manifest
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
 {"public_permission_sets": ["public_contacts"]}
@@ -225,7 +225,7 @@ HTTP 403
 jsonpath "$.ok" == false
 
 # Unknown set names stay inert — nothing resolves them, so nothing is granted.
-PUT http://127.0.0.1:{{port}}/schema/alice/agency/1.0-draft/manifest
+PUT http://127.0.0.1:{{port}}/schema/alice/agency/1.0-dev/manifest
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
 {"public_permission_sets": ["no_such_set"]}

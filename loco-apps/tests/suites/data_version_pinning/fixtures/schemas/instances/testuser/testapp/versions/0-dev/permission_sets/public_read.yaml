@@ -1,5 +1,5 @@
 label: "Public read"
-description: "Grants read on a collection in this version and on one that only exists in 1-draft"
+description: "Grants read on a collection in this version and on one that only exists in 1-dev"
 collections:
   - collection: "tasks"
     read: true

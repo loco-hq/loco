@@ -156,7 +156,7 @@ Content-Type: application/json
 {"handle": "dana", "role": "editor"}
 HTTP 201
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 Authorization: Bearer {{dana_token}}
 HTTP 200
 
@@ -178,7 +178,7 @@ HTTP 200
 [Captures]
 dana2_token: jsonpath "$.data.token"
 
-GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-draft/collection/list
+GET http://127.0.0.1:{{port}}/schema/alice/testapp/0-dev/collection/list
 Authorization: Bearer {{dana2_token}}
 HTTP 403
 [Asserts]
