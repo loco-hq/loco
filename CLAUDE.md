@@ -86,7 +86,7 @@ An instance's namespace IS its path relative to `schemas/instances/` with `.yaml
 - `schemas/instances/ben/crm/datasets/acme.yaml` → `ben/crm/datasets/acme`
 - `schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
 
-`schemas/instances/loco/` is committed (core, studio, cards, demo). Other instance trees (`ben/…`) are gitignored scratch data. Hurl suites use their own fixtures under `loco-apps/tests/suites/*/fixtures/`.
+`schemas/instances/loco/` is committed (core, studio, demo). Other instance trees (`ben/…`) are gitignored scratch data. Hurl suites use their own fixtures under `loco-apps/tests/suites/*/fixtures/`.
 
 ## Schema Files
 

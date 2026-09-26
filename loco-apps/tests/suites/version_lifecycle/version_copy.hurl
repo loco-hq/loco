@@ -23,8 +23,6 @@ token: jsonpath "$.data.token"
 # 1. The draft is there, with everything the copy has to carry.
 GET http://127.0.0.1:{{port}}/config/version/alice/pub/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
@@ -35,8 +33,6 @@ jsonpath "$.data[0][1].version" == "0.0.1-dev"
 #     SHA-256 over the tree's contents, so an identical tree hashes alike.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1-dev/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data.files" == 2
@@ -47,8 +43,6 @@ draft_bundle_hash: jsonpath "$.data.hash"
 # 2. Copy the draft into a published version id.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.1", "from": "0.0.1-dev"}
 HTTP 201
@@ -64,8 +58,6 @@ jsonpath "$.data.public_permission_sets[0]" == "article_read"
 # 3. Both versions now exist; the source is untouched.
 GET http://127.0.0.1:{{port}}/config/version/alice/pub/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 2
@@ -73,8 +65,6 @@ jsonpath "$.data" count == 2
 # 4. Collections match.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/collection/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
@@ -87,8 +77,6 @@ jsonpath "$.data[0].project" == "alice/pub"
 # 5. Fields match, in auto_add fieldset order.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/field/article/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 2
@@ -101,8 +89,6 @@ jsonpath "$.data[0].version" == "0.0.1"
 #    `default` set here instead.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/fieldset/article/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
@@ -115,8 +101,6 @@ jsonpath "$.data[0].fields[1]" == "body"
 # 7. Permission sets match, grants included.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/permission_set/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
@@ -131,8 +115,6 @@ jsonpath "$.data[0].collections[0].create" == false
 #     wrong HTML when a site pinned it (issue #37).
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
@@ -144,8 +126,6 @@ jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
 # 7c. The source still has its tree — a copy, not a move.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1-dev/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
@@ -157,8 +137,6 @@ jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
 #     rather than complain about the bytes.
 PUT http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/zip
 ```
 not a zip
@@ -170,15 +148,11 @@ jsonpath "$.error" contains "published"
 
 DELETE http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 400
 
 # 7e. ...and the refused write did not disturb it.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
@@ -186,8 +160,6 @@ jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
 # 8. The published target is read-only to /schema.
 PUT http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/collection/article
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"label": "Edited"}
 HTTP 400
@@ -196,8 +168,6 @@ jsonpath "$.ok" == false
 
 POST http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/collection
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"name": "note", "label": "Note", "label_plural": "Notes"}
 HTTP 400
@@ -205,8 +175,6 @@ HTTP 400
 # 9. The source draft is still writable — publishing does not freeze it.
 PUT http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1-dev/collection/article
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"label": "Article (still editable)"}
 HTTP 200
@@ -216,8 +184,6 @@ jsonpath "$.data.label" == "Article (still editable)"
 # 10. ...and that edit did not leak into the published snapshot.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/collection/article
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Article"
@@ -225,8 +191,6 @@ jsonpath "$.data.label" == "Article"
 # 11. Copying onto an existing version conflicts.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.1", "from": "0.0.1-dev"}
 HTTP 409
@@ -236,8 +200,6 @@ jsonpath "$.ok" == false
 # 12. Copying from a version that does not exist is a 404, and leaves nothing.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "9.9.9", "from": "nope-dev"}
 HTTP 404
@@ -246,8 +208,6 @@ jsonpath "$.ok" == false
 
 GET http://127.0.0.1:{{port}}/config/version/alice/pub/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 2
@@ -255,8 +215,6 @@ jsonpath "$.data" count == 2
 # 13. A version cannot be copied onto itself.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.1-dev", "from": "0.0.1-dev"}
 HTTP 400
@@ -266,16 +224,12 @@ jsonpath "$.ok" == false
 # 14. `from` must be a single path segment, like `version`.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.2", "from": "0.0.1/dev"}
 HTTP 400
 
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.2", "from": ""}
 HTTP 400
@@ -283,8 +237,6 @@ HTTP 400
 # 15. Omitting `from` still creates a blank version — the pre-copy behavior.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.2-dev"}
 HTTP 201
@@ -294,8 +246,6 @@ jsonpath "$.data.public_permission_sets" count == 0
 
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.2-dev/collection/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 0
@@ -303,14 +253,10 @@ jsonpath "$.data" count == 0
 # 16. Deleting the published copy leaves the draft intact.
 DELETE http://127.0.0.1:{{port}}/config/version/alice/pub/0.0.1
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1-dev/collection/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
@@ -319,15 +265,11 @@ jsonpath "$.data" count == 1
 # cannot inherit a stale frontend.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 404
 
 # The draft keeps its own tree.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1-dev/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
@@ -342,8 +284,6 @@ jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
 #     pre-existing fieldset alone.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.9", "from": "0.0.1-dev"}
 HTTP 409
@@ -353,8 +293,6 @@ jsonpath "$.ok" == false
 # The collection the copy created is gone again.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/collection/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 0
@@ -362,8 +300,6 @@ jsonpath "$.data" count == 0
 # So are the fields, so a retry is not blocked by its own leftovers.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/field/article/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 0
@@ -372,8 +308,6 @@ jsonpath "$.data" count == 0
 # what the copy wrote, not everything under the target version id.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/fieldset/article/default
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Squatter"
@@ -381,8 +315,6 @@ jsonpath "$.data.label" == "Squatter"
 # And no manifest was left behind, so `0.0.9` is still not a version.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/manifest
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 404
 
 # 18. Copying a version that has no bundle still succeeds. `0.0.2-dev` was
@@ -390,8 +322,6 @@ HTTP 404
 #     result simply has none — not an empty tree, and not a failure.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.2", "from": "0.0.2-dev"}
 HTTP 201
@@ -400,8 +330,6 @@ jsonpath "$.data.version" == "0.0.2"
 
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.2/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 404
 
 # 19. The failed copy from step 17 left no tree behind either. File trees are
@@ -409,8 +337,6 @@ HTTP 404
 #     reordering that wrote the tree before failing would show up here.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 404
 
 # 20. A tree already sitting at the target blocks the copy instead of being
@@ -422,8 +348,6 @@ HTTP 404
 #     cannot see.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 Content-Type: application/json
 {"version": "0.0.8", "from": "0.0.1-dev"}
 HTTP 409
@@ -433,8 +357,6 @@ jsonpath "$.ok" == false
 # The squatting tree is untouched...
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.8/bundle
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data.files" == 1
@@ -444,8 +366,6 @@ jsonpath "$.data.hash" != "{{draft_bundle_hash}}"
 # roll back and nothing left over.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.8/collection/list
 Authorization: Bearer {{token}}
-X-Project-Id: loco/cards
-X-Site-Id: cards
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 0
