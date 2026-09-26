@@ -1,0 +1,4 @@
+dependencies:
+  - other/proj@v1
+public_permission_sets:
+  - article_read

@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use loco_schema_runtime::Error;
+use loco_schema_runtime::{Error, SchemaInstance};
 
 use crate::{
     Bundle, Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate,
@@ -231,4 +231,129 @@ impl ProjectConfig {
             .delete(&Bundle::to_path(&self.project_id(), version));
         self.store.manifests().delete(&manifest_path)
     }
+
+    // --- Version copy (the publish primitive) ---
+
+    /// Copy every piece of versioned metadata from `from` into a brand-new
+    /// version `to`: collections, fields, fieldsets, permission sets, and the
+    /// manifest (dependencies plus the public permission-set assignment).
+    ///
+    /// Datasets, sites, and lake records have no version dimension and are
+    /// deliberately untouched. Publishing a snapshot neither forks the data
+    /// nor moves a URL — pointing a site at `to` is a separate, explicit act.
+    ///
+    /// This lives on `/config` rather than `/schema` precisely because the
+    /// target is normally *published*: `0.0.1-dev` → `0.0.1` is how a
+    /// published version gets its content, so the copy must not go through
+    /// `VersionSchema`'s draft-only write gate. Afterwards the published
+    /// target is read-only to `/schema` like any other non-draft version.
+    ///
+    /// The manifest is written last, so a manifest at `to` means the copy
+    /// finished. A failure part-way rolls back the instances this call
+    /// created instead of leaving half a version that would block the retry
+    /// with `AlreadyExists`.
+    pub fn copy_version(&self, from: &str, to: &str) -> Result<Arc<Manifest>, Error> {
+        let source_manifest = self
+            .manifest(from)
+            .ok_or_else(|| Error::NotFound(Manifest::to_path(&self.project_id(), from)))?;
+
+        let target_manifest = Manifest::to_path(&self.project_id(), to);
+        if self.store.manifests().has(&target_manifest) {
+            return Err(Error::AlreadyExists(target_manifest));
+        }
+
+        let mut copied = CopiedKeys::default();
+        match self.copy_version_metadata(from, to, &source_manifest, &mut copied) {
+            Ok(manifest) => Ok(manifest),
+            Err(e) => {
+                self.rollback_version_copy(&copied);
+                Err(e)
+            }
+        }
+    }
+
+    /// Keys are recorded *after* a successful `create`, never before: on a
+    /// key collision the colliding instance belongs to whoever wrote it
+    /// first, and the rollback must not delete it.
+    fn copy_version_metadata(
+        &self,
+        from: &str,
+        to: &str,
+        source_manifest: &Manifest,
+        copied: &mut CopiedKeys,
+    ) -> Result<Arc<Manifest>, Error> {
+        let source_prefix = |kind: &str| format!("{}/versions/{from}/{kind}/", self.project_id());
+
+        // These write straight to the stores rather than going through
+        // `VersionSchema::create_collection`, which would inject a fresh
+        // `default` fieldset and collide with the fieldsets copied below.
+        for (_, collection) in self.store.collections().list(&source_prefix("collections")) {
+            let mut copy = (*collection).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.collections().create(copy)?;
+            copied.collections.push(key);
+        }
+        for (_, field) in self.store.fields().list(&source_prefix("fields")) {
+            let mut copy = (*field).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.fields().create(copy)?;
+            copied.fields.push(key);
+        }
+        for (_, fieldset) in self.store.fieldsets().list(&source_prefix("fieldsets")) {
+            let mut copy = (*fieldset).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.fieldsets().create(copy)?;
+            copied.fieldsets.push(key);
+        }
+        for (_, set) in self
+            .store
+            .permission_sets()
+            .list(&source_prefix("permission_sets"))
+        {
+            let mut copy = (*set).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.permission_sets().create(copy)?;
+            copied.permission_sets.push(key);
+        }
+
+        let mut manifest = source_manifest.clone();
+        manifest.version = to.to_string();
+        self.store.manifests().create(manifest)
+    }
+
+    /// Undo a partial [`Self::copy_version`], deleting exactly the instances
+    /// that call created — never whatever else may already sit under the
+    /// target version id. A prefix wipe would be shorter and would also
+    /// destroy metadata this call had no part in writing.
+    ///
+    /// The manifest is never in here: it is written last, so a copy that
+    /// reached it did not fail.
+    fn rollback_version_copy(&self, copied: &CopiedKeys) {
+        for key in &copied.fields {
+            let _ = self.store.fields().delete(key);
+        }
+        for key in &copied.collections {
+            let _ = self.store.collections().delete(key);
+        }
+        for key in &copied.fieldsets {
+            let _ = self.store.fieldsets().delete(key);
+        }
+        for key in &copied.permission_sets {
+            let _ = self.store.permission_sets().delete(key);
+        }
+    }
+}
+
+/// Persistence keys written so far by one [`ProjectConfig::copy_version`],
+/// so a failure can undo precisely that set.
+#[derive(Default)]
+struct CopiedKeys {
+    collections: Vec<String>,
+    fields: Vec<String>,
+    fieldsets: Vec<String>,
+    permission_sets: Vec<String>,
 }

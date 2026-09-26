@@ -129,6 +129,8 @@ An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalC
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
+`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, and manifest into the new id — the publish primitive. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. Datasets, sites, and records are never copied. The version's `bundle` file tree is not copied yet — issue #37.
+
 ### Manifests and dependency visibility
 
 Each version has a `manifest` instance declaring `dependencies` as `{user}/{project}@{version}` strings and `public_permission_sets` as the names of the permission sets this version assigns to `public`. A consuming version opts into a set a dependency ships by naming it here. `manifest` is a regular schema type — loco-gen treats it no differently than `collection` or `site`.

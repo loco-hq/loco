@@ -1,0 +1,8 @@
+label: "Article read"
+description: "Public read of articles"
+collections:
+  - collection: article
+    read: true
+    create: false
+    update: false
+    delete: false

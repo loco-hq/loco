@@ -1,0 +1,5 @@
+label: Default
+fields:
+  - title
+  - body
+auto_add: true

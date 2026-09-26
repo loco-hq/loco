@@ -90,7 +90,7 @@ properties:
     createOnly: true
 ```
 
-**Status:** the `kind` (issue #35), `bundle.yaml`, the three HTTP verbs below (issue #36), and serving the tree at a site URL (issue #30) are built. What is not built is copy-version carrying a bundle into a published snapshot (#37) — until that lands, only a draft can be deployed to, so a published version holds a bundle only if the tree was written under it on disk.
+**Status:** the `kind` (issue #35), `bundle.yaml`, the three HTTP verbs below (issue #36), and serving the tree at a site URL (issue #30) are built. Copy-version (#10) is built for YAML — `POST /config/version/{user}/{project}` with `from` snapshots a version's collections, fields, fieldsets, permission sets, and manifest. What is not built is that copy carrying the bundle tree along (#37) — until it does, only a draft can be deployed to, so a published version holds a bundle only if the tree was written under it on disk.
 
 No body properties. Codegen still emits `to_path` / `from_path` and a store keyed by that path. The store holds a directory, not a struct of fields. Later file-tree types (seed fixtures, a shipped icon set) are the same kind, different pathTemplate.
 
