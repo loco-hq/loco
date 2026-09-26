@@ -38,6 +38,10 @@ npm run build -w loco-studio  # Static SPA in loco-studio/dist/ (no Node at runt
 python3 -m http.server 5176 --directory examples/public-page
                               # public page on :5176 (CORS → :3000)
 npm run dev -w loco-ui        # loco-ui playground on :5175
+npm run deploy --prefix examples/brickos-inventory
+                              # build + PUT the BrickOS batch editor as the
+                              # brickos/inventory@0.0.1-dev bundle; needs
+                              # LOCO_USER / LOCO_PASSWORD (its README)
 ```
 
 ## CI
@@ -58,7 +62,8 @@ loco/
 ├── loco-apps/                                 # Axum server consuming generated types
 ├── loco-studio/                               # Schema + record editor
 ├── loco-ui/                                   # Field component library (npm workspace)
-└── examples/public-page/                      # Static cross-origin page (no Node)
+├── examples/public-page/                      # Static cross-origin page (no Node)
+└── examples/brickos-inventory/                # Hosted Vite app: BrickOS batch editor
 ```
 
 ### Dependency flow
