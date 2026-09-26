@@ -235,8 +235,14 @@ impl ProjectConfig {
     // --- Version copy (the publish primitive) ---
 
     /// Copy every piece of versioned metadata from `from` into a brand-new
-    /// version `to`: collections, fields, fieldsets, permission sets, and the
-    /// manifest (dependencies plus the public permission-set assignment).
+    /// version `to`: collections, fields, fieldsets, permission sets, the
+    /// version's file trees (its `bundle`), and the manifest (dependencies
+    /// plus the public permission-set assignment).
+    ///
+    /// Metadata is a version directory, not just its YAML — so a published
+    /// snapshot that dropped the frontend would not be a snapshot, and
+    /// rolling back by re-pinning the previous version would serve the wrong
+    /// HTML.
     ///
     /// Datasets, sites, and lake records have no version dimension and are
     /// deliberately untouched. Publishing a snapshot neither forks the data
@@ -261,6 +267,18 @@ impl ProjectConfig {
         if self.store.manifests().has(&target_manifest) {
             return Err(Error::AlreadyExists(target_manifest));
         }
+        // `FileTreePersistence::write_tree` is a whole-tree replace, so unlike
+        // the YAML `create` calls below it would silently overwrite a tree
+        // already at the target. Refuse up front instead.
+        if let Some((existing, _)) = self
+            .store
+            .bundles()
+            .list(&Self::version_prefix(&self.project_id(), to))
+            .into_iter()
+            .next()
+        {
+            return Err(Error::AlreadyExists(existing));
+        }
 
         let mut copied = CopiedKeys::default();
         match self.copy_version_metadata(from, to, &source_manifest, &mut copied) {
@@ -282,7 +300,8 @@ impl ProjectConfig {
         source_manifest: &Manifest,
         copied: &mut CopiedKeys,
     ) -> Result<Arc<Manifest>, Error> {
-        let source_prefix = |kind: &str| format!("{}/versions/{from}/{kind}/", self.project_id());
+        let source_prefix =
+            |kind: &str| format!("{}{kind}/", Self::version_prefix(&self.project_id(), from));
 
         // These write straight to the stores rather than going through
         // `VersionSchema::create_collection`, which would inject a fresh
@@ -320,9 +339,27 @@ impl ProjectConfig {
             copied.permission_sets.push(key);
         }
 
+        // File trees, by prefix rather than by naming `bundle`: the store
+        // rewrites each key's version segment and skips anything that stops
+        // matching its template. `bundle` is the only `kind: files` type
+        // today, and each later one needs its own line here — `SchemaStore`
+        // does not expose file-tree stores generically.
+        let project_id = self.project_id();
+        copied.bundles.extend(self.store.bundles().copy_by_prefix(
+            &Self::version_prefix(&project_id, from),
+            &Self::version_prefix(&project_id, to),
+        )?);
+
         let mut manifest = source_manifest.clone();
         manifest.version = to.to_string();
         self.store.manifests().create(manifest)
+    }
+
+    /// The key prefix every instance of one version shares. File-tree keys sit
+    /// directly under it (`…/versions/0.0.1/bundle`), which is why the copy and
+    /// its guard use the version prefix rather than a per-kind one.
+    fn version_prefix(project_id: &str, version: &str) -> String {
+        format!("{project_id}/versions/{version}/")
     }
 
     /// Undo a partial [`Self::copy_version`], deleting exactly the instances
@@ -345,6 +382,9 @@ impl ProjectConfig {
         for key in &copied.permission_sets {
             let _ = self.store.permission_sets().delete(key);
         }
+        for key in &copied.bundles {
+            let _ = self.store.bundles().delete(key);
+        }
     }
 }
 
@@ -356,4 +396,7 @@ struct CopiedKeys {
     fields: Vec<String>,
     fieldsets: Vec<String>,
     permission_sets: Vec<String>,
+    /// File-tree keys (the version's `bundle`), which are whole trees rather
+    /// than documents but undo the same way.
+    bundles: Vec<String>,
 }

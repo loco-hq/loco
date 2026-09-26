@@ -30,6 +30,20 @@ HTTP 200
 jsonpath "$.data" count == 1
 jsonpath "$.data[0][1].version" == "0.0.1-dev"
 
+# 1b. The draft also ships a bundle: a file tree, not a YAML document. Capture
+#     its metadata so the copy can be compared against it. `hash` is a
+#     SHA-256 over the tree's contents, so an identical tree hashes alike.
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1-dev/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data.files" == 2
+jsonpath "$.data.size" == 54
+[Captures]
+draft_bundle_hash: jsonpath "$.data.hash"
+
 # 2. Copy the draft into a published version id.
 POST http://127.0.0.1:{{port}}/config/version/alice/pub
 Authorization: Bearer {{token}}
@@ -111,6 +125,63 @@ jsonpath "$.data[0].collections" count == 1
 jsonpath "$.data[0].collections[0].collection" == "article"
 jsonpath "$.data[0].collections[0].read" == true
 jsonpath "$.data[0].collections[0].create" == false
+
+# 7b. The bundle came across. Metadata is a version directory, not just its
+#     YAML — a published snapshot that dropped the frontend would serve the
+#     wrong HTML when a site pinned it (issue #37).
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data.files" == 2
+jsonpath "$.data.size" == 54
+# Same bytes in, same hash out.
+jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
+
+# 7c. The source still has its tree — a copy, not a move.
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1-dev/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
+
+# 7d. The copied tree is write-locked with the rest of the published version,
+#     so its bytes are safe to cache forever.
+#     The body is deliberately not a valid zip: `require_writable` runs before
+#     the archive is unpacked, so the error must name the published version
+#     rather than complain about the bytes.
+PUT http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+Content-Type: application/zip
+```
+not a zip
+```
+HTTP 400
+[Asserts]
+jsonpath "$.ok" == false
+jsonpath "$.error" contains "published"
+
+DELETE http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 400
+
+# 7e. ...and the refused write did not disturb it.
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
 
 # 8. The published target is read-only to /schema.
 PUT http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/collection/article
@@ -244,6 +315,23 @@ HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
 
+# ...including the tree the copy created, so a later version reusing that id
+# cannot inherit a stale frontend.
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 404
+
+# The draft keeps its own tree.
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.1-dev/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data.hash" == "{{draft_bundle_hash}}"
+
 # 17. A copy that fails part-way rolls back what it wrote, and only that.
 #
 #     Fixture `0.0.9` holds a fieldset at `article/default` and no manifest,
@@ -296,3 +384,68 @@ Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
 X-Site-Id: cards
 HTTP 404
+
+# 18. Copying a version that has no bundle still succeeds. `0.0.2-dev` was
+#     created blank back in step 15, so there is no tree to carry and the
+#     result simply has none — not an empty tree, and not a failure.
+POST http://127.0.0.1:{{port}}/config/version/alice/pub
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+Content-Type: application/json
+{"version": "0.0.2", "from": "0.0.2-dev"}
+HTTP 201
+[Asserts]
+jsonpath "$.data.version" == "0.0.2"
+
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.2/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 404
+
+# 19. The failed copy from step 17 left no tree behind either. File trees are
+#     copied after the YAML, so the fieldset collision happened first — but a
+#     reordering that wrote the tree before failing would show up here.
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 404
+
+# 20. A tree already sitting at the target blocks the copy instead of being
+#     silently replaced.
+#
+#     Writing a file tree is a whole-tree replace, so unlike the YAML `create`
+#     calls it has no natural "already exists" error. Fixture `0.0.8` holds a
+#     bundle and no manifest, which is exactly the case the manifest pre-check
+#     cannot see.
+POST http://127.0.0.1:{{port}}/config/version/alice/pub
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+Content-Type: application/json
+{"version": "0.0.8", "from": "0.0.1-dev"}
+HTTP 409
+[Asserts]
+jsonpath "$.ok" == false
+
+# The squatting tree is untouched...
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.8/bundle
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data.files" == 1
+jsonpath "$.data.hash" != "{{draft_bundle_hash}}"
+
+# ...and the refusal came before any YAML was written, so there is nothing to
+# roll back and nothing left over.
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.8/collection/list
+Authorization: Bearer {{token}}
+X-Project-Id: loco/cards
+X-Site-Id: cards
+HTTP 200
+[Asserts]
+jsonpath "$.data" count == 0
