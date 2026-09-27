@@ -1,9 +1,12 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
 use crate::adapter::DataAdapter;
 use crate::error::Error;
+use crate::query::{self, LakeQuery, Page};
 use crate::record::{InsertRequest, Record, UpdatePatch};
+use crate::value::Value;
 
 pub struct InMemoryAdapter {
     store: RwLock<HashMap<String, HashMap<String, Record>>>,
@@ -107,6 +110,44 @@ impl DataAdapter for InMemoryAdapter {
             .map_err(|e| Error::Internal(e.to_string()))?;
         store.retain(|key, _| !key.starts_with(&prefix));
         Ok(())
+    }
+
+    fn query(&self, dataset_id: &str, queries: &[LakeQuery]) -> Result<Vec<Page>, Error> {
+        for q in queries {
+            q.validate()?;
+        }
+        // One read lock for the whole batch is the snapshot.
+        let store = self
+            .store
+            .read()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let pages = queries
+            .iter()
+            .map(|q| {
+                let order = q.effective_order();
+                let key = Self::scoped_key(dataset_id, &q.collection);
+                let mut rows: Vec<(Vec<Value>, &Record)> = store
+                    .get(&key)
+                    .into_iter()
+                    .flat_map(|coll| coll.values())
+                    .filter(|r| q.filter.as_ref().is_none_or(|f| query::matches(f, r)))
+                    .map(|r| (query::order_values(&order, r), r))
+                    .filter(|(k, _)| {
+                        q.after.as_ref().is_none_or(|after| {
+                            query::compare_keys(&order, k, after) == Ordering::Greater
+                        })
+                    })
+                    .collect();
+                rows.sort_by(|(a, _), (b, _)| query::compare_keys(&order, a, b));
+                let rows = rows
+                    .into_iter()
+                    .take(q.limit + 1)
+                    .map(|(_, r)| r.clone())
+                    .collect();
+                query::finish_page(q, &order, rows)
+            })
+            .collect();
+        Ok(pages)
     }
 }
 

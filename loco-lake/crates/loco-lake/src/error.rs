@@ -7,6 +7,8 @@ pub enum Error {
     NotFound,
     AlreadyExists,
     InvalidDataset(String),
+    /// A `LakeQuery` the lake cannot run as given (see `query.rs`).
+    InvalidQuery(String),
     Internal(String),
 }
 
@@ -16,6 +18,7 @@ impl fmt::Display for Error {
             Error::NotFound => write!(f, "not found"),
             Error::AlreadyExists => write!(f, "already exists"),
             Error::InvalidDataset(msg) => write!(f, "invalid dataset: {msg}"),
+            Error::InvalidQuery(msg) => write!(f, "invalid query: {msg}"),
             Error::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
