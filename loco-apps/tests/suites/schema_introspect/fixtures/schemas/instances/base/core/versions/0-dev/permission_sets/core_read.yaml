@@ -1,0 +1,5 @@
+label: "Core read"
+description: "Grants read on acme/leads.lead; acme/leads names it but cannot see it"
+collections:
+  - collection: "acme/leads.lead"
+    read: true
