@@ -14,7 +14,7 @@ Agents use the ordinary record API plus, later, named actions. Part-out math, un
 | **Color** | A BrickLink color id and a label. |
 | **Lot key** | `(item_no, color_code, condition)`. The identity union and difference match on. Location, price, and remarks are not part of it. |
 | **Lot** | One quantity of a lot key. Always belongs to one batch. |
-| **Batch** | A named list of lots. `kind` is a label (`set`, `minifig`, `order`, `inventory`, `commission`, …). `mode` is `stored` or `view`. |
+| **Batch** | A named list of lots. `kind` is one of the field's `options` (`inventory`, `set`, `minifig`, `order`, `commission`); a new kind is a schema edit, and `/data` rejects anything else. `mode` is `stored` or `view`. |
 | **Stored batch** | Owns lot records. Editing a lot edits the batch. |
 | **View** | A batch that stores an operation and its inputs, and computes lots when read. It has no lot records of its own. |
 | **Materialize** | Evaluate a view (or any operation) and write the result into a new stored batch. The new batch does not keep the inputs. |

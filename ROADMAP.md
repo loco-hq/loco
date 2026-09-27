@@ -15,7 +15,7 @@ Loco is a low-code backend for structured data — think Salesforce or Airtable,
 - Sites + datasets instead of a tenant registry
 - REST API: `/data`, `/schema`, `/config`, `/auth`
 - Pluggable lake (`sqlite`, `memory`) scoped by `dataset_id`
-- Write-time validation (unknown fields + scalar types) and read-time diagnostics
+- Write-time validation (unknown fields, scalar types, string `options`) and read-time diagnostics
 - `AuthAdapter` + local filesystem adapter: sessions, users, API keys
 - Global identities, project membership, public permission sets
 - CORS on the API; static `examples/public-page/` talks to it from another origin
@@ -26,7 +26,7 @@ Loco is a low-code backend for structured data — think Salesforce or Airtable,
 
 In order. Detail lives in the [issue list](https://github.com/loco-hq/loco/issues). The identity target model is [`docs/identity.md`](docs/identity.md).
 
-1. **Finish the schema → form loop.** Collection fields need `description`, `required`, and maybe `variant`. Validate required fields on create/update. Drive record forms (and keep tables) from the `auto_add` fieldset. Register `SelectField` on the dispatcher. Stop offering `list` as a record field type until the validator and a control exist.
+1. **Finish the schema → form loop.** Collection fields need `description`, `required`, and maybe `variant`. Validate required fields on create/update. Drive record forms (and keep tables) from the `auto_add` fieldset. Stop offering `list` as a record field type until the validator and a control exist.
 
 2. **Then interfaces.** MCP tools and a `loco` CLI on top of the same API. Surfaces sketched in `FUTURE_IDEAS.md`.
 

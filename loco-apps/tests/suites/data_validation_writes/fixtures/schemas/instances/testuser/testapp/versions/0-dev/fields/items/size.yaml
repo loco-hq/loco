@@ -1,0 +1,9 @@
+type: "string"
+label: "Size"
+options:
+  - value: "s"
+    label: "Small"
+  - value: "m"
+    label: "Medium"
+  - value: "l"
+    label: "Large"

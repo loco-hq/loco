@@ -15,6 +15,7 @@ use serde::Serialize;
 use loco_lake::Value;
 
 use crate::http::version_schema::VersionSchema;
+use crate::Field;
 
 /// Stable string identifiers for the `kind` field on diagnostics. Clients can
 /// switch on these. Using string constants (not an enum) keeps the set open
@@ -22,6 +23,7 @@ use crate::http::version_schema::VersionSchema;
 pub mod kind {
     pub const UNKNOWN_FIELD: &str = "unknown_field";
     pub const TYPE_MISMATCH: &str = "type_mismatch";
+    pub const INVALID_OPTION: &str = "invalid_option";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -119,8 +121,7 @@ pub fn validate_record(
     mode: ValidationMode,
 ) -> ValidationReport {
     let field_defs = schema.fields(collection);
-    // Map of field name -> declared type string ("string", "integer", ...).
-    let by_name: HashMap<&str, &str> = field_defs.iter().map(|f| (f.name(), f.r#type())).collect();
+    let by_name: HashMap<&str, &Field> = field_defs.iter().map(|f| (f.name(), &**f)).collect();
 
     let make = |kind: &str, path: Option<String>, message: String| match mode {
         ValidationMode::Create | ValidationMode::Update => Diagnostic::error(kind, path, message),
@@ -131,7 +132,7 @@ pub fn validate_record(
     let mut diagnostics = Vec::new();
 
     for (name, value) in fields {
-        let Some(declared) = by_name.get(name.as_str()).copied() else {
+        let Some(field) = by_name.get(name.as_str()).copied() else {
             diagnostics.push(make(
                 kind::UNKNOWN_FIELD,
                 Some(name.clone()),
@@ -142,11 +143,22 @@ pub fn validate_record(
             continue;
         };
 
+        let declared = field.r#type();
         if let Some(actual) = type_mismatch(declared, value) {
             diagnostics.push(make(
                 kind::TYPE_MISMATCH,
                 Some(name.clone()),
                 format!("field '{name}' expected type '{declared}', got '{actual}'"),
+            ));
+        } else if let Some(given) = invalid_option(field, value) {
+            let allowed: Vec<&str> = field.options().iter().map(|o| o.value()).collect();
+            diagnostics.push(make(
+                kind::INVALID_OPTION,
+                Some(name.clone()),
+                format!(
+                    "field '{name}' must be one of [{}], got '{given}'",
+                    allowed.join(", ")
+                ),
             ));
         }
     }
@@ -180,6 +192,23 @@ fn type_mismatch(declared: &str, value: &Value) -> Option<&'static str> {
         None
     } else {
         Some(actual)
+    }
+}
+
+/// Return the offending string if `field` is a string field that declares
+/// `options` and `value` is not one of them. A field without options, a
+/// non-string field, and `Null` all pass.
+fn invalid_option<'v>(field: &Field, value: &'v Value) -> Option<&'v str> {
+    let Value::String(s) = value else {
+        return None;
+    };
+    if field.r#type() != "string" || field.options().is_empty() {
+        return None;
+    }
+    if field.options().iter().any(|o| o.value() == s) {
+        None
+    } else {
+        Some(s)
     }
 }
 
@@ -289,6 +318,7 @@ mod tests {
         // If you rename one, you're making a breaking change.
         assert_eq!(kind::UNKNOWN_FIELD, "unknown_field");
         assert_eq!(kind::TYPE_MISMATCH, "type_mismatch");
+        assert_eq!(kind::INVALID_OPTION, "invalid_option");
     }
 
     #[test]

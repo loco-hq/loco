@@ -1,2 +1,7 @@
 type: "string"
 label: "Condition"
+options:
+  - value: "new"
+    label: "New"
+  - value: "used"
+    label: "Used"

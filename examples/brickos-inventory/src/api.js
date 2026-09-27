@@ -65,3 +65,12 @@ export const update = (collection, id, fields) =>
   request(`/data/${collection}/update/${id}`, { method: 'PUT', body: fields });
 export const remove = (collection, id) =>
   request(`/data/${collection}/delete/${id}`, { method: 'DELETE' });
+
+// --- Schema ---
+
+// The version this build was deployed into (scripts/deploy.sh). A site's
+// pinned version is not readable by an editor, so the bundle carries it.
+const VERSION = import.meta.env.VITE_LOCO_VERSION || '0.0.1-dev';
+
+export const fields = (collection) =>
+  request(`/schema/brickos/inventory/${VERSION}/field/${collection}/list`);

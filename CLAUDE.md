@@ -220,7 +220,7 @@ Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the
 
 ### Validation
 
-Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields and scalar type mismatches (`string` / `integer` / `float` / `boolean`). `Null` is allowed for any type. Declared types the validator does not know (including `list`) pass. There is no `required` flag on `Field` yet.
+Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, scalar type mismatches (`string` / `integer` / `float` / `boolean`), and a `string` value outside the field's `options` when it declares any (`invalid_option`; exact match on `value`, so `""` is rejected too). `Null` is allowed for any type. Declared types the validator does not know (including `list`) pass. There is no `required` flag on `Field` yet.
 
 ## Key Patterns
 
@@ -251,11 +251,11 @@ All frontend apps use the same stack:
 Field components for rendering schema metadata. Two layers:
 
 - **Primitives** — `TextField`, `NumberField`, `CheckboxField`, `ToggleField`, `SelectField`. Uniform shell props: `id`, `label`, `description`, `error`, `required`, `disabled`, `value`, `onChange`, plus type-specific props.
-- **Dispatcher** — `<Field field={meta} variant?="..." />` picks a primitive from a hardcoded `type → variant → component` registry. `variant` can come from field metadata or be overridden at the call site. `SelectField` is exported but not registered in the dispatcher.
+- **Dispatcher** — `<Field field={meta} variant?="..." />` picks a primitive from a hardcoded `type → variant → component` registry. `variant` can come from field metadata or be overridden at the call site. A `string` field with non-empty `options` renders `SelectField` whatever its variant, with a blank `—` entry that Studio sends as `null`.
 
 Styling is plain CSS via `.module.css` files co-located with each component. Shared design tokens (`--loco-*` CSS variables) live in `src/_shell/tokens.css` and must be imported once by the consumer (`import 'loco-ui/tokens.css'`).
 
-Collection field metadata (`field.yaml`) currently has only `type` and `label`. The dispatcher already reads `description`, `required`, and `variant` when present.
+Collection field metadata (`field.yaml`) has `type`, `label`, and `options` (a list of `{ value, label }`; empty means any string). The dispatcher already reads `description`, `required`, and `variant` when present.
 
 ## Rust Edition
 

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { BATCH_KINDS, useAdd, useRecords } from '../data.js';
+import { useAdd, useOptions, useRecords } from '../data.js';
 
 export default function BatchList() {
   const batches = useRecords('batch');
@@ -68,8 +68,10 @@ export default function BatchList() {
 function NewBatch() {
   const navigate = useNavigate();
   const add = useAdd('batch');
+  const kinds = useOptions('batch', 'kind');
   const [label, setLabel] = useState('');
-  const [kind, setKind] = useState('inventory');
+  const [picked, setKind] = useState('');
+  const kind = picked || kinds[0]?.value;
   const [itemNo, setItemNo] = useState('');
 
   function submit(e) {
@@ -83,17 +85,13 @@ function NewBatch() {
   return (
     <form className="card inline-form" onSubmit={submit}>
       <input placeholder="New batch label" value={label} onChange={(e) => setLabel(e.target.value)} />
-      <input
-        placeholder="Kind"
-        list="batch-kinds"
-        value={kind}
-        onChange={(e) => setKind(e.target.value)}
-      />
-      <datalist id="batch-kinds">
-        {BATCH_KINDS.map((k) => (
-          <option key={k} value={k} />
+      <select aria-label="Kind" value={kind} onChange={(e) => setKind(e.target.value)}>
+        {kinds.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
         ))}
-      </datalist>
+      </select>
       <input
         placeholder="Item no. (for a set or minifig)"
         value={itemNo}
