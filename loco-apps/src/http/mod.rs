@@ -1,5 +1,6 @@
 pub mod authz;
 pub mod host;
+pub mod names;
 pub mod paths;
 pub mod project_config;
 pub mod response;

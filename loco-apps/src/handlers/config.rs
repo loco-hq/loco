@@ -7,6 +7,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::auth::{auth_error_to_response, OrgRole, ProjectRole};
+use crate::http::names::check_slug;
 use crate::http::response::{
     config_error_to_response, error_response, schema_error_to_response, ApiResponse,
 };
@@ -77,11 +78,10 @@ pub async fn create_project(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateProjectBody>,
 ) -> Response {
-    if body.name.is_empty() || body.name.contains('/') {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "project name must be a single path segment",
-        );
+    // `create_project` checks this too; here it answers before the account
+    // lookup, so a bad name is a 400 whoever owns it.
+    if let Err(msg) = check_slug("project", &body.name) {
+        return error_response(StatusCode::BAD_REQUEST, &msg);
     }
 
     let account = body.account.as_deref().unwrap_or_else(|| scope.username());
@@ -93,7 +93,7 @@ pub async fn create_project(
 
     let project = match pc.create_project(body.label.clone(), body.description) {
         Ok(v) => v,
-        Err(e) => return schema_error_to_response(e),
+        Err(e) => return config_error_to_response(e),
     };
 
     // Auto-bootstrap a default version + dataset + site for the new project.
@@ -206,7 +206,7 @@ pub async fn delete_project(
 pub async fn create_dataset(scope: ConfigProjectScope, Json(input): Json<Dataset>) -> Response {
     match scope.config.create_dataset(input) {
         Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
-        Err(e) => schema_error_to_response(e),
+        Err(e) => config_error_to_response(e),
     }
 }
 
@@ -318,18 +318,14 @@ pub async fn create_version(
     scope: ConfigProjectScope,
     Json(body): Json<CreateVersionBody>,
 ) -> Response {
-    if !is_single_segment(&body.version) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "version must be a single path segment",
-        );
-    }
     let Some(from) = body.from else {
         return match scope.config.create_version(body.version) {
             Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
-            Err(e) => schema_error_to_response(e),
+            Err(e) => config_error_to_response(e),
         };
     };
+    // `from` names a version that exists, which may predate the charset, so
+    // it is held only to what can be a path segment.
     if !is_single_segment(&from) {
         return error_response(
             StatusCode::BAD_REQUEST,

@@ -93,7 +93,9 @@ pub fn schema_error_to_response(err: loco_schema_runtime::Error) -> Response {
 pub fn config_error_to_response(err: crate::http::project_config::ConfigError) -> Response {
     use crate::http::project_config::ConfigError;
     match err {
-        e @ (ConfigError::InvalidPin(_) | ConfigError::InvalidDependency(_)) => {
+        e @ (ConfigError::InvalidName(_)
+        | ConfigError::InvalidPin(_)
+        | ConfigError::InvalidDependency(_)) => {
             error_response(StatusCode::BAD_REQUEST, &e.to_string())
         }
         e @ ConfigError::Pinned(_) => error_response(StatusCode::CONFLICT, &e.to_string()),

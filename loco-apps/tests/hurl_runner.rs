@@ -307,6 +307,11 @@ fn suite_data_validation_reads() {
 }
 
 #[test]
+fn suite_config_names() {
+    run_suite(&suites_dir().join("config_names"));
+}
+
+#[test]
 fn suite_version_lifecycle() {
     let tmp = run_suite(&suites_dir().join("version_lifecycle"));
     assert_no_fieldset_files(tmp.path(), "alice/lab");
