@@ -44,15 +44,16 @@ npm run deploy --prefix examples/brickos-inventory
                               # LOCO_USER / LOCO_PASSWORD (its README). A
                               # root `npm install` covers it: it is a
                               # workspace, like loco-client
-npm test -w loco-client       # loco-client unit tests (node --test; not in CI)
+npm test -w loco-client       # loco-client unit tests (node --test)
 ```
 
 ## CI
 
 `.github/workflows/ci.yml` runs on every PR and on pushes to `main`: `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, then `cargo test --workspace` (which
-includes the Hurl suites — the workflow installs the `hurl` binary first). Server-side only; the
-frontend workspaces are not built in CI yet.
+includes the Hurl suites — the workflow installs the `hurl` binary first). A second, independent
+job runs the frontend workspaces on Node 24: `npm ci` at the root, `npm test -w loco-client`, then
+`npm run build --workspaces --if-present` (loco-studio, loco-ui, brickos-inventory).
 
 ## Project Structure
 
