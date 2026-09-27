@@ -294,6 +294,20 @@ HTTP 409
 [Asserts]
 jsonpath "$.ok" == false
 
+# No manifest was left behind, so `0.0.9` is still not a version.
+GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/manifest
+Authorization: Bearer {{token}}
+HTTP 404
+
+# `/schema` reads of a version with no manifest are 404s (#95), so to look at
+# what is left on disk, make `0.0.9` a version — an empty one, which writes
+# only its manifest — and read through it.
+POST http://127.0.0.1:{{port}}/config/version/alice/pub
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"version": "0.0.9"}
+HTTP 201
+
 # The collection the copy created is gone again.
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/collection/list
 Authorization: Bearer {{token}}
@@ -315,11 +329,6 @@ Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Squatter"
-
-# And no manifest was left behind, so `0.0.9` is still not a version.
-GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.9/manifest
-Authorization: Bearer {{token}}
-HTTP 404
 
 # 18. Copying a version that has no bundle still succeeds. `0.0.2-dev` was
 #     created blank back in step 15, so there is no tree to carry and the
@@ -357,6 +366,13 @@ Content-Type: application/json
 HTTP 409
 [Asserts]
 jsonpath "$.ok" == false
+
+# As in step 17, make `0.0.8` a version so `/schema` can read what is there.
+POST http://127.0.0.1:{{port}}/config/version/alice/pub
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"version": "0.0.8"}
+HTTP 201
 
 # The squatting tree is untouched...
 GET http://127.0.0.1:{{port}}/schema/alice/pub/0.0.8/bundle

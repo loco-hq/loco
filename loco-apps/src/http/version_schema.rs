@@ -9,7 +9,10 @@
 //!   means this version's own project; a dependency's must be written
 //!   `{account}/{project}.{name}` ("Name resolution" in CLAUDE.md).
 //! - **write** to its own `(project_id, version)` *only* when constructed
-//!   writable AND the version is a draft (`-dev` suffix).
+//!   writable AND the version is a draft (`-dev` suffix) AND it exists — has
+//!   a manifest, which only `/config` creates. Each write holds `PINS` from
+//!   that check to its last store write, so a version delete cannot slip in
+//!   between and leave the write's files behind as an orphan tree.
 //!
 //! The dep set — and the public permission-set assignment that sits beside it
 //! on the manifest — is snapshotted at construction so a request gets a
@@ -21,7 +24,7 @@
 //! - [`VersionSchema::new_read_only`] — read-only. Used by `SiteScope` (data
 //!   routes) and `VersionReadScope` (GET `/schema`).
 
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 
 use crate::http::authz::is_draft_version;
 use crate::http::project_config::lock_pins;
@@ -46,15 +49,19 @@ pub enum VersionSchemaError {
     InvalidDependency(String),
     /// A field `type` outside [`crate::validation::FIELD_TYPES`].
     InvalidFieldType(String),
+    /// The version has no manifest: it was never created through `/config`,
+    /// or it has since been deleted.
+    UnknownVersion(String),
     Schema(loco_schema_runtime::Error),
 }
 
 impl std::fmt::Display for VersionSchemaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotWritable(msg) | Self::InvalidDependency(msg) | Self::InvalidFieldType(msg) => {
-                write!(f, "{msg}")
-            }
+            Self::NotWritable(msg)
+            | Self::InvalidDependency(msg)
+            | Self::InvalidFieldType(msg)
+            | Self::UnknownVersion(msg) => write!(f, "{msg}"),
             Self::Schema(e) => write!(f, "{e}"),
         }
     }
@@ -399,6 +406,41 @@ impl VersionSchema {
         Ok(())
     }
 
+    /// Whether this version exists — has a manifest. A version is created
+    /// only through `/config`, which writes its manifest, so a version name
+    /// that has one was checked there (#95).
+    pub fn exists(&self) -> bool {
+        self.store
+            .manifests()
+            .has(&Manifest::to_path(&self.project_id, &self.version))
+    }
+
+    /// The gate every write goes through: [`Self::require_writable`], then
+    /// `PINS`, then [`Self::exists`]. The caller holds the returned guard
+    /// until its last store write.
+    ///
+    /// `VersionScope` already refused a missing version, but that was before
+    /// the request body was read. A version delete cascades under `PINS`, so
+    /// a write racing it either holds the lock first, finishes, and is swept
+    /// by the cascade, or waits and then finds no manifest here. It can never
+    /// land after the cascade and leave an orphan tree.
+    ///
+    /// The cost is that `/schema` writes, bundle uploads included, serialize
+    /// with each other and with `/config` pin changes. All are rare
+    /// developer operations; a per-version lock would be finer but would
+    /// need the delete to take it too, for no case we have.
+    fn write_guard(&self) -> Result<MutexGuard<'static, ()>, VersionSchemaError> {
+        self.require_writable()?;
+        let pins = lock_pins();
+        if !self.exists() {
+            return Err(VersionSchemaError::UnknownVersion(unknown_version(
+                &self.project_id,
+                &self.version,
+            )));
+        }
+        Ok(pins)
+    }
+
     // --- Bundle: the version's own static file tree ---
     //
     // Unlike collections and fields, the bundle is never read through a
@@ -425,13 +467,13 @@ impl VersionSchema {
         &self,
         tree: &loco_schema_runtime::FileTree,
     ) -> Result<Arc<Bundle>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         Ok(self.store.bundles().put(&self.bundle_key(), tree)?)
     }
 
     /// Drop the bundle tree. `Error::NotFound` when the version has none.
     pub fn delete_bundle(&self) -> Result<(), VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         Ok(self.store.bundles().delete(&self.bundle_key())?)
     }
 
@@ -446,12 +488,11 @@ impl VersionSchema {
         patch: ManifestUpdate,
         may_read: impl Fn(&str) -> bool,
     ) -> Result<Arc<Manifest>, VersionSchemaError> {
-        self.require_writable()?;
-        let key = Manifest::to_path(&self.project_id, &self.version);
         // Under `PINS`, like a site pin: the check reads other versions'
         // manifests and a version delete checks this one, so without it a
         // delete could slip between the check and the write.
-        let _pins = lock_pins();
+        let _pins = self.write_guard()?;
+        let key = Manifest::to_path(&self.project_id, &self.version);
         if let Some(deps) = &patch.dependencies {
             let current = self.store.manifests().get(&key);
             let declared = |dep: &str| {
@@ -471,7 +512,7 @@ impl VersionSchema {
         &self,
         mut input: Collection,
     ) -> Result<Arc<Collection>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
         let collection_name = input.name.clone();
@@ -497,7 +538,7 @@ impl VersionSchema {
         name: &str,
         patch: CollectionUpdate,
     ) -> Result<Arc<Collection>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         let key = Collection::to_path(&self.project_id, &self.version, name);
         Ok(self.store.collections().update(&key, patch)?)
     }
@@ -506,7 +547,7 @@ impl VersionSchema {
     /// (in this version). Field cascade matches the prior handler behavior;
     /// fieldset cascade prevents orphaned ordering metadata.
     pub fn delete_collection(&self, name: &str) -> Result<(), VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         let field_prefix = format!(
             "{}/versions/{}/fields/{}/",
             self.project_id, self.version, name
@@ -522,7 +563,7 @@ impl VersionSchema {
     }
 
     pub fn create_field(&self, mut input: Field) -> Result<Arc<Field>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         check_field_type(&input.r#type)?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
@@ -539,7 +580,7 @@ impl VersionSchema {
         name: &str,
         patch: FieldUpdate,
     ) -> Result<Arc<Field>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         if let Some(ty) = &patch.r#type {
             check_field_type(ty)?;
         }
@@ -548,7 +589,7 @@ impl VersionSchema {
     }
 
     pub fn delete_field(&self, collection: &str, name: &str) -> Result<(), VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         let key = Field::to_path(&self.project_id, &self.version, collection, name);
         self.store.fields().delete(&key)?;
         // Best-effort cascade. The read path already tolerates dangling names
@@ -562,7 +603,7 @@ impl VersionSchema {
         &self,
         mut input: Fieldset,
     ) -> Result<Arc<Fieldset>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
         Ok(self.store.fieldsets().create(input)?)
@@ -574,13 +615,13 @@ impl VersionSchema {
         name: &str,
         patch: FieldsetUpdate,
     ) -> Result<Arc<Fieldset>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         let key = Fieldset::to_path(&self.project_id, &self.version, collection, name);
         Ok(self.store.fieldsets().update(&key, patch)?)
     }
 
     pub fn delete_fieldset(&self, collection: &str, name: &str) -> Result<(), VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         let key = Fieldset::to_path(&self.project_id, &self.version, collection, name);
         Ok(self.store.fieldsets().delete(&key)?)
     }
@@ -589,7 +630,7 @@ impl VersionSchema {
         &self,
         mut input: PermissionSet,
     ) -> Result<Arc<PermissionSet>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
         Ok(self.store.permission_sets().create(input)?)
@@ -600,13 +641,13 @@ impl VersionSchema {
         name: &str,
         patch: PermissionSetUpdate,
     ) -> Result<Arc<PermissionSet>, VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         let key = PermissionSet::to_path(&self.project_id, &self.version, name);
         Ok(self.store.permission_sets().update(&key, patch)?)
     }
 
     pub fn delete_permission_set(&self, name: &str) -> Result<(), VersionSchemaError> {
-        self.require_writable()?;
+        let _pins = self.write_guard()?;
         let key = PermissionSet::to_path(&self.project_id, &self.version, name);
         Ok(self.store.permission_sets().delete(&key)?)
     }
@@ -702,6 +743,11 @@ impl VersionSchema {
             });
         }
     }
+}
+
+/// The message for a `/schema` request to a version that does not exist.
+pub fn unknown_version(project_id: &str, version: &str) -> String {
+    format!("unknown version: {project_id}@{version}")
 }
 
 /// `{account}/{project}.{name}` → `(project, name)`. `None` for a bare name —
@@ -836,7 +882,60 @@ mod tests {
     fn draft_schema() -> (tempfile::TempDir, Arc<SchemaStore>) {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SchemaStore::load(dir.path()).unwrap());
+        store
+            .manifests()
+            .create(Manifest::new(
+                PROJECT.to_string(),
+                VERSION.to_string(),
+                Vec::new(),
+                Vec::new(),
+            ))
+            .unwrap();
         (dir, store)
+    }
+
+    fn collection(name: &str) -> Collection {
+        Collection::new(
+            PROJECT.to_string(),
+            VERSION.to_string(),
+            name.to_string(),
+            String::new(),
+            String::new(),
+        )
+    }
+
+    /// The view was built while the version existed — as `VersionScope`
+    /// checks — and the version is deleted before the write. The write must
+    /// find that out itself and leave nothing on disk (#95).
+    #[test]
+    fn write_after_version_delete_is_refused_and_writes_nothing() {
+        let (dir, store) = draft_schema();
+        let schema = VersionSchema::new(store.clone(), PROJECT, VERSION);
+        assert!(schema.exists());
+        crate::http::project_config::ProjectConfig::new(store.clone(), "ben", "crm")
+            .delete_version(VERSION)
+            .unwrap();
+
+        let err = schema.create_collection(collection("tasks")).unwrap_err();
+        assert!(
+            matches!(err, VersionSchemaError::UnknownVersion(_)),
+            "{err:?}"
+        );
+        let err = schema
+            .put_bundle(&loco_schema_runtime::FileTree::default())
+            .unwrap_err();
+        assert!(
+            matches!(err, VersionSchemaError::UnknownVersion(_)),
+            "{err:?}"
+        );
+        let prefix = format!("{PROJECT}/versions/{VERSION}/");
+        assert!(store.collections().list(&prefix).is_empty());
+        assert!(store.fieldsets().list(&prefix).is_empty());
+        assert!(store.bundles().list(&prefix).is_empty());
+        // And on disk, where a reload would find an orphan.
+        let reloaded = SchemaStore::load(dir.path()).unwrap();
+        assert!(reloaded.collections().list(&prefix).is_empty());
+        assert!(reloaded.bundles().list(&prefix).is_empty());
     }
 
     fn field(collection: &str, name: &str) -> Field {
@@ -891,13 +990,7 @@ mod tests {
         for round in 0..5 {
             let collection = format!("c{round}");
             schema
-                .create_collection(Collection::new(
-                    PROJECT.to_string(),
-                    VERSION.to_string(),
-                    collection.clone(),
-                    String::new(),
-                    String::new(),
-                ))
+                .create_collection(self::collection(&collection))
                 .unwrap();
             assert_all_present(&race_field_creates(&store, &collection, N), N);
         }

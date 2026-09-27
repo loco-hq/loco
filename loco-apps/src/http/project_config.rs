@@ -35,7 +35,9 @@ use crate::{
 /// Serializes every change that can make or break a site's pin or a
 /// manifest's dependency: site create and update, manifest update
 /// (`VersionSchema::update_manifest`), version copy, dataset and version
-/// delete, and project delete. Each checks
+/// delete, and project delete. Every other `/schema` write holds it too
+/// (`VersionSchema::write_guard`), so it cannot land in a version a delete
+/// is removing and leave an orphan tree (#95). Each checks
 /// one store (does the version exist? does a site pin it?) and writes
 /// another, and a store's own writer lock covers only that store — without
 /// this, a site create and a version delete could each pass its check and

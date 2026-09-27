@@ -141,12 +141,19 @@ GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/manifest
 Authorization: Bearer {{token}}
 HTTP 404
 
-# 13. Collections + fields gone
+# 13. The version is gone, so its schema is a 404 rather than an empty list.
+#     That the collections and fields went with it is step 16: a recreated
+#     version starts empty.
 GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/collection/list
 Authorization: Bearer {{token}}
-HTTP 200
-[Asserts]
-jsonpath "$.data" count == 0
+HTTP 404
+
+# ...and a write to it is refused, not left behind as an orphan tree (#95).
+POST http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/collection
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"name": "task", "label": "Task", "label_plural": "Tasks"}
+HTTP 404
 
 # 14. Versions list back to empty
 GET http://127.0.0.1:{{port}}/config/version/alice/lab/list
@@ -161,7 +168,7 @@ Authorization: Bearer {{token}}
 HTTP 404
 
 # 16. Recreate the same version id. It must start empty: the deleted version's
-#     fieldsets are gone, not waiting to be inherited.
+#     collections, fields, and fieldsets are gone, not waiting to be inherited.
 POST http://127.0.0.1:{{port}}/config/version/alice/lab
 Authorization: Bearer {{token}}
 X-Project-Id: loco/cards
@@ -169,6 +176,18 @@ X-Site-Id: cards
 Content-Type: application/json
 {"version": "0-dev"}
 HTTP 201
+
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/collection/list
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data" count == 0
+
+GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/field/task/list
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data" count == 0
 
 GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/fieldset/task/list
 Authorization: Bearer {{token}}
