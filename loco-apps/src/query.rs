@@ -188,9 +188,12 @@ pub fn plan(
     let fields = obj.get("fields").and_then(|f| cx.fields(f, name));
     let order = match obj.get("order") {
         Some(o) => cx.order(o, name),
-        None => Some(vec![OrderKey::asc(FieldRef::System(
-            SystemField::CreatedAt,
-        ))]),
+        // The API's default. The lake only appends `id`; it has no default of
+        // its own.
+        None => Some(vec![
+            OrderKey::asc(FieldRef::System(SystemField::CreatedAt)),
+            OrderKey::asc(FieldRef::System(SystemField::Id)),
+        ]),
     };
     let limit = cx.limit(obj.get("limit"), name);
 
@@ -285,6 +288,17 @@ fn type_name(value: &Value) -> &'static str {
     }
 }
 
+/// Field names this module will not send to the lake. The lake rejects `"`
+/// with `Error::InvalidQuery`, which fails the whole batch, not one query.
+/// Until #70's path fix, sqlite also misreads `\` (silent miss) and NUL
+/// (`Error::Internal`). Schema field names are slugs and never contain any
+/// of these; the check makes sure none ever reaches the lake.
+// TODO(#70): match what #70 lands — drop `\` and NUL if it escapes them,
+// and `"` too if it stops rejecting it.
+fn lake_accepts_field_name(name: &str) -> bool {
+    !name.contains(['"', '\\', '\0'])
+}
+
 const SYSTEM_FIELDS: [(&str, SystemField); 6] = [
     ("$id", SystemField::Id),
     ("$created_at", SystemField::CreatedAt),
@@ -340,6 +354,14 @@ impl Resolver<'_> {
         }
         let (project, bare) = split_name(name).unwrap_or((self.schema.project_id(), name));
         match self.schema.field_in(project, &self.target.name, bare) {
+            Some(_) if !lake_accepts_field_name(bare) => {
+                self.error(
+                    kind::INVALID_QUERY,
+                    path,
+                    format!("field '{name}' has a name that cannot be queried"),
+                );
+                None
+            }
             Some(field) => Some((FieldRef::field(bare), Ty::of(field.r#type()))),
             None => {
                 let collection = format!("{}.{}", self.target.project, self.target.name);
@@ -895,6 +917,14 @@ mod tests {
         let mut e = a.clone();
         e.order = vec![OrderKey::asc(FieldRef::System(SystemField::Id))];
         assert_eq!(query_hash(&a), query_hash(&e));
+    }
+
+    #[test]
+    fn field_names_the_lake_rejects_are_caught_here() {
+        assert!(lake_accepts_field_name("qty"));
+        assert!(!lake_accepts_field_name("a\"b"));
+        assert!(!lake_accepts_field_name("a\\b"));
+        assert!(!lake_accepts_field_name("a\0b"));
     }
 
     #[test]

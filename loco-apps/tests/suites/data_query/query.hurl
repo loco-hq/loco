@@ -1,7 +1,8 @@
 # POST /data/query: named, batched, cursor-paged reads (docs/query.md).
 #
 # Fixtures: project testuser/testapp, site "www" pinned to 1-dev.
-#   1-dev — lot: batch_id, item_no (string), qty (integer), price (float).
+#   1-dev — lot: batch_id, item_no (string), qty (integer), price (float),
+#           sealed (boolean).
 #           secret: note. public_read grants read on lot only.
 #           Depends on acme/crm@1.0.
 #   acme/crm 1.0 — contacts: email. No public grant.
@@ -232,6 +233,36 @@ jsonpath "$.data.by_qty.records[0].fields.qty" == 10
 jsonpath "$.data.by_qty.records[1].fields.qty" == 7
 jsonpath "$.data.by_qty.records[2].fields.qty" == 5
 jsonpath "$.data.by_qty.cursor" isString
+
+# --- What the lake would refuse is caught per query, before the lake. ---
+# Each of these would fail the whole lake call; here each is one query's
+# error and `ok` still runs.
+
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{
+  "queries": {
+    "ok": { "collection": "lot", "where": { "field": "batch_id", "op": "eq", "value": "B" } },
+    "zero": { "collection": "lot", "limit": 0 },
+    "empty_in": { "collection": "lot", "where": { "field": "item_no", "op": "in", "value": [] } },
+    "lt_null": { "collection": "lot", "where": { "field": "qty", "op": "lt", "value": null } },
+    "gt_bool": { "collection": "lot", "where": { "field": "sealed", "op": "gt", "value": true } }
+  }
+}
+HTTP 200
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data.ok.records" count == 1
+jsonpath "$.data.zero.diagnostics[0].kind" == "invalid_query"
+jsonpath "$.data.zero.diagnostics[0].path" == "zero/limit"
+jsonpath "$.data.empty_in.diagnostics[0].kind" == "invalid_query"
+jsonpath "$.data.empty_in.diagnostics[0].path" == "empty_in/where/value"
+jsonpath "$.data.lt_null.diagnostics[0].kind" == "invalid_query"
+jsonpath "$.data.lt_null.diagnostics[0].path" == "lt_null/where/value"
+jsonpath "$.data.gt_bool.diagnostics[0].kind" == "invalid_query"
+jsonpath "$.data.gt_bool.diagnostics[0].path" == "gt_bool/where/value"
 
 # --- Public: `lot` is granted, `secret` is not. The batch still runs. ---
 

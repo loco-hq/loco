@@ -209,9 +209,11 @@ combinator  = { "and": [condition, …] } | { "or": [condition, …] } | { "not"
   except `exists`, a missing field behaves as `null`.
 - **Null only matches null.** `eq null` matches null or missing. Ordering ops never match null.
 - **`ne` is exactly `not eq`.** So `qty ne 3` matches null, missing, and a drifted `"3"`. "A
-  drifted value doesn't match" below applies to `eq`, `in`, and the ordering ops.
-- **Integer and float are one kind.** `3` equals `3.0` and they order together, exactly (no
-  rounding of large integers through f64). A `float` field accepts an integer value.
+  drifted value doesn't match" below applies only to `eq`, `in`, and the ordering ops. Sqlite's
+  kind expression is never SQL NULL, so its `NOT` agrees with the memory evaluator.
+- **Integer and float are one kind.** `3` equals `3.0` and they order together. The comparison
+  is exact, never rounded through f64: `2^53 + 1` and `2^53` as a float are different, on both
+  adapters. A `float` field accepts an integer value.
 - **Values are type-checked against the field**, up front: `qty gt "3"` is a `type_mismatch`
   error on the query, not an empty result. A record whose stored value has drifted to another
   type doesn't match (and gets a read warning if returned by some other condition).
@@ -224,14 +226,17 @@ combinator  = { "and": [condition, …] } | { "or": [condition, …] } | { "not"
 
 ### `order`
 
-A list of `{ "field": name, "dir": "asc" | "desc" }`, `dir` defaulting to `asc`. `$id` ascending
-is appended as the final key unless the order already ends with `$id`, so every order is total,
-which is what makes a cursor possible. The lake appends it, not the caller. Default order is
-`[$created_at, $id]`.
+A list of `{ "field": name, "dir": "asc" | "desc" }`, `dir` defaulting to `asc`. Every order is
+total, which is what makes a cursor possible. The lake makes it so: it appends `id ASC` unless
+the last key is already `$id`, in either direction, and never appends a second one. An empty
+`order` becomes `[id ASC]` alone.
 
-Values sort by kind first, then value: null < boolean < number < string, `false < true`. So
-nulls sort first ascending and last descending, and a value that drifted to another type sorts
-with its kind.
+With no `order`, the API default is `[$created_at, $id]`. `loco-apps` applies that before
+calling `DataAdapter::query`; the lake has no default of its own.
+
+Values sort by kind first, then value: null < boolean < number < string, with `false < true`.
+So nulls sort first ascending and last descending, and a value that drifted to another type sorts
+with its kind. A total order across kinds is what lets a cursor resume after any value.
 
 ### `limit` and `cursor`
 
@@ -316,21 +321,29 @@ pub trait DataAdapter {
 One call per batch, so the adapter owns the snapshot: memory holds one read lock for the call,
 sqlite runs every query in one deferred transaction. `Page` is `records` plus `next`: the last
 record's effective order-key values, present only when more records follow (the adapter fetches
-`limit + 1` to know). That is what lets `loco-apps` return `cursor: null` on the last page. The
-cursor encoding lives in `loco-apps`, not the lake.
+`limit + 1` to know). `loco-apps` returns `cursor: null` exactly when `next` is `None`. It never
+guesses from `records.len() == limit`, which would hand out a cursor to an empty page. The cursor
+encoding lives in `loco-apps`, not the lake.
 
 System fields are `FieldRef::System(SystemField::…)`, an enum, never keys in `fields`.
 
-The lake checks structure and treats a failure as a caller bug: `limit` 0, an empty `in`, an
-ordering op against null or a boolean, a field name containing `"` (sqlite's quoted JSON path
-can't escape it; both adapters reject it), or an `after` of the wrong length fail the whole call
-with `Error::InvalidQuery`. `loco-apps` validates each query first so none of these reach the
-lake from `/data/query`.
+The lake checks structure and treats a failure as a caller bug. `limit` 0, an empty `in`, an
+ordering op against null or a boolean, a field name the lake rejects, or an `after` of the wrong
+length fail the whole call with `Error::InvalidQuery`, because `query` returns one `Result` for
+the batch. So `loco-apps` checks each of these per query first and reports it as that query's
+`invalid_query`. None of them reach the lake from `/data/query`, and one bad query never turns
+the request into a 400.
+
+**TODO (#70): field names.** Describe what #70 lands. If it escapes: a field name is a bound,
+quoted JSON path with `\\`, `\"`, and `\^@` escaped, so any name works. If it rejects: the
+lake rejects names containing `"`, `\`, or NUL. Until then `loco-apps` refuses all three
+(`lake_accepts_field_name` in `src/query.rs`); schema field names are slugs, so none has one.
 
 Memory evaluates the filter in process. Sqlite compiles it to `json_extract(fields, '$.name')`
 comparisons with bound parameters, each guarded by a `json_type` kind check (without it,
-`json_extract` returns `true` as `1` and `flag eq 1` would match). Sqlite applies the `fields`
-projection in Rust after fetching. Indexes on hot fields are a later concern; a full scan of one
+`json_extract` returns `true` as `1` and `flag eq 1` would match). Both adapters apply the
+`fields` projection in Rust, in `finish_page`, after sorting, `after`, and `next`, so they return
+the same rows. Nothing requires the projection to happen in SQL. Indexes on hot fields are a later concern; a full scan of one
 `(dataset_id, collection)` is fine at today's sizes.
 
 ## Relationship to other issues
