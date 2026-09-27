@@ -10,6 +10,7 @@
 //! [`FileTreePersistence`] (filesystem implementation:
 //! [`file_tree_fs::FileTreeFsAdapter`]).
 
+mod atomic;
 pub mod file_tree_fs;
 pub mod yaml_fs;
 

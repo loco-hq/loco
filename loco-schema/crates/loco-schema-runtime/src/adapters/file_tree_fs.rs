@@ -11,8 +11,8 @@
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::adapters::atomic::temp_sibling;
 use crate::adapters::FileTreePersistence;
 use crate::error::Error;
 use crate::file_tree::{validate_relative_path, FileTree, FileTreeInstance};
@@ -247,19 +247,6 @@ fn prune_empty_parents(root: &Path, from: Option<&Path>) {
             Err(_) => break,
         }
     }
-}
-
-/// A unique sibling name in `parent`, used to stage and retire trees during an
-/// atomic swap. Leading `.` plus the non-template shape keeps it invisible to
-/// `list_trees`.
-fn temp_sibling(parent: &Path, tag: &str) -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    parent.join(format!(".loco-{tag}-{}-{nanos}-{n}", std::process::id()))
 }
 
 #[cfg(test)]
