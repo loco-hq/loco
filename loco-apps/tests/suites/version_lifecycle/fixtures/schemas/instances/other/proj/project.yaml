@@ -1,2 +1,2 @@
 label: "other/proj"
-description: "Dependency target for manifest tests; must exist or the dependency is refused"
+description: "Dependency of alice/pub, which alice cannot read: a version copy carries it anyway"

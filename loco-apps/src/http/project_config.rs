@@ -456,6 +456,15 @@ impl ProjectConfig {
     /// them — but one loaded from disk was never checked, and copying it into
     /// a published version would make a bad dependency permanent.
     ///
+    /// The copier's access to each dependency is not checked. A copy is a
+    /// snapshot: it declares nothing the source does not already declare,
+    /// and the copier, a developer of this project, already reads through
+    /// the source's dependencies. Checking would only stop a teammate
+    /// without access to a dependency from publishing the project's draft.
+    /// Its existence is still checked, and a missing one is reported only
+    /// for a dependency the source names, which the copier can already read
+    /// in the source manifest.
+    ///
     /// `to` must be a valid version name; `from` need only exist, since a
     /// version loaded from disk may predate the charset.
     pub fn copy_version(&self, from: &str, to: &str) -> Result<Arc<Manifest>, ConfigError> {
@@ -473,6 +482,7 @@ impl ProjectConfig {
             &self.store,
             &self.project_id(),
             source_manifest.dependencies(),
+            |_, _| true,
         )
         .map_err(ConfigError::InvalidDependency)?;
         // `FileTreePersistence::write_tree` is a whole-tree replace, so unlike

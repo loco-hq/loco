@@ -302,6 +302,11 @@ fn suite_manifest_deps() {
 }
 
 #[test]
+fn suite_dependency_access() {
+    run_suite(&suites_dir().join("dependency_access"));
+}
+
+#[test]
 fn suite_data_validation_writes() {
     run_suite(&suites_dir().join("data_validation_writes"));
 }

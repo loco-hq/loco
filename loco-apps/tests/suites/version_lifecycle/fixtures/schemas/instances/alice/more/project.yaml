@@ -1,2 +1,2 @@
-label: "more/proj"
+label: "alice/more"
 description: "Dependency target for manifest tests; must exist or the dependency is refused"

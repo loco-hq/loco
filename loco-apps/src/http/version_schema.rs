@@ -435,9 +435,16 @@ impl VersionSchema {
         Ok(self.store.bundles().delete(&self.bundle_key())?)
     }
 
+    /// Update this version's manifest. A dependency the stored manifest does
+    /// not already name must be one `may_read` allows: the caller may only
+    /// declare a project it can read (#86). One it already names was allowed
+    /// when it was written, so re-sending it — as a client that PUTs the
+    /// whole list does — declares nothing new, and a teammate without access
+    /// to it can still edit the rest of the manifest.
     pub fn update_manifest(
         &self,
         patch: ManifestUpdate,
+        may_read: impl Fn(&str) -> bool,
     ) -> Result<Arc<Manifest>, VersionSchemaError> {
         self.require_writable()?;
         let key = Manifest::to_path(&self.project_id, &self.version);
@@ -446,8 +453,16 @@ impl VersionSchema {
         // delete could slip between the check and the write.
         let _pins = lock_pins();
         if let Some(deps) = &patch.dependencies {
-            check_dependencies(&self.store, &self.project_id, deps)
-                .map_err(VersionSchemaError::InvalidDependency)?;
+            let current = self.store.manifests().get(&key);
+            let declared = |dep: &str| {
+                current
+                    .as_deref()
+                    .is_some_and(|m| m.dependencies().iter().any(|d| d == dep))
+            };
+            check_dependencies(&self.store, &self.project_id, deps, |dep, project| {
+                declared(dep) || may_read(project)
+            })
+            .map_err(VersionSchemaError::InvalidDependency)?;
         }
         Ok(self.store.manifests().update(&key, patch)?)
     }
@@ -739,7 +754,12 @@ fn check_field_type(ty: &str) -> Result<(), VersionSchemaError> {
 
 /// Why `deps` may not be the dependency list of a version of `project_id`,
 /// or `Ok` when it may. Every entry must parse, name another project, name a
-/// project no other entry names, and name a version whose manifest exists.
+/// project no other entry names, and name a version whose manifest exists
+/// and that `visible(entry, project)` allows.
+///
+/// An entry `visible` refuses gets the same error as one that does not
+/// exist, word for word, so a manifest write cannot be used to learn whether
+/// a project the caller cannot read has a given version (#86).
 ///
 /// One version per project, because a qualified name
 /// (`{account}/{project}.{name}`) carries no version: two versions of one
@@ -752,6 +772,7 @@ pub(crate) fn check_dependencies(
     store: &SchemaStore,
     project_id: &str,
     deps: &[String],
+    visible: impl Fn(&str, &str) -> bool,
 ) -> Result<(), String> {
     let mut seen = Vec::new();
     for dep in deps {
@@ -771,9 +792,10 @@ pub(crate) fn check_dependencies(
             ));
         }
         seen.push(dep_project);
-        if !store
-            .manifests()
-            .has(&Manifest::to_path(dep_project, dep_version))
+        if !visible(dep, dep_project)
+            || !store
+                .manifests()
+                .has(&Manifest::to_path(dep_project, dep_version))
         {
             return Err(format!(
                 "dependency {dep:?} names version {dep_version} of {dep_project}, which does not exist"

@@ -119,8 +119,8 @@ impl ValidationReport {
 }
 
 /// Validate a record's fields against the collection `collection` owned by
-/// `owner`: the fields its owner declares, plus any this version's own
-/// project adds to a dependency's collection ([`VersionSchema::fields_of`]).
+/// `owner`: the fields its owner declares, and only those — no other
+/// project adds to a collection it does not own ([`VersionSchema::fields_of`]).
 pub fn validate_record(
     schema: &VersionSchema,
     owner: &str,
