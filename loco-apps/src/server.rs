@@ -9,7 +9,8 @@ use crate::auth::local::LocalAuthAdapter;
 use crate::auth::AuthAdapter;
 use crate::handlers;
 use crate::http::host;
-use crate::{Bundle, SchemaStore, Site};
+use crate::seed;
+use crate::{Bundle, Project, SchemaStore, Site};
 
 pub struct AppState {
     pub data_adapter: Box<dyn DataAdapter>,
@@ -78,12 +79,19 @@ pub fn build_app_with_root(root: &std::path::Path) -> Router {
 }
 
 pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Router {
-    // Load schema from disk into a fresh store
+    // Seed committed projects the store lacks, then load the store. Writes
+    // go only to `schemas/instances/`; `schemas/seed/` is read, never written.
     let instances_dir = root.join("schemas/instances");
+    let seeded = seed::seed_instances(&root.join("schemas/seed"), &instances_dir)
+        .expect("failed to seed schema instances");
+    for project in &seeded {
+        println!("Seeded {project} from schemas/seed");
+    }
     let schema = Arc::new(SchemaStore::load(&instances_dir).expect("failed to load schema"));
 
     let data_adapter = build_data_adapter();
     let auth_adapter = build_auth_adapter(root, &options);
+    warn_projects_without_account(&schema, auth_adapter.as_ref());
     let default_site = resolve_default_site(&schema, &options);
 
     let state = Arc::new(AppState {
@@ -115,6 +123,24 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         // failure in the browser). Any origin / method / header; no cookies.
         // Studio's Vite proxy is unchanged.
         .layer(cors_layer())
+}
+
+/// A project loads whether or not its account exists, and is unusable until
+/// it does: nobody is its developer. Say so once per project at boot.
+fn warn_projects_without_account(schema: &SchemaStore, auth: &dyn AuthAdapter) {
+    for (key, _) in schema.projects().list_all() {
+        let Some(project_id) = Project::from_path(&key).and_then(|v| v.get("project").cloned())
+        else {
+            continue;
+        };
+        let account = project_id.split('/').next().unwrap_or_default();
+        if let Ok(None) = auth.get_account(account) {
+            eprintln!(
+                "Project {project_id} is loaded but account {account} does not exist; \
+                 create it (POST /config/org) before using the project"
+            );
+        }
+    }
 }
 
 /// Read `LOCO_DEFAULT_SITE` (or the pinned option), and say once at boot what

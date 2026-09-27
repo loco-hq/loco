@@ -28,7 +28,7 @@ LOCO_USER=alice LOCO_PASSWORD=password npm run deploy
 
 Builds `dist/`, zips it, and `PUT`s it to `/schema/brickos/inventory/0.0.1-dev/bundle`. Then open <http://dev.inventory.brickos.localhost:3000/>. Chrome and Firefox resolve `*.localhost` to loopback; Safari may not.
 
-The bundle lands in `loco-apps/schemas/instances/brickos/inventory/versions/0.0.1-dev/bundle/`, which is gitignored: the build is not source.
+The bundle lands in `loco-apps/schemas/instances/brickos/inventory/versions/0.0.1-dev/bundle/`. `schemas/instances/` is the gitignored live store, so a deploy never shows up in `git status`.
 
 ## Develop
 

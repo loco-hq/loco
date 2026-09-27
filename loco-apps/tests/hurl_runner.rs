@@ -50,17 +50,17 @@ fn run_suite_with(suite_dir: &Path, options: AppOptions) -> tempfile::TempDir {
     run_suite_in(suite_dir, options, &[])
 }
 
-/// As `run_suite`, with the named accounts' committed instance trees
-/// (`schemas/instances/{account}/`) copied in beside the suite's fixtures, so
-/// the suite exercises what the server really loads on boot.
-fn run_suite_over_committed(suite_dir: &Path, accounts: &[&str]) -> tempfile::TempDir {
+/// As `run_suite`, with the named accounts' committed seed trees
+/// (`schemas/seed/{account}/`) copied into the root's `schemas/seed/`, so the
+/// server seeds its store from them on boot exactly as it does for real.
+fn run_suite_over_seed(suite_dir: &Path, accounts: &[&str]) -> tempfile::TempDir {
     run_suite_in(suite_dir, AppOptions::default(), accounts)
 }
 
 fn run_suite_in(
     suite_dir: &Path,
     options: AppOptions,
-    committed_accounts: &[&str],
+    seed_accounts: &[&str],
 ) -> tempfile::TempDir {
     // 1. Build server root in a tempdir
     let tmp = tempfile::TempDir::new().unwrap();
@@ -80,10 +80,10 @@ fn run_suite_in(
             std::fs::create_dir_all(&dst).ok();
         }
     }
-    for account in committed_accounts {
+    for account in seed_accounts {
         copy_dir_all(
-            &crate_dir().join("schemas/instances").join(account),
-            &tmp.path().join("schemas/instances").join(account),
+            &crate_dir().join("schemas/seed").join(account),
+            &tmp.path().join("schemas/seed").join(account),
         );
     }
 
@@ -185,7 +185,59 @@ fn suite_hosting_apex() {
 
 #[test]
 fn suite_brickos_inventory() {
-    run_suite_over_committed(&suites_dir().join("brickos_inventory"), &["brickos"]);
+    run_suite_over_seed(&suites_dir().join("brickos_inventory"), &["brickos"]);
+}
+
+#[test]
+fn suite_seed_store() {
+    let tmp = run_suite_over_seed(&suites_dir().join("seed_store"), &["brickos"]);
+    let seed = tmp.path().join("schemas/seed");
+    let store = tmp.path().join("schemas/instances/brickos/inventory");
+
+    // The writes landed in the store...
+    let version = store.join("versions/0.0.1-dev");
+    assert!(version.join("fields/lot/note.yaml").is_file());
+    assert!(version.join("bundle/index.html").is_file());
+    // ...and the seed is exactly what was committed.
+    assert_eq!(
+        tree(&seed),
+        tree(&crate_dir().join("schemas/seed").join("brickos"))
+            .into_iter()
+            .map(|(path, bytes)| (Path::new("brickos").join(path), bytes))
+            .collect::<Vec<_>>(),
+        "a write to a seeded project changed schemas/seed/"
+    );
+
+    // Delete the project from the store; the next boot restores it from the
+    // seed, without the edits made to the deleted copy.
+    std::fs::remove_dir_all(&store).unwrap();
+    let _app = loco_apps::server::build_app_with_root(tmp.path());
+    assert!(store.join("project.yaml").is_file());
+    assert!(store
+        .join("versions/0.0.1-dev/collections/lot.yaml")
+        .is_file());
+    assert!(!store
+        .join("versions/0.0.1-dev/fields/lot/note.yaml")
+        .exists());
+}
+
+/// Every file under `root`, as (relative path, contents), sorted.
+fn tree(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let rel = path.strip_prefix(root).unwrap().to_path_buf();
+                out.push((rel, std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
 }
 
 #[test]

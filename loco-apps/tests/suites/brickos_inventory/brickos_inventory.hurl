@@ -1,5 +1,5 @@
-# brickos/inventory is committed under schemas/instances/brickos/ and loads on
-# boot. This suite runs against that committed tree, not a copy of it.
+# brickos/inventory is committed under schemas/seed/brickos/ and seeded into
+# the store on boot. This suite runs against that committed seed.
 #
 # The `brickos` org is not seeded; whoever creates it owns it, and an org
 # owner is a developer on every project under it.

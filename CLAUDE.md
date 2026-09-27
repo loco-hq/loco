@@ -60,6 +60,7 @@ loco/
 ├── loco-schema/crates/loco-schema-runtime/    # InstanceStore + YamlFsAdapter, FileTreeStore + FileTreeFsAdapter
 ├── loco-lake/crates/loco-lake/                # DataAdapter + InMemoryAdapter + SqliteAdapter
 ├── loco-apps/                                 # Axum server consuming generated types
+│   └── schemas/{types,seed,instances}/        # type defs, committed seed projects, live store (gitignored)
 ├── loco-studio/                               # Schema + record editor
 ├── loco-ui/                                   # Field component library (npm workspace)
 ├── examples/public-page/                      # Static cross-origin page (no Node)
@@ -81,7 +82,7 @@ There is no `SchemaRegistry`. Generated `SchemaStore` owns one `InstanceStore<T>
 3. Rust code is generated to `$OUT_DIR/loco_generated.rs` — per-type structs (`new`, accessors, `to_path` / `from_path` / `from_yaml`), an `Update` patch type, a `SchemaInstance` impl, and a `SchemaStore` that constructs one `InstanceStore<T>` per type backed by `YamlFsAdapter`
 4. `lib.rs` includes the generated code via `include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"))`
 
-Instances are **not** scanned at build time. At server startup, `SchemaStore::load("schemas/instances")` walks the instances directory, matches each YAML file against its type's `pathTemplate`, and populates the stores.
+Instances are **not** scanned at build time. At server startup, `seed::seed_instances` first copies each committed project in `schemas/seed/` into `schemas/instances/` if the store lacks it, then `SchemaStore::load("schemas/instances")` walks the instances directory, matches each YAML file against its type's `pathTemplate`, and populates the stores.
 
 ### Namespace convention
 
@@ -91,7 +92,9 @@ An instance's namespace IS its path relative to `schemas/instances/` with `.yaml
 - `schemas/instances/ben/crm/datasets/acme.yaml` → `ben/crm/datasets/acme`
 - `schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
 
-`schemas/instances/loco/` (core, studio, demo) and `schemas/instances/brickos/` (inventory, [`docs/brickos.md`](docs/brickos.md)) are committed. Other instance trees (`ben/…`) are gitignored scratch data. The `brickos` org is not seeded: create it with `POST /config/org` and its creator owns it. Hurl suites use their own fixtures under `loco-apps/tests/suites/*/fixtures/`.
+`schemas/instances/` is the live store and is wholly gitignored — every `/schema` and `/config` write, bundle deploys included, lands there and never in a tracked file. Committed projects live in `schemas/seed/` with the same layout: `seed/loco/` (core, studio, demo) and `seed/brickos/` (inventory, [`docs/brickos.md`](docs/brickos.md)). At boot (`loco-apps/src/seed.rs`) a seed project is copied whole into the store only when the store has no `{account}/{project}/project.yaml` for it — decided by that file, not the directory, so leftovers such as an old `bundle/` do not block it. Files already in the store are never overwritten, and a seed is never re-synced: to pick up a changed seed, delete the project from `schemas/instances/` and restart. The server never writes to `schemas/seed/`; change it by editing the YAML and committing. Scratch projects (`ben/…`) live only in the store.
+
+A project whose account does not exist loads anyway and logs one warning at boot. The `brickos` org account is not created at boot: create it with `POST /config/org` and its creator owns it. Hurl suites use their own fixtures under `loco-apps/tests/suites/*/fixtures/`, and a root with no `schemas/seed/` seeds nothing; `run_suite_over_seed` in `tests/hurl_runner.rs` copies named seed accounts in for suites that need them.
 
 ## Schema Files
 
