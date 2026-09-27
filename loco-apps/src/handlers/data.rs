@@ -83,7 +83,11 @@ pub async fn fields(scope: CollectionScope) -> Response {
     if let Err(resp) = scope.require_can_read_data() {
         return resp;
     }
-    ApiResponse::success(scope.site.schema.fields(&scope.collection_name)).into_response()
+    let fields = scope
+        .site
+        .schema
+        .fields_of(&scope.collection_project, &scope.collection_name);
+    ApiResponse::success(fields).into_response()
 }
 
 pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Response {
@@ -190,6 +194,7 @@ pub async fn query(
             diagnostics.extend(q::record_diagnostics(
                 &scope.schema,
                 &name,
+                &plan.target.project,
                 &plan.target.name,
                 &page.records,
                 plan.lake.fields.as_deref(),

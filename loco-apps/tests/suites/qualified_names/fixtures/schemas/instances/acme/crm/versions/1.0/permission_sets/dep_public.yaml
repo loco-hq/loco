@@ -1,0 +1,6 @@
+label: "Dep public"
+description: "Bare `notes` here means acme/crm's notes (there are none), never a consumer's"
+collections:
+  - collection: notes
+    read: true
+    create: true

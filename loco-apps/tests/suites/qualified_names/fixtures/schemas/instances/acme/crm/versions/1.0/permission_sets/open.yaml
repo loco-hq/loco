@@ -1,0 +1,5 @@
+label: "Acme open"
+description: "Same name as alice/app's set; reachable only as acme/crm.open"
+collections:
+  - collection: deals
+    read: true

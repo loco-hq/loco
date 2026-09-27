@@ -25,13 +25,19 @@ struct CollectionPathParams {
 /// A `SiteScope` plus a validated collection from the request path's `{name}`.
 /// Use this for data routes scoped to a single collection — it pre-resolves
 /// `collection_key` so handlers don't repeat the validation dance.
+///
+/// `{name}` is bare for the site's own collection, or a dependency's written
+/// qualified and percent-encoded as one segment:
+/// `/data/acme%2Fcrm.contacts/list`. The router matches on the raw path, so
+/// the `%2F` never splits the segment; `Path` decodes it.
 pub struct CollectionScope {
     pub site: SiteScope,
     /// Lake `collection` column — `{owner_project}.{name}`. See
     /// [`collection_key`].
     pub collection_key: String,
-    /// Bare collection name (e.g. "account") — needed for schema lookups
-    /// where `collection_key` is the wrong shape.
+    /// Bare collection name (e.g. "account"), even when the request named it
+    /// qualified — needed for schema lookups where `collection_key` is the
+    /// wrong shape.
     pub collection_name: String,
     /// Project that owns the resolved collection: this site's project, or a
     /// direct dependency's. Resolved once in the extractor, since a qualified
@@ -65,7 +71,13 @@ impl CollectionScope {
         fields: &HashMap<String, Value>,
         mode: ValidationMode,
     ) -> ValidationReport {
-        validate_record(&self.site.schema, &self.collection_name, fields, mode)
+        validate_record(
+            &self.site.schema,
+            &self.collection_project,
+            &self.collection_name,
+            fields,
+            mode,
+        )
     }
 
     /// Validate every record in a list against this collection's schema.
@@ -76,6 +88,7 @@ impl CollectionScope {
     {
         validate_records(
             &self.site.schema,
+            &self.collection_project,
             &self.collection_name,
             records,
             mode,
@@ -143,9 +156,10 @@ impl FromRequestParts<Arc<AppState>> for CollectionScope {
         let CollectionPathParams { name } = read_path_params(parts, state).await?;
         let collection = site.require_collection(&name)?;
         let collection_project = collection.project().to_string();
+        let collection_name = collection.name().to_string();
         Ok(CollectionScope {
-            collection_key: collection_key(&collection_project, &name),
-            collection_name: name,
+            collection_key: collection_key(&collection_project, &collection_name),
+            collection_name,
             collection_project,
             site,
         })

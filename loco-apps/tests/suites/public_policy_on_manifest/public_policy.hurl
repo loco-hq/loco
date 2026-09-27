@@ -7,19 +7,20 @@
 #
 # Fixtures:
 #   acme/crm@1.0        — collection `contacts`, and the recommended set
-#                         `public_contacts` (read + create on `contacts`).
+#                         `public_contacts` (read + create on bare `contacts`,
+#                         which from where it is written means acme/crm's).
 #                         The package assigns nothing to public itself.
 #   alice/agency@1.0-dev — depends on acme/crm@1.0, manifest assigns
-#                         [public_contacts]
+#                         [acme/crm.public_contacts]
 #   alice/agency@2.0-dev — depends on acme/crm@1.0, manifest assigns nothing
 #   sites: `open` → 1.0-dev + dataset dev
 #          `staging` → 1.0-dev + dataset staging  (same snapshot, other data)
 #          `closed` → 2.0-dev + dataset dev
 #
-# Both consuming versions also declare their own `contacts` collection:
-# /data resolves a bare name to self today (#28), so the records live in the
-# consumer's project while the *policy* comes from the package's set, reached
-# through the dependency the manifest declares.
+# Both consuming versions also declare their own `contacts` collection. The
+# package's set opens the package's collection, `acme/crm.contacts` —
+# addressed on /data as `acme%2Fcrm.contacts` — and never the consumer's
+# same-named one.
 
 # --- 1. The dependency really is installed, and its set is what public
 #        assignment is naming.
@@ -42,9 +43,10 @@ HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
 
-# --- 2. The version that lists the package's set grants `public`.
+# --- 2. The version that lists the package's set grants `public` on the
+#        package's collection.
 
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: open
 HTTP 200
@@ -52,7 +54,7 @@ HTTP 200
 jsonpath "$.ok" == true
 jsonpath "$.data" count == 0
 
-POST http://127.0.0.1:{{port}}/data/contacts/add
+POST http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/add
 X-Project-Id: alice/agency
 X-Site-Id: open
 Content-Type: application/json
@@ -65,7 +67,7 @@ jsonpath "$.data.owner" == "public"
 contact_id: jsonpath "$.data.id"
 
 # The set grants read + create and nothing else. Unspecified verbs are false.
-PUT http://127.0.0.1:{{port}}/data/contacts/update/{{contact_id}}
+PUT http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/update/{{contact_id}}
 X-Project-Id: alice/agency
 X-Site-Id: open
 Content-Type: application/json
@@ -74,9 +76,22 @@ HTTP 403
 [Asserts]
 jsonpath "$.ok" == false
 
-DELETE http://127.0.0.1:{{port}}/data/contacts/delete/{{contact_id}}
+DELETE http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/delete/{{contact_id}}
 X-Project-Id: alice/agency
 X-Site-Id: open
+HTTP 403
+
+# The package's bare grant does not reach the consumer's own `contacts`.
+GET http://127.0.0.1:{{port}}/data/contacts/list
+X-Project-Id: alice/agency
+X-Site-Id: open
+HTTP 403
+
+POST http://127.0.0.1:{{port}}/data/contacts/add
+X-Project-Id: alice/agency
+X-Site-Id: open
+Content-Type: application/json
+{"email": "visitor@example.com"}
 HTTP 403
 
 # An assigned set also opens the pinned version to token-less /schema reads.
@@ -90,14 +105,14 @@ jsonpath "$.ok" == true
 # --- 3. The sibling version depends on the same package and lists nothing.
 #        Same collection, same dataset, same package — no public access.
 
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: closed
 HTTP 403
 [Asserts]
 jsonpath "$.ok" == false
 
-POST http://127.0.0.1:{{port}}/data/contacts/add
+POST http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/add
 X-Project-Id: alice/agency
 X-Site-Id: closed
 Content-Type: application/json
@@ -129,7 +144,7 @@ jsonpath "$.data[*].name" includes "contacts"
 # --- 4. Two sites pinning the SAME version cannot disagree.
 #        `staging` differs from `open` only by dataset.
 
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: staging
 HTTP 200
@@ -137,7 +152,7 @@ HTTP 200
 jsonpath "$.ok" == true
 jsonpath "$.data" count == 0
 
-POST http://127.0.0.1:{{port}}/data/contacts/add
+POST http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/add
 X-Project-Id: alice/agency
 X-Site-Id: staging
 Content-Type: application/json
@@ -145,7 +160,7 @@ Content-Type: application/json
 HTTP 201
 
 # Same policy, different partition: `open` still sees only its own record.
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: open
 HTTP 200
@@ -168,7 +183,7 @@ Authorization: Bearer {{alice_token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data.public_permission_sets" count == 1
-jsonpath "$.data.public_permission_sets[0]" == "public_contacts"
+jsonpath "$.data.public_permission_sets[0]" == "acme/crm.public_contacts"
 
 PUT http://127.0.0.1:{{port}}/schema/alice/agency/1.0-dev/manifest
 Authorization: Bearer {{alice_token}}
@@ -181,24 +196,37 @@ jsonpath "$.data.public_permission_sets" count == 0
 jsonpath "$.data.dependencies[0]" == "acme/crm@1.0"
 
 # One manifest write, both sites.
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: open
 HTTP 403
 
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: staging
 HTTP 403
 
-# And the sibling version can opt in the same way.
+# A bare name is the consuming version's own set. alice/agency has no
+# `public_contacts`, so naming the package's set bare grants nothing.
 PUT http://127.0.0.1:{{port}}/schema/alice/agency/2.0-dev/manifest
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
 {"public_permission_sets": ["public_contacts"]}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
+X-Project-Id: alice/agency
+X-Site-Id: closed
+HTTP 403
+
+# And the sibling version can opt in the same way, qualified.
+PUT http://127.0.0.1:{{port}}/schema/alice/agency/2.0-dev/manifest
+Authorization: Bearer {{alice_token}}
+Content-Type: application/json
+{"public_permission_sets": ["acme/crm.public_contacts"]}
+HTTP 200
+
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: closed
 HTTP 200
@@ -211,13 +239,13 @@ jsonpath "$.ok" == true
 PUT http://127.0.0.1:{{port}}/config/site/alice/agency/staging
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
-{"label": "Staging", "public_permission_sets": ["public_contacts"]}
+{"label": "Staging", "public_permission_sets": ["acme/crm.public_contacts"]}
 HTTP 200
 [Asserts]
 jsonpath "$.ok" == true
 jsonpath "$.data.public_permission_sets" not exists
 
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: staging
 HTTP 403
@@ -231,7 +259,7 @@ Content-Type: application/json
 {"public_permission_sets": ["no_such_set"]}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/data/contacts/list
+GET http://127.0.0.1:{{port}}/data/acme%2Fcrm.contacts/list
 X-Project-Id: alice/agency
 X-Site-Id: open
 HTTP 403

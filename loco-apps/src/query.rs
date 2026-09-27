@@ -9,8 +9,7 @@
 //! Names follow the rule in `CLAUDE.md` ("Name resolution"), strictly: a bare
 //! collection or field name means the project that owns the running version,
 //! and a dependency's must be written `{user}/{project}.{name}`. Resolution
-//! goes through [`VersionSchema::collection_in`] / [`VersionSchema::field_in`],
-//! never the fall-through lookups.
+//! goes through [`VersionSchema::collection_in`] / [`VersionSchema::field_in`].
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -127,7 +126,7 @@ pub fn target(schema: &VersionSchema, name: &str, raw: &Json) -> Result<Target, 
             "'collection' is required and must be a string".into(),
         ));
     };
-    let (project, bare) = split_name(collection).unwrap_or((schema.project_id(), collection));
+    let (project, bare) = schema.split(collection);
     if schema.collection_in(project, bare).is_none() {
         let why = if project == schema.project_id() {
             format!("no collection '{bare}' in {project}")
@@ -149,12 +148,6 @@ pub fn target(schema: &VersionSchema, name: &str, raw: &Json) -> Result<Target, 
         name: bare.to_string(),
         project: project.to_string(),
     })
-}
-
-/// `{user}/{project}.{name}` → `(project, name)`. `None` for a bare name.
-fn split_name(name: &str) -> Option<(&str, &str)> {
-    let (project, bare) = name.rsplit_once('.')?;
-    Some((project, bare))
 }
 
 /// Everything after the collection: `where`, `fields`, `order`, `limit`,
@@ -353,8 +346,12 @@ impl Resolver<'_> {
                 }
             };
         }
-        let (project, bare) = split_name(name).unwrap_or((self.schema.project_id(), name));
-        match self.schema.field_in(project, &self.target.name, bare) {
+        let (project, bare) = self.schema.split(name);
+        let target = &self.target;
+        match self
+            .schema
+            .field_in(&target.project, &target.name, project, bare)
+        {
             Some(_) if !lake_accepts_field_name(bare) => {
                 self.error(
                     kind::INVALID_QUERY,
@@ -365,11 +362,19 @@ impl Resolver<'_> {
             }
             Some(field) => Some((FieldRef::field(bare), Ty::of(field.r#type()))),
             None => {
-                let collection = format!("{}.{}", self.target.project, self.target.name);
+                let collection = self.target.key();
                 let message = if self.schema.visible_version(project).is_none() {
                     format!(
                         "unknown field '{name}': '{project}' is not a direct dependency of {}",
                         self.schema.project_id()
+                    )
+                } else if project != self.target.project {
+                    // A collection's fields are its owner's
+                    // (`VersionSchema::field_in`), so a bare field on a
+                    // dependency's collection never resolves.
+                    format!(
+                        "unknown field '{name}': fields on {collection} are {}'s; write {}.{bare}",
+                        self.target.project, self.target.project
                     )
                 } else {
                     format!(
@@ -861,12 +866,14 @@ fn decode_cursor(
 pub fn record_diagnostics(
     schema: &VersionSchema,
     query: &str,
+    owner: &str,
     collection: &str,
     records: &[loco_lake::Record],
     projection: Option<&[String]>,
 ) -> Vec<Diagnostic> {
     crate::validation::validate_records(
         schema,
+        owner,
         collection,
         records.iter().map(|r| (r.id.as_str(), &r.fields)),
         crate::validation::ValidationMode::Read,

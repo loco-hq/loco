@@ -3,6 +3,7 @@ use axum::response::Response;
 
 use crate::auth::auth_error_to_response;
 use crate::http::response::error_response;
+use crate::http::version_schema::split_qualified;
 use crate::server::AppState;
 use crate::{CollectionGrant, PermissionSet};
 
@@ -48,19 +49,24 @@ pub enum DataVerb {
     Delete,
 }
 
-/// Bare names match any visible collection with that name (`VersionSchema`
-/// already prefers self on a lookup). Qualified `{project}.{name}` (e.g.
-/// `ben/crm.contacts`) pins the owning project so two deps that share a
-/// name can be distinguished later.
+/// Whether a grant written in a permission set owned by `set_project` names
+/// the collection `collection_name` owned by `collection_project`.
+///
+/// A bare grant means the set's own project's collection — the rule every
+/// bare name follows ("Name resolution" in CLAUDE.md), applied from where the
+/// grant is written. So a consumer's set granting `contacts` opens only the
+/// consumer's `contacts`, never a dependency's of the same name; and a set a
+/// dependency ships, once a consumer opts into it, opens the dependency's
+/// collections and never the consumer's. A qualified grant
+/// (`{account}/{project}.{name}`) names its owner exactly.
 pub fn collection_grant_matches(
     grant: &str,
+    set_project: &str,
     collection_name: &str,
     collection_project: &str,
 ) -> bool {
-    if grant == collection_name {
-        return true;
-    }
-    grant == format!("{collection_project}.{collection_name}")
+    let (project, name) = split_qualified(grant).unwrap_or((set_project, grant));
+    project == collection_project && name == collection_name
 }
 
 fn grant_allows(g: &CollectionGrant, verb: DataVerb) -> bool {
@@ -85,8 +91,12 @@ where
 {
     sets.into_iter().any(|s| {
         s.collections().iter().any(|g| {
-            collection_grant_matches(g.collection(), collection_name, collection_project)
-                && grant_allows(g, verb)
+            collection_grant_matches(
+                g.collection(),
+                s.project(),
+                collection_name,
+                collection_project,
+            ) && grant_allows(g, verb)
         })
     })
 }
@@ -264,15 +274,29 @@ mod tests {
     }
 
     #[test]
-    fn bare_name_matches_regardless_of_owning_project() {
-        // Package collection resolved as loco/core.contacts — bare grant still hits.
+    fn bare_grant_matches_only_the_sets_own_project() {
+        // A set owned by alice/testapp: bare `contacts` is alice's, not a
+        // dependency's collection of the same name.
         let g = set("r", vec![grant("contacts", true, false, false, false)]);
-        assert!(public_may([&g], "contacts", "loco/core", DataVerb::Read));
         assert!(public_may(
             [&g],
             "contacts",
             "alice/testapp",
             DataVerb::Read
+        ));
+        assert!(!public_may([&g], "contacts", "loco/core", DataVerb::Read));
+        // A set a dependency ships: bare means the dependency's collection.
+        assert!(collection_grant_matches(
+            "contacts",
+            "loco/core",
+            "contacts",
+            "loco/core"
+        ));
+        assert!(!collection_grant_matches(
+            "contacts",
+            "loco/core",
+            "contacts",
+            "alice/testapp"
         ));
     }
 
@@ -289,20 +313,17 @@ mod tests {
             "alice/testapp",
             DataVerb::Read
         ));
-        assert!(!collection_grant_matches(
-            "loco/core.contacts",
-            "contacts",
-            "alice/testapp"
-        ));
         assert!(collection_grant_matches(
             "alice/testapp.guestbook",
+            "loco/core",
             "guestbook",
             "alice/testapp"
         ));
-        assert!(collection_grant_matches(
+        assert!(!collection_grant_matches(
+            "alice/testapp.guestbook",
+            "alice/testapp",
             "guestbook",
-            "guestbook",
-            "alice/testapp"
+            "loco/core"
         ));
     }
 }

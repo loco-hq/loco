@@ -276,6 +276,11 @@ fn suite_public_policy_on_manifest() {
 }
 
 #[test]
+fn suite_qualified_names() {
+    run_suite(&suites_dir().join("qualified_names"));
+}
+
+#[test]
 fn suite_auth_stale_token() {
     run_suite(&suites_dir().join("auth_stale_token"));
 }

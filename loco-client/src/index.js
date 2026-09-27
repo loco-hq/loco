@@ -117,7 +117,9 @@ export function createClient({
   }
 
   /**
-   * Record CRUD on one collection of the site's pinned version.
+   * Record CRUD on one collection of the site's pinned version. A bare name is
+   * the site's own collection; a dependency's is written qualified,
+   * `'acme/crm.contacts'`, and sent as one encoded path segment.
    * @param {string} collection
    */
   function data(collection) {

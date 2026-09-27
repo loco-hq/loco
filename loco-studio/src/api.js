@@ -196,43 +196,48 @@ export const updateManifest = (user, project, version, patch) =>
   request(`/schema/${user}/${project}/${version}/manifest`, json('PUT', patch));
 
 // --- Collections (within a version) ---
+//
+// A collection segment may be a dependency's, written qualified
+// (`acme/crm.contacts`); encoding keeps its `/` inside the one segment.
+
+const seg = encodeURIComponent;
 
 export const listCollections = (user, project, version) =>
   request(`/schema/${user}/${project}/${version}/collection/list`);
 
 export const getCollection = (user, project, version, name) =>
-  request(`/schema/${user}/${project}/${version}/collection/${name}`);
+  request(`/schema/${user}/${project}/${version}/collection/${seg(name)}`);
 
 export const createCollection = (user, project, version, body) =>
   request(`/schema/${user}/${project}/${version}/collection`, json('POST', body));
 
 export const updateCollection = (user, project, version, name, patch) =>
-  request(`/schema/${user}/${project}/${version}/collection/${name}`, json('PUT', patch));
+  request(`/schema/${user}/${project}/${version}/collection/${seg(name)}`, json('PUT', patch));
 
 export const deleteCollection = (user, project, version, name) =>
-  request(`/schema/${user}/${project}/${version}/collection/${name}`, { method: 'DELETE' });
+  request(`/schema/${user}/${project}/${version}/collection/${seg(name)}`, { method: 'DELETE' });
 
 // --- Fields (within a collection within a version) ---
 
 export const listFields = (user, project, version, collection) =>
-  request(`/schema/${user}/${project}/${version}/field/${collection}/list`);
+  request(`/schema/${user}/${project}/${version}/field/${seg(collection)}/list`);
 
 export const createField = (user, project, version, body) =>
   request(`/schema/${user}/${project}/${version}/field`, json('POST', body));
 
 export const updateField = (user, project, version, collection, name, patch) =>
-  request(`/schema/${user}/${project}/${version}/field/${collection}/${name}`, json('PUT', patch));
+  request(`/schema/${user}/${project}/${version}/field/${seg(collection)}/${name}`, json('PUT', patch));
 
 export const deleteField = (user, project, version, collection, name) =>
-  request(`/schema/${user}/${project}/${version}/field/${collection}/${name}`, { method: 'DELETE' });
+  request(`/schema/${user}/${project}/${version}/field/${seg(collection)}/${name}`, { method: 'DELETE' });
 
 // --- Fieldsets (ordered subsets of a collection's fields) ---
 
 export const listFieldsets = (user, project, version, collection) =>
-  request(`/schema/${user}/${project}/${version}/fieldset/${collection}/list`);
+  request(`/schema/${user}/${project}/${version}/fieldset/${seg(collection)}/list`);
 
 export const updateFieldset = (user, project, version, collection, name, patch) =>
-  request(`/schema/${user}/${project}/${version}/fieldset/${collection}/${name}`, json('PUT', patch));
+  request(`/schema/${user}/${project}/${version}/fieldset/${seg(collection)}/${name}`, json('PUT', patch));
 
 // --- Records (data) ---
 //
@@ -246,25 +251,25 @@ const siteHeaders = (projectId, siteName) => ({
 });
 
 export const listRecords = (projectId, siteName, collection) =>
-  request(`/data/${collection}/list`, { headers: siteHeaders(projectId, siteName) });
+  request(`/data/${seg(collection)}/list`, { headers: siteHeaders(projectId, siteName) });
 
 export const getRecord = (projectId, siteName, collection, id) =>
-  request(`/data/${collection}/get/${id}`, { headers: siteHeaders(projectId, siteName) });
+  request(`/data/${seg(collection)}/get/${id}`, { headers: siteHeaders(projectId, siteName) });
 
 export const addRecord = (projectId, siteName, collection, fields) =>
-  request(`/data/${collection}/add`, {
+  request(`/data/${seg(collection)}/add`, {
     ...json('POST', fields),
     headers: siteHeaders(projectId, siteName),
   });
 
 export const updateRecord = (projectId, siteName, collection, id, fields) =>
-  request(`/data/${collection}/update/${id}`, {
+  request(`/data/${seg(collection)}/update/${id}`, {
     ...json('PUT', fields),
     headers: siteHeaders(projectId, siteName),
   });
 
 export const deleteRecord = (projectId, siteName, collection, id) =>
-  request(`/data/${collection}/delete/${id}`, {
+  request(`/data/${seg(collection)}/delete/${id}`, {
     method: 'DELETE',
     headers: siteHeaders(projectId, siteName),
   });

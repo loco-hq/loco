@@ -1,0 +1,11 @@
+# Two direct deps that share the collection name `contacts`. base/lib is a
+# dependency of acme/crm only, so it is transitive here.
+#
+# `dep_public` is named bare on purpose: alice/app has no set of that name,
+# and acme/crm's must not stand in for it.
+dependencies:
+  - acme/crm@1.0
+  - beta/crm@1.0
+public_permission_sets:
+  - open
+  - dep_public

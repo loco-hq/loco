@@ -1,1 +1,4 @@
+# base/core owns no `account`. Declaring a field on that name must not add
+# it to the `account` a consumer (acme/crm) owns: only a collection's owner,
+# and the running project, declare fields that apply to it.
 type: "string"

@@ -95,9 +95,10 @@ export default function CollectionDetail() {
   if (error) return <p className="error">Error: {error.message}</p>;
   if (isLoading) return <p>Loading...</p>;
 
-  const ownNs = `${user}/${project}`;
-  const own = allFields.filter((f) => f.project === ownNs && f.version === version);
-  const inherited = allFields.filter((f) => f.project !== ownNs || f.version !== version);
+  // A bare collection name is this project's, and its fields are the ones
+  // this project declares — a dependency's same-named collection is another
+  // collection, so nothing here is inherited.
+  const own = allFields;
 
   return (
     <>
@@ -174,26 +175,6 @@ export default function CollectionDetail() {
           </div>
         )}
       </section>
-
-      {inherited.length > 0 && (
-        <section>
-          <div className="section-heading">
-            <h3>Inherited fields <span className="count">({inherited.length})</span></h3>
-          </div>
-          <div className="list">
-            {inherited.map((f) => (
-              <div key={`${f.project}/${f.version}/${f.name}`} className="list-row">
-                <div className="list-row-main">
-                  <span className="list-row-name">{f.name}</span>
-                  {f.label && <span className="list-row-label">{f.label}</span>}
-                  <span className="list-row-meta">{f.type}</span>
-                  <span className="list-row-meta">{f.project}@{f.version}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
       <section>
         <div className="section-heading">

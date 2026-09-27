@@ -155,9 +155,8 @@ holds only the named fields; system fields are always present.
 **Rule: an unqualified name means the project that owns the running version. A dependency's
 collection or field must be written fully qualified: `{user}/{project}.{name}`.**
 
-This is the rule in `CLAUDE.md` and #28. The query layer implements it strictly from the start.
-It must not call today's `VersionSchema::collection` / `field`, which fall through to
-dependencies in manifest order.
+This is the rule in `CLAUDE.md` ("Name resolution", #28), which every `VersionSchema` lookup
+follows.
 
 - `"collection": "lot"` → `brickos/inventory.lot`, when the running version is a
   `brickos/inventory` version.
@@ -170,11 +169,12 @@ Qualified collection names are already the lake's key: `collection_key` (`http/p
 records under `{owner_project}.{name}`. Resolution produces that key directly.
 
 Fields follow the same rule: `"field": "qty"` is the running project's `qty` field;
-`"field": "acme/crm.email"` is `acme/crm`'s. That holds on a dependency's collection too:
-filtering `acme/crm.contacts` by `email` looks for an `email` the *running* project declares
-on `contacts`, and without one it is `unknown_field`; write `acme/crm.email`. This is the
-conservative answer to [Open question 1](#open-questions); loosening it later is not breaking.
-A field name resolves to its bare name as the key in the record's `fields` map.
+`"field": "acme/crm.email"` is `acme/crm`'s. A collection's fields are its owner's, so on a
+dependency's collection a bare field never resolves: filtering `acme/crm.contacts` by `email`
+is `unknown_field`; write `acme/crm.email`. Nor does a field some other project declares under
+the same collection name. This is the conservative answer to
+[Open question 1](#open-questions); loosening it later is not breaking. A field name resolves to
+its bare name as the key in the record's `fields` map.
 
 Resolution uses `VersionSchema::collection_in` / `field_in`, which look only in the named
 project and only when it is self or a direct dependency.
@@ -389,8 +389,8 @@ leading zeros, and digit runs longer than any integer. Nothing requires the proj
 
 - **#15** (filter, sort, limit on `DataAdapter::list`) — this design replaces its public shape.
   #15 becomes the first implementation step: `LakeQuery` and `DataAdapter::query`.
-- **#28** (qualified names) — Decision 4 implements the rule for queries. The rest of #28
-  (`/schema`, existing `/data` routes, permission-set references) stays in #28.
+- **#28** (qualified names) — Decision 4 is the rule for queries. #28 applied it to `/schema`,
+  the `/data/{collection}` routes, and permission-set references too.
 - **#18** (`Array` / `Object` on `Value`) — list ops in `where` wait on it.
 - **#47** (named actions) — a saved query could be a kind of named action. Not designed here.
 - **#16** (sqlite `get` errors mapped to not-found) — the sqlite query path must not repeat it.
@@ -398,9 +398,8 @@ leading zeros, and digit runs longer than any integer. Nothing requires the proj
 ## Open questions
 
 1. **Fields on a dependency's collection.** *Answered conservatively for v1 (see [Names](#4-names)):
-   bare means the running project.* Under the rule as written, querying
-   `acme/crm.contact` by `email` needs `acme/crm.email`, because bare `email` means the running
-   project's field. That is strict and verbose. The alternative is that a bare field resolves in
+   a collection's fields are its owner's, and bare means the running project.* So querying
+   `acme/crm.contact` by `email` needs `acme/crm.email`. That is strict and verbose. The alternative is that a bare field resolves in
    the *collection's* project. The answer also depends on whether a project can add fields to a
    dependency's collection at all, and how those fields would be keyed in a record's `fields`
    map, which is keyed by bare name today.
@@ -424,9 +423,8 @@ leading zeros, and digit runs longer than any integer. Nothing requires the proj
 Choices the code made where the design above was silent, kept here so the next change starts
 from them. Most are folded into the sections above; these don't have a better home.
 
-- **A dependency's records.** A qualified dependency collection resolves and can be queried,
-  but no route writes to one yet: the `/data/{collection}` routes resolve self only (#28). So
-  such a query reads whatever the dataset holds under that key, which today is nothing.
+- **A dependency's records** are written through `/data/{collection}` with the qualified name
+  percent-encoded (`/data/acme%2Fcrm.contacts/add`), under the same lake key a query reads.
 - **Authorization** is the same rule as `CollectionScope::require_can_read_data`, now on
   `SiteScope::may_read_collection` so a query can ask it per collection.
 - **BrickOS ordering.** The batch page orders lots by `item_no` with `collation: natural`
