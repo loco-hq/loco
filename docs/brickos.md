@@ -1,6 +1,6 @@
 # BrickOS inventory
 
-Target model. Not implemented. The first schema slice is issue [#48](https://github.com/loco-hq/loco/issues/48): stored batches, lots, and the catalog. Unions, differences, views, and selling are the model those records have to grow into. They wait on query ([#15](https://github.com/loco-hq/loco/issues/15)) and a named action runner ([#47](https://github.com/loco-hq/loco/issues/47)).
+Target model. The first schema slice, issue [#48](https://github.com/loco-hq/loco/issues/48) — stored batches, lots, and the catalog — is committed under `loco-apps/schemas/instances/brickos/inventory/`. Nothing past it is implemented. Unions, differences, views, and selling are the model those records have to grow into. They wait on query ([#15](https://github.com/loco-hq/loco/issues/15)) and a named action runner ([#47](https://github.com/loco-hq/loco/issues/47)).
 
 BrickOS is one Loco project, `brickos/inventory`, used for a LEGO reseller: parts, sets, and minifigs listed on BrickLink, Amazon, and smaller marketplaces. A batch is the only inventory shape. A set's contents, a minifig's parts, a purchase intake, a commission pile, and an order are all batches. Another store later is another project that depends on this schema and keeps its own dataset. Store-specific fields land on that store's version. This document is the inventory model, not that packaging work.
 

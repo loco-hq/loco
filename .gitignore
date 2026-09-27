@@ -37,3 +37,4 @@ NOTES.md
 # scratch data. Test suites have their own fixtures under tests/suites/.
 /loco-apps/schemas/instances/*
 !/loco-apps/schemas/instances/loco/
+!/loco-apps/schemas/instances/brickos/
