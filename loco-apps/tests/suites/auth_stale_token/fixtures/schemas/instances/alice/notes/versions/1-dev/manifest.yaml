@@ -1,0 +1,4 @@
+label: "1-dev"
+dependencies: []
+public_permission_sets:
+  - "public_notes"

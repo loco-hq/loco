@@ -254,17 +254,22 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUser {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let token = parts
-            .headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(|v| v.to_string());
-
-        let Some(token) = token else {
+        let Some(header) = parts.headers.get("authorization") else {
             return Err(auth_error_response(
                 StatusCode::UNAUTHORIZED,
                 "missing auth: use Authorization: Bearer <token> header",
+            ));
+        };
+        let Some(token) = header
+            .to_str()
+            .ok()
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
+        else {
+            return Err(auth_error_response(
+                StatusCode::UNAUTHORIZED,
+                "malformed Authorization header: use Bearer <token>",
             ));
         };
 
@@ -280,6 +285,21 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUser {
             },
         }
     }
+}
+
+/// The request's session, or `public` when it carries no `Authorization`
+/// header at all. A header that is present but does not authenticate —
+/// malformed, unknown, expired, or a revoked key — is a 401, never `public`,
+/// so a client can tell "sign in again" from "you may not do this".
+pub async fn session_or_public(
+    parts: &mut Parts,
+    state: &Arc<AppState>,
+) -> Result<AuthSession, Response> {
+    if !parts.headers.contains_key("authorization") {
+        return Ok(AuthSession::public());
+    }
+    let AuthenticatedUser(session) = AuthenticatedUser::from_request_parts(parts, state).await?;
+    Ok(session)
 }
 
 fn auth_error_response(status: StatusCode, msg: &str) -> Response {

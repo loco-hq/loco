@@ -276,6 +276,11 @@ fn suite_public_policy_on_manifest() {
 }
 
 #[test]
+fn suite_auth_stale_token() {
+    run_suite(&suites_dir().join("auth_stale_token"));
+}
+
+#[test]
 fn suite_project_lifecycle() {
     let tmp = run_suite(&suites_dir().join("project_lifecycle"));
     assert_no_fieldset_files(tmp.path(), "alice/newapp");
