@@ -1,0 +1,5 @@
+label: "Public read"
+description: "Read on lot only; secret and acme/crm.contacts stay members-only"
+collections:
+  - collection: "lot"
+    read: true

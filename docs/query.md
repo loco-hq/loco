@@ -1,6 +1,13 @@
 # Query
 
-Target model. Not implemented. Supersedes the query shape sketched in #15.
+Supersedes the query shape sketched in #15.
+
+**Status.** Phases 1 and 2 are implemented: `LakeQuery` and `DataAdapter::query` in
+`loco-lake` (#15), and `POST /data/query` in `loco-apps` (#68, `src/query.rs`). The BrickOS
+batch page reads its lots through it. Not implemented: Studio as a caller, list operators
+(#18), the query-string question for `GET …/list`, and the mutations document. Choices the
+implementation made where this design was silent are folded into the sections below, with the
+rest under [Implementation notes](#implementation-notes).
 
 A **query** reads records from one collection in the lake: which records (`where`), in what
 order (`order`), how many (`limit`, `cursor`), and which fields (`fields`). A **batch** is a
@@ -102,18 +109,21 @@ later custom record- and field-level checks, belong.
 }
 ```
 
-This is the BrickOS batch page in one request. Today it lists every lot and filters by
-`batch_id` in the browser.
+This is the BrickOS batch page in one request. Before this API it listed every lot and
+filtered by `batch_id` in the browser.
 
 - **Named.** Keys are client-chosen names (`[a-z_][a-z0-9_]*`). Results come back under the
-  same keys. Names, not positions, so a diagnostic can say which query it's about.
+  same keys. Names, not positions, so a diagnostic can say which query it's about. A key
+  that breaks the pattern makes the body not a batch (400).
 - **Independent.** A query that fails validation or authorization gets an error result. The
   others still run. The HTTP status is 200 when the batch itself was well-formed; it is 4xx only
-  when the body can't be parsed as a batch at all.
+  when the body can't be parsed as a batch at all: not JSON, not `{"queries": {…}}`, a bad
+  query name, or more than 20 queries.
 - **One snapshot.** Every query in a batch reads the same state: one read transaction in sqlite,
   one read lock in memory.
-- **Bounded.** A maximum number of queries per batch (initially 20) and a maximum `limit` per
-  query (initially 500; default 50).
+- **Bounded.** A maximum number of queries per batch (20) and a maximum `limit` per query
+  (500; default 50). `limit` above 500 is `limit_exceeded`; 0 or a non-integer is
+  `invalid_query`.
 - **Queries don't reference each other** in v1. "The lots of the batch the first query found"
   is a join, and joins wait for references.
 
@@ -160,8 +170,14 @@ Qualified collection names are already the lake's key: `collection_key` (`http/p
 records under `{owner_project}.{name}`. Resolution produces that key directly.
 
 Fields follow the same rule: `"field": "qty"` is the running project's `qty` field;
-`"field": "acme/crm.email"` is `acme/crm`'s. See [Open question 1](#open-questions) for what
-this means when the collection itself comes from a dependency.
+`"field": "acme/crm.email"` is `acme/crm`'s. That holds on a dependency's collection too:
+filtering `acme/crm.contacts` by `email` looks for an `email` the *running* project declares
+on `contacts`, and without one it is `unknown_field`; write `acme/crm.email`. This is the
+conservative answer to [Open question 1](#open-questions); loosening it later is not breaking.
+A field name resolves to its bare name as the key in the record's `fields` map.
+
+Resolution uses `VersionSchema::collection_in` / `field_in`, which look only in the named
+project and only when it is self or a direct dependency.
 
 ### System fields
 
@@ -185,24 +201,37 @@ combinator  = { "and": [condition, …] } | { "or": [condition, …] } | { "not"
 | op | value | matches when the field is… |
 |---|---|---|
 | `eq` / `ne` | scalar | equal / not equal |
-| `lt` `lte` `gt` `gte` | number or string | ordered below / above (strings compare as bytes; timestamps are RFC 3339 so this orders them) |
-| `in` | non-empty list of scalars | equal to one of them |
+| `lt` `lte` `gt` `gte` | number or string | ordered below / above (strings compare as bytes; timestamps are RFC 3339 so this orders them). `null` or a boolean is `invalid_query`. |
+| `in` | non-empty list of scalars | equal to one of them (each is type-checked; `null` is allowed) |
 | `exists` | `true` / `false` | present and not null / absent or null |
 
 - **Missing is null.** The lake is schemaless, so a record can lack a field. For every op
   except `exists`, a missing field behaves as `null`.
 - **Null only matches null.** `eq null` matches null or missing. Ordering ops never match null.
+- **`ne` is exactly `not eq`.** So `qty ne 3` matches null, missing, and a drifted `"3"`. "A
+  drifted value doesn't match" below applies to `eq`, `in`, and the ordering ops.
+- **Integer and float are one kind.** `3` equals `3.0` and they order together, exactly (no
+  rounding of large integers through f64). A `float` field accepts an integer value.
 - **Values are type-checked against the field**, up front: `qty gt "3"` is a `type_mismatch`
   error on the query, not an empty result. A record whose stored value has drifted to another
   type doesn't match (and gets a read warning if returned by some other condition).
-- Depth and size are bounded (initially depth 8, 100 comparisons).
+- Depth and size are bounded: depth 8 (a lone comparison is depth 1), 100 comparisons. Over
+  either is `limit_exceeded`.
+- `{"and": []}` matches every record and `{"or": []}` none. A combinator must be the only key
+  in its object.
+- A field of type `list` cannot be filtered or ordered by (`invalid_query`) until #18.
 - No text search, no regex, no list ops in v1. List ops arrive with #18.
 
 ### `order`
 
-A list of `{ "field": name, "dir": "asc" | "desc" }`, `dir` defaulting to `asc`. `$id` is always
-appended as the final key so every order is total, which is what makes a cursor possible.
-Default order is `[$created_at, $id]`. Nulls sort first ascending.
+A list of `{ "field": name, "dir": "asc" | "desc" }`, `dir` defaulting to `asc`. `$id` ascending
+is appended as the final key unless the order already ends with `$id`, so every order is total,
+which is what makes a cursor possible. The lake appends it, not the caller. Default order is
+`[$created_at, $id]`.
+
+Values sort by kind first, then value: null < boolean < number < string, `false < true`. So
+nulls sort first ascending and last descending, and a value that drifted to another type sorts
+with its kind.
 
 ### `limit` and `cursor`
 
@@ -215,6 +244,10 @@ Send it back as `"cursor"` on the same query to get the next page.
   different query is a `cursor_mismatch` error. `limit` and `fields` may change between pages.
 - It is opaque and unsigned. Tampering with one can only produce a different page of a query
   the caller is already allowed to run.
+- Encoding: base64url, no padding, of `{"h": hash, "k": [values]}`. The hash is over the
+  *resolved* query, so `lot` and `brickos/inventory.lot`, or an omitted `dir` and `"asc"`, are
+  the same query. A cursor that doesn't decode, or has the wrong number of values, is
+  `invalid_query`.
 - No total count in v1: a count means a second scan.
 
 ## 6. Diagnostics
@@ -235,9 +268,16 @@ New `kind`s for queries: `unknown_collection`, `unknown_field`, `type_mismatch`,
 `invalid_query`, `forbidden`, `cursor_mismatch`, `limit_exceeded`.
 
 - **Query diagnostics** (errors) are all collected before execution and returned in that
-  query's result. The query does not run.
-- **Record diagnostics** (warnings) are read drift, as `/data/.../list` reports today. They go
-  in the batch-level `diagnostics`, and never fail the query.
+  query's result. The query does not run. Two exceptions stop early: an unresolvable
+  `collection` (nothing else can be checked without it) and `forbidden` (a caller who may not
+  read a collection is not told about its fields). A bad cursor is reported alone, since it is
+  only checked once the rest of the query is valid.
+- An unknown key in a query, a condition, or an order key is `invalid_query`, pointed at that
+  key.
+- **Record diagnostics** (warnings) are read drift, as `/data/.../list` reports today, checked
+  the same way (`validate_records`, against the collection's fields). They go in the
+  batch-level `diagnostics`, and never fail the query. With `fields`, only the projected fields
+  are checked.
 
 Writes will produce the same shape with `severity: error` and a record/field `path`. Custom
 record- and field-level validation, when it arrives, emits more `kind`s into it.
@@ -273,11 +313,24 @@ pub trait DataAdapter {
 }
 ```
 
-One call per batch, so the adapter owns the snapshot. `Page` is `records` plus the last order-key
-values. The cursor encoding lives in `loco-apps`, not the lake.
+One call per batch, so the adapter owns the snapshot: memory holds one read lock for the call,
+sqlite runs every query in one deferred transaction. `Page` is `records` plus `next`: the last
+record's effective order-key values, present only when more records follow (the adapter fetches
+`limit + 1` to know). That is what lets `loco-apps` return `cursor: null` on the last page. The
+cursor encoding lives in `loco-apps`, not the lake.
+
+System fields are `FieldRef::System(SystemField::…)`, an enum, never keys in `fields`.
+
+The lake checks structure and treats a failure as a caller bug: `limit` 0, an empty `in`, an
+ordering op against null or a boolean, a field name containing `"` (sqlite's quoted JSON path
+can't escape it; both adapters reject it), or an `after` of the wrong length fail the whole call
+with `Error::InvalidQuery`. `loco-apps` validates each query first so none of these reach the
+lake from `/data/query`.
 
 Memory evaluates the filter in process. Sqlite compiles it to `json_extract(fields, '$.name')`
-comparisons with bound parameters. Indexes on hot fields are a later concern; a full scan of one
+comparisons with bound parameters, each guarded by a `json_type` kind check (without it,
+`json_extract` returns `true` as `1` and `flag eq 1` would match). Sqlite applies the `fields`
+projection in Rust after fetching. Indexes on hot fields are a later concern; a full scan of one
 `(dataset_id, collection)` is fine at today's sizes.
 
 ## Relationship to other issues
@@ -292,7 +345,8 @@ comparisons with bound parameters. Indexes on hot fields are a later concern; a 
 
 ## Open questions
 
-1. **Fields on a dependency's collection.** Under the rule as written, querying
+1. **Fields on a dependency's collection.** *Answered conservatively for v1 (see [Names](#4-names)):
+   bare means the running project.* Under the rule as written, querying
    `acme/crm.contact` by `email` needs `acme/crm.email`, because bare `email` means the running
    project's field. That is strict and verbose. The alternative is that a bare field resolves in
    the *collection's* project. The answer also depends on whether a project can add fields to a
@@ -306,9 +360,22 @@ comparisons with bound parameters. Indexes on hot fields are a later concern; a 
 
 ## Phasing
 
-1. `LakeQuery`, `Filter`, `DataAdapter::query` for memory and sqlite, with unit tests on filter
-   evaluation. (#15)
-2. `POST /data/query`: parse, resolve names, type-check, authorize, execute, cursors,
-   diagnostics. Hurl suite.
-3. Studio and the BrickOS example move their client-side filtering onto it.
+1. Done (#15). `LakeQuery`, `Filter`, `DataAdapter::query` for memory and sqlite, with tests on
+   filter evaluation against both.
+2. Done (#68). `POST /data/query`: parse, resolve names, type-check, authorize, execute,
+   cursors, diagnostics. Hurl suite `data_query`.
+3. The BrickOS batch page's lots and its batch delete use it (#68). Studio has not moved.
 4. Mutations design document.
+
+## Implementation notes
+
+Choices the code made where the design above was silent, kept here so the next change starts
+from them. Most are folded into the sections above; these don't have a better home.
+
+- **A dependency's records.** A qualified dependency collection resolves and can be queried,
+  but no route writes to one yet: the `/data/{collection}` routes resolve self only (#28). So
+  such a query reads whatever the dataset holds under that key, which today is nothing.
+- **Authorization** is the same rule as `CollectionScope::require_can_read_data`, now on
+  `SiteScope::may_read_collection` so a query can ask it per collection.
+- **BrickOS ordering.** The batch page used to sort `item_no` with a numeric-aware
+  `localeCompare`. The server compares strings as bytes, so `10247` now sorts before `3001`.

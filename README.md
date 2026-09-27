@@ -125,6 +125,8 @@ Rolling forward or back is repinning the site at another version. Nothing moves 
 |--------|------|-------------|
 | POST | `/data/{collection}/add` | Insert. Body is the field map. Validated strictly. |
 | GET | `/data/{collection}/list` | List. Schema drift comes back as `diagnostics` warnings. |
+| POST | `/data/query` | Named, batched reads: `where`, `order`, `limit`, `fields`, cursor paging. Each query succeeds or fails on its own. [`docs/query.md`](docs/query.md) |
+| GET | `/data/{collection}/fields` | The collection's fields in the site's pinned version, same shape as `/schema/…/field/{collection}/list`. Readable by whoever may read the records. |
 | GET | `/data/{collection}/get/{id}` | Get one |
 | PUT | `/data/{collection}/update/{id}` | Patch fields. Validated strictly. |
 | DELETE | `/data/{collection}/delete/{id}` | Delete |

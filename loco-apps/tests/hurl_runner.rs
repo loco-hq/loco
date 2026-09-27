@@ -251,6 +251,11 @@ fn suite_data_fields() {
 }
 
 #[test]
+fn suite_data_query() {
+    run_suite(&suites_dir().join("data_query"));
+}
+
+#[test]
 fn suite_data_version_pinning() {
     run_suite(&suites_dir().join("data_version_pinning"));
 }

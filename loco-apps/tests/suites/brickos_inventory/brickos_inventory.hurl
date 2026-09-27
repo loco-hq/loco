@@ -97,6 +97,33 @@ HTTP 400
 jsonpath "$.diagnostics[0].kind" == "invalid_option"
 jsonpath "$.diagnostics[0].path" == "condition"
 
+# A second lot, in another batch, that the batch page must not show.
+POST http://127.0.0.1:{{port}}/data/lot/add
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"batch_id": "elsewhere", "item_no": "3001", "color_code": 11, "condition": "used", "qty": 2}
+HTTP 201
+
+# The batch page's one query for its lots (`useLots` in the example).
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"queries": {"q": {
+  "collection": "lot",
+  "where": {"field": "batch_id", "op": "eq", "value": "{{batch_id}}"},
+  "order": [{"field": "item_no"}, {"field": "color_code"}, {"field": "condition"}],
+  "limit": 500
+}}}
+HTTP 200
+[Asserts]
+jsonpath "$.data.q.records" count == 1
+jsonpath "$.data.q.records[0].fields.batch_id" == "{{batch_id}}"
+jsonpath "$.data.q.cursor" == null
+
 PUT http://127.0.0.1:{{port}}/data/batch/update/{{batch_id}}
 Authorization: Bearer {{token}}
 X-Project-Id: brickos/inventory

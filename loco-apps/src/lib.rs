@@ -7,6 +7,7 @@ pub mod auth;
 pub mod bundle;
 pub mod handlers;
 pub mod http;
+pub mod query;
 pub mod seed;
 pub mod server;
 pub mod validation;
