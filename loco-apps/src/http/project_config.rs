@@ -12,14 +12,66 @@
 //! dataset/site through the same handle. Routes that *require* an
 //! existing project gate on `exists()` at the scope layer
 //! (`ConfigProjectScope`).
+//!
+//! A site's `version` and `dataset` are references into this project. Site
+//! create and update refuse a pin to a version or dataset that does not
+//! exist, and a dataset or version delete refuses while a site still pins
+//! it. See [`PINS`] for how the check and the write stay one step.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use loco_schema_runtime::{Error, SchemaInstance};
 
 use crate::{
     Bundle, Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate,
 };
+
+/// Serializes every change that can make or break a site's pin: site create
+/// and update, dataset and version delete, and project delete. Each checks
+/// one store (does the version exist? does a site pin it?) and writes
+/// another, and a store's own writer lock covers only that store — without
+/// this, a site create and a version delete could each pass its check and
+/// both commit, leaving the site pinned to nothing.
+///
+/// It is global rather than per project because these are rare config
+/// operations. Lock order: `PINS` first, then store writers one after
+/// another, as usual. No store takes `PINS`, so it cannot deadlock them.
+static PINS: Mutex<()> = Mutex::new(());
+
+/// Guards no data of its own, so poison is ignored (as `InstanceStore` does).
+fn lock_pins() -> MutexGuard<'static, ()> {
+    PINS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[derive(Debug)]
+pub enum ConfigError {
+    /// A site names a version or dataset this project does not have.
+    InvalidPin(String),
+    /// A dataset or version cannot be deleted while a site pins it.
+    Pinned(String),
+    /// Purging a dataset's records from the lake failed; nothing was deleted
+    /// from the schema store.
+    Purge(String),
+    Schema(Error),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPin(msg) | Self::Pinned(msg) => write!(f, "{msg}"),
+            Self::Purge(msg) => write!(f, "failed to purge dataset records: {msg}"),
+            Self::Schema(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl From<Error> for ConfigError {
+    fn from(e: Error) -> Self {
+        Self::Schema(e)
+    }
+}
 
 pub struct ProjectConfig {
     store: Arc<SchemaStore>,
@@ -89,6 +141,9 @@ impl ProjectConfig {
     /// project, then the project record itself. Returns the dataset names
     /// that were removed so callers can purge their records from the lake.
     pub fn delete_project(&self) -> Result<Vec<String>, Error> {
+        // Under `PINS` so a site create racing this delete either lands first
+        // and is swept, or runs after and finds its version gone.
+        let _pins = lock_pins();
         let prefix = format!("{}/", self.project_id());
         let versions_prefix = format!("{}/versions/", self.project_id());
 
@@ -151,10 +206,28 @@ impl ProjectConfig {
             .update(&Dataset::to_path(&self.project_id(), name), patch)
     }
 
-    pub fn delete_dataset(&self, name: &str) -> Result<(), Error> {
+    /// Delete a dataset, refusing while a site pins it. `purge` removes its
+    /// records from the lake; it runs after the pin check and before the
+    /// dataset itself goes, so a failed purge leaves the dataset in place.
+    pub fn delete_dataset(
+        &self,
+        name: &str,
+        purge: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), ConfigError> {
+        let _pins = lock_pins();
+        let pinned_by = self.sites_pinning(|site| site.dataset == name);
+        if !pinned_by.is_empty() {
+            return Err(ConfigError::Pinned(format!(
+                "dataset {}/{name} is pinned by site(s): {}",
+                self.project_id(),
+                pinned_by.join(", ")
+            )));
+        }
+        purge().map_err(ConfigError::Purge)?;
         self.store
             .datasets()
-            .delete(&Dataset::to_path(&self.project_id(), name))
+            .delete(&Dataset::to_path(&self.project_id(), name))?;
+        Ok(())
     }
 
     // --- Site ---
@@ -170,15 +243,54 @@ impl ProjectConfig {
             .get(&Site::to_path(&self.project_id(), name))
     }
 
-    pub fn create_site(&self, mut input: Site) -> Result<Arc<Site>, Error> {
+    /// Create a site. Its `version` and `dataset` must exist in this project.
+    pub fn create_site(&self, mut input: Site) -> Result<Arc<Site>, ConfigError> {
         input.project = self.project_id();
-        self.store.sites().create(input)
+        let _pins = lock_pins();
+        self.check_pin(Some(&input.version), Some(&input.dataset))?;
+        Ok(self.store.sites().create(input)?)
     }
 
-    pub fn update_site(&self, name: &str, patch: SiteUpdate) -> Result<Arc<Site>, Error> {
-        self.store
+    /// Update a site. A `version` or `dataset` in the patch must exist in
+    /// this project; one left out is not re-checked.
+    pub fn update_site(&self, name: &str, patch: SiteUpdate) -> Result<Arc<Site>, ConfigError> {
+        let _pins = lock_pins();
+        self.check_pin(patch.version.as_deref(), patch.dataset.as_deref())?;
+        Ok(self
+            .store
             .sites()
-            .update(&Site::to_path(&self.project_id(), name), patch)
+            .update(&Site::to_path(&self.project_id(), name), patch)?)
+    }
+
+    /// The pinned version and dataset, where given, exist in this project.
+    /// Callers hold `PINS`.
+    fn check_pin(&self, version: Option<&str>, dataset: Option<&str>) -> Result<(), ConfigError> {
+        if let Some(version) = version {
+            if self.manifest(version).is_none() {
+                return Err(ConfigError::InvalidPin(format!(
+                    "site pins version {version:?}, which {} does not have",
+                    self.project_id()
+                )));
+            }
+        }
+        if let Some(dataset) = dataset {
+            if self.dataset(dataset).is_none() {
+                return Err(ConfigError::InvalidPin(format!(
+                    "site pins dataset {dataset:?}, which {} does not have",
+                    self.project_id()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Names of this project's sites for which `pins` holds.
+    fn sites_pinning(&self, pins: impl Fn(&Site) -> bool) -> Vec<String> {
+        self.sites()
+            .into_iter()
+            .filter(|(_, site)| pins(site))
+            .map(|(_, site)| site.name.clone())
+            .collect()
     }
 
     pub fn delete_site(&self, name: &str) -> Result<(), Error> {
@@ -207,11 +319,20 @@ impl ProjectConfig {
 
     /// Delete a version: cascade-removes the manifest plus all collections,
     /// fields, fieldsets, permission sets, and the bundle scoped to that
-    /// version.
-    pub fn delete_version(&self, version: &str) -> Result<(), Error> {
+    /// version. Refused while a site pins it.
+    pub fn delete_version(&self, version: &str) -> Result<(), ConfigError> {
+        let _pins = lock_pins();
         let manifest_path = Manifest::to_path(&self.project_id(), version);
         if !self.store.manifests().has(&manifest_path) {
-            return Err(Error::NotFound(manifest_path));
+            return Err(Error::NotFound(manifest_path).into());
+        }
+        let pinned_by = self.sites_pinning(|site| site.version == version);
+        if !pinned_by.is_empty() {
+            return Err(ConfigError::Pinned(format!(
+                "version {}@{version} is pinned by site(s): {}",
+                self.project_id(),
+                pinned_by.join(", ")
+            )));
         }
         let fieldsets_prefix = format!("{}/versions/{version}/fieldsets/", self.project_id());
         let fields_prefix = format!("{}/versions/{version}/fields/", self.project_id());
@@ -236,7 +357,7 @@ impl ProjectConfig {
             .store
             .bundles()
             .delete(&Bundle::to_path(&self.project_id(), version));
-        self.store.manifests().delete(&manifest_path)
+        Ok(self.store.manifests().delete(&manifest_path)?)
     }
 
     // --- Version copy (the publish primitive) ---

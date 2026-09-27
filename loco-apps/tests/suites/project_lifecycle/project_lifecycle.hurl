@@ -67,8 +67,15 @@ jsonpath "$.ok" == true
 jsonpath "$.data.version" == "0.0.1-dev"
 jsonpath "$.data.dependencies" count == 0
 
-# 5. Add an extra dataset and site so we can verify the cascade covers more than
-#    just the bootstrap pair.
+# 5. Add an extra version, dataset, and site so we can verify the cascade
+#    covers more than just the bootstrap trio. The site must pin a version and
+#    dataset that exist, so they come first.
+POST http://127.0.0.1:{{port}}/config/version/alice/newapp
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"version": "1.0.0"}
+HTTP 201
+
 POST http://127.0.0.1:{{port}}/config/dataset/alice/newapp
 Authorization: Bearer {{token}}
 Content-Type: application/json
