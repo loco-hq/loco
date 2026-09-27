@@ -1,24 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from './api.js';
 
-// Whole-collection reads: /data has no filter yet (#15), so "lots in this
-// batch" is every lot, filtered here.
 export const useRecords = (collection) =>
   useQuery({ queryKey: [collection], queryFn: () => api.list(collection) });
 
+// A batch's lots, filtered and ordered by the server.
+const batchLots = (batchId, extra) =>
+  api.queryAll({
+    collection: 'lot',
+    where: { field: 'batch_id', op: 'eq', value: batchId },
+    ...extra,
+  });
+
+// The server compares strings as bytes (`10247` before `3001`). Re-sort by
+// item_no numerically for display; the sort is stable, so the server's
+// color and condition order still breaks ties.
+const collator = new Intl.Collator(undefined, { numeric: true });
+const byItemNo = (a, b) => collator.compare(String(a ?? ''), String(b ?? ''));
+
 export function useLots(batchId) {
-  const q = useRecords('lot');
-  const lots = (q.data ?? [])
-    .filter((l) => l.fields.batch_id === batchId)
-    .sort(
-      (a, b) =>
-        String(a.fields.item_no).localeCompare(String(b.fields.item_no), undefined, {
-          numeric: true,
-        }) ||
-        (a.fields.color_code ?? 0) - (b.fields.color_code ?? 0) ||
-        String(a.fields.condition).localeCompare(String(b.fields.condition)),
-    );
-  return { ...q, data: lots };
+  // Under ['lot'], so a lot write, which invalidates ['lot'], refetches it.
+  const q = useQuery({
+    queryKey: ['lot', { batchId }],
+    queryFn: () =>
+      batchLots(batchId, {
+        order: [{ field: 'item_no' }, { field: 'color_code' }, { field: 'condition' }],
+      }).then((lots) => lots.sort((a, b) => byItemNo(a.fields.item_no, b.fields.item_no))),
+  });
+  return { ...q, data: q.data ?? [] };
 }
 
 /** A field's `options` ({ value, label }) from its /schema metadata. */
@@ -54,8 +63,7 @@ export function useRemoveBatch() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (batchId) => {
-      const lots = await api.list('lot');
-      for (const lot of lots.filter((l) => l.fields.batch_id === batchId)) {
+      for (const lot of await batchLots(batchId, { fields: [] })) {
         await api.remove('lot', lot.id);
       }
       await api.remove('batch', batchId);

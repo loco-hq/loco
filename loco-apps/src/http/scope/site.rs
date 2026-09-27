@@ -6,11 +6,11 @@ use axum::http::StatusCode;
 use axum::response::Response;
 
 use crate::auth::{AuthSession, AuthUser, AuthenticatedUser, ProjectRole, PUBLIC_USERNAME};
-use crate::http::authz::forbidden;
+use crate::http::authz::{forbidden, public_may, DataVerb};
 use crate::http::response::error_response;
 use crate::http::version_schema::VersionSchema;
 use crate::server::AppState;
-use crate::{Collection, Site};
+use crate::{Collection, PermissionSet, Site};
 
 use super::helpers::{read_project_id, read_site_id};
 use super::project::ProjectScope;
@@ -114,6 +114,38 @@ impl SiteScope {
             Some(role) if role.can_edit_data() => Ok(true),
             Some(_) | None => Ok(false),
         }
+    }
+
+    /// Permission sets the pinned version's manifest assigns to `public`,
+    /// resolved against that version (self + direct deps). Unknown names are
+    /// skipped.
+    ///
+    /// Policy is a property of the snapshot, not of the URL: two sites that
+    /// pin the same version cannot disagree about what `public` may do.
+    fn public_sets(&self) -> Vec<Arc<PermissionSet>> {
+        self.schema
+            .public_permission_sets()
+            .iter()
+            .filter_map(|name| self.schema.permission_set(name))
+            .collect()
+    }
+
+    /// A public permission set grants `verb` on the collection `name` owned
+    /// by `project`.
+    pub fn public_allowed(&self, name: &str, project: &str, verb: DataVerb) -> bool {
+        public_may(
+            self.public_sets().iter().map(|s| s.as_ref()),
+            name,
+            project,
+            verb,
+        )
+    }
+
+    /// Read on the collection `name` owned by `project`: members with data
+    /// access, or anyone when a public set grants `read`. `Err` only when the
+    /// membership lookup itself fails.
+    pub fn may_read_collection(&self, name: &str, project: &str) -> Result<bool, Response> {
+        Ok(self.has_data_access()? || self.public_allowed(name, project, DataVerb::Read))
     }
 
     /// Member data mutation (developer or editor). Public verbs live on

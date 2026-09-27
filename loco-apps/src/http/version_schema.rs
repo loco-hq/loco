@@ -198,6 +198,36 @@ impl VersionSchema {
             .get(&Collection::to_path(&self.project_id, &self.version, name))
     }
 
+    /// The version of `project` this view sees: the running version when
+    /// `project` is self, the pinned version when it is a **direct**
+    /// dependency, otherwise `None`. No fall-through — this is the strict
+    /// lookup `POST /data/query` resolves qualified names with (#28).
+    pub fn visible_version(&self, project: &str) -> Option<&str> {
+        self.dependencies
+            .iter()
+            .find(|(p, _)| p == project)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The collection `name` owned by `project`, when `project` is self or a
+    /// direct dependency. Strict: never looks in another project.
+    pub fn collection_in(&self, project: &str, name: &str) -> Option<Arc<Collection>> {
+        let version = self.visible_version(project)?;
+        self.store
+            .collections()
+            .get(&Collection::to_path(project, version, name))
+    }
+
+    /// The field `name` that `project` declares on `collection`, when
+    /// `project` is self or a direct dependency. Strict, like
+    /// [`Self::collection_in`].
+    pub fn field_in(&self, project: &str, collection: &str, name: &str) -> Option<Arc<Field>> {
+        let version = self.visible_version(project)?;
+        self.store
+            .fields()
+            .get(&Field::to_path(project, version, collection, name))
+    }
+
     /// Every field across self + direct deps that targets the given
     /// collection name. Deps may declare fields that extend a collection
     /// owned by another dep; those extensions are picked up here.

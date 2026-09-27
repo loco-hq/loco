@@ -66,6 +66,23 @@ export const update = (collection, id, fields) =>
 export const remove = (collection, id) =>
   request(`/data/${collection}/delete/${id}`, { method: 'DELETE' });
 
+// Every record one query matches, following its cursor page by page. A
+// query that fails comes back as an error result inside a 200.
+export async function queryAll(query) {
+  const records = [];
+  let cursor = null;
+  do {
+    const { q } = await request('/data/query', {
+      method: 'POST',
+      body: { queries: { q: { ...query, limit: 500, cursor } } },
+    });
+    if (q.error) throw new Error(errorMessage(q));
+    records.push(...q.records);
+    cursor = q.cursor;
+  } while (cursor);
+  return records;
+}
+
 // --- Schema ---
 
 // Field metadata from the version this site pins, whichever that is.

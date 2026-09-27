@@ -156,8 +156,10 @@ fully qualified (`{user}/{project}.{name}`) to be reachable.**
 The point is that installing a dependency can never silently change what an existing
 bare name resolves to. Resolution is a property of the name, not of manifest order.
 
-**This rule is not implemented yet.** Every `VersionSchema` lookup
-(`collection`, `field`, `fieldset`, `permission_set`) currently walks self first and
+**This rule is implemented only by `POST /data/query`** (`loco-apps/src/query.rs`),
+which resolves through the strict `VersionSchema::collection_in` / `field_in`. Everywhere
+else it is not yet: every other `VersionSchema` lookup
+(`collection`, `field`, `fieldset`, `permission_set`) walks self first and
 then falls through to direct deps in manifest order, returning the first match. That
 means a bare name *can* resolve into a dependency today, and two deps that share a
 name make the second unreachable. `collection_grant_matches` (`http/authz.rs`) is the
@@ -190,7 +192,7 @@ Mounted in `server.rs`:
 
 | Prefix | Role |
 |--------|------|
-| `/data` | Record CRUD, plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version. Site-scoped via headers. Strict validation on write; diagnostics on read. |
+| `/data` | Record CRUD, plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version — and `POST /data/query`, named batched reads with filters and cursors ([`docs/query.md`](docs/query.md)). Site-scoped via headers. Strict validation on write; diagnostics on read. |
 | `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, bundle). |
 | `/config` | Unversioned project / dataset / site / version lifecycle. |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
@@ -216,6 +218,7 @@ Handlers sit on request extractors in `http/scope/`:
 - `VersionReadScope` — read-only `VersionSchema` for GET `/schema`. Developer/editor on the path project (any version, no site headers). `public` (and authenticated non-members) on a site whose pinned version assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required).
 - `ConfigProjectScope` / `ConfigUserScope` — `/config` routes. Project-targeted routes require developer; list/create/org do not need site headers.
 - `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the pinned version's manifest assigns to `public` grants that verb on that collection. `GET /data/{collection}/fields` follows the read rule. It is how a hosted frontend reads field metadata (labels, `options`) without knowing its version: same list, order, and shape as `/schema/.../field/{collection}/list`, but the version comes from the site pin, so re-pinning the site changes the answer.
+- `POST /data/query` takes a bare `SiteScope` and authorizes each query on its own with `SiteScope::may_read_collection` (the same read rule); a denied or invalid query is an error result inside a 200, not a failed request. Parsing, strict name resolution, and cursors are in `src/query.rs`.
 
 Membership: `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Effective project access = org owner ∪ project role, plus implicit developer when the identity owns the person account (`alice` → `alice/*`).
 

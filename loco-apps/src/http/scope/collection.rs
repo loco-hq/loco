@@ -7,11 +7,10 @@ use axum::response::Response;
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
-use crate::http::authz::{forbidden, public_may, DataVerb};
+use crate::http::authz::{forbidden, DataVerb};
 use crate::http::paths::collection_key;
 use crate::server::AppState;
 use crate::validation::{validate_record, validate_records, ValidationMode, ValidationReport};
-use crate::PermissionSet;
 
 use loco_lake::Value;
 
@@ -78,40 +77,22 @@ impl CollectionScope {
         validate_records(&self.site.schema, &self.collection_name, records, mode)
     }
 
-    /// Permission sets the pinned version's manifest assigns to `public`,
-    /// resolved against that version (self + direct deps). Unknown names are
-    /// skipped.
-    ///
-    /// Policy is a property of the snapshot, not of the URL: two sites that
-    /// pin the same version cannot disagree about what `public` may do.
-    fn public_sets(&self) -> Vec<Arc<PermissionSet>> {
-        self.site
-            .schema
-            .public_permission_sets()
-            .iter()
-            .filter_map(|name| self.site.schema.permission_set(name))
-            .collect()
-    }
-
     fn public_allowed(&self, verb: DataVerb) -> bool {
-        public_may(
-            self.public_sets().iter().map(|s| s.as_ref()),
-            &self.collection_name,
-            &self.collection_project,
-            verb,
-        )
+        self.site
+            .public_allowed(&self.collection_name, &self.collection_project, verb)
     }
 
     /// List/get: members with data access, or anyone when a stacked set
     /// grants `read` on this collection.
     pub fn require_can_read_data(&self) -> Result<(), Response> {
-        if self.site.has_data_access()? {
-            return Ok(());
+        if self
+            .site
+            .may_read_collection(&self.collection_name, &self.collection_project)?
+        {
+            Ok(())
+        } else {
+            Err(forbidden())
         }
-        if self.public_allowed(DataVerb::Read) {
-            return Ok(());
-        }
-        Err(forbidden())
     }
 
     /// Insert: members with data access, or the `public` principal when a
