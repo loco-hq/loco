@@ -2,12 +2,18 @@
 //!
 //! Keys map to relative paths under `dir`: `key + ".yaml"`. Parent directories
 //! are created on write and pruned on delete (up to but not including `dir`).
+//!
+//! Writes are atomic: the YAML is written to a temp sibling and renamed over
+//! the target, so a crash or full disk mid-write leaves the old file, never a
+//! truncated one. A temp file a crash leaves behind is ignored by `load_all`.
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
+use crate::adapters::atomic::{is_temp_name, write_file_atomic};
 use crate::adapters::SchemaPersistence;
 use crate::error::Error;
+use crate::file_tree::validate_relative_path;
 use crate::store::SchemaInstance;
 
 pub struct YamlFsAdapter<T: SchemaInstance> {
@@ -27,8 +33,11 @@ impl<T: SchemaInstance> YamlFsAdapter<T> {
         &self.dir
     }
 
-    fn resolve(&self, key: &str) -> PathBuf {
-        self.dir.join(format!("{key}.yaml"))
+    /// The file a key lives at. Keys are relative paths, same rules as
+    /// file-tree keys.
+    fn resolve(&self, key: &str) -> Result<PathBuf, Error> {
+        validate_relative_path(key)?;
+        Ok(self.dir.join(format!("{key}.yaml")))
     }
 }
 
@@ -53,17 +62,16 @@ impl<T: SchemaInstance> SchemaPersistence<T> for YamlFsAdapter<T> {
     }
 
     fn write(&self, key: &str, value: &T) -> Result<(), Error> {
-        let path = self.resolve(key);
+        let path = self.resolve(key)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let yaml = serde_yaml::to_string(value)?;
-        std::fs::write(&path, yaml)?;
-        Ok(())
+        write_file_atomic(&path, yaml.as_bytes())
     }
 
     fn delete(&self, key: &str) -> Result<(), Error> {
-        let path = self.resolve(key);
+        let path = self.resolve(key)?;
         if path.exists() {
             std::fs::remove_file(&path)?;
         }
@@ -88,6 +96,11 @@ fn collect_yaml_files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
     }
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
+        // Skip temp artefacts from an interrupted write — a half-written
+        // YAML file or a file tree's staging directory.
+        if is_temp_name(&entry.file_name().to_string_lossy()) {
+            continue;
+        }
         let path = entry.path();
         if path.is_dir() {
             files.extend(collect_yaml_files(&path)?);
@@ -167,6 +180,79 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, "ben/crm/items/account");
         assert_eq!(loaded[0].1, item);
+    }
+
+    fn item(name: &str, label: &str) -> TestItem {
+        TestItem {
+            project: "ben/crm".to_string(),
+            name: name.to_string(),
+            label: label.to_string(),
+        }
+    }
+
+    #[test]
+    fn write_replaces_file_and_leaves_no_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter: YamlFsAdapter<TestItem> = YamlFsAdapter::new(dir.path().to_path_buf());
+
+        adapter
+            .write("ben/crm/items/a", &item("a", "First"))
+            .unwrap();
+        adapter
+            .write("ben/crm/items/a", &item("a", "Second"))
+            .unwrap();
+
+        let parent = dir.path().join("ben/crm/items");
+        let names: Vec<String> = std::fs::read_dir(&parent)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["a.yaml".to_string()]);
+
+        let yaml = std::fs::read_to_string(parent.join("a.yaml")).unwrap();
+        let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(value.get("label").and_then(|v| v.as_str()), Some("Second"));
+    }
+
+    #[test]
+    fn load_all_ignores_leftover_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter: YamlFsAdapter<TestItem> = YamlFsAdapter::new(dir.path().to_path_buf());
+        adapter.write("ben/crm/items/a", &item("a", "A")).unwrap();
+
+        // What a crash mid-write leaves: a truncated temp file next to the
+        // target, and a file tree's staging directory holding YAML.
+        let parent = dir.path().join("ben/crm/items");
+        std::fs::write(parent.join(".loco-write-1-2-3"), "label: [unclosed").unwrap();
+        std::fs::write(parent.join(".loco-write-1-2-4.yaml"), "label: [unclosed").unwrap();
+        let staging = dir.path().join("ben/.loco-staging-1-2-3/items");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("b.yaml"), "label: [unclosed").unwrap();
+
+        let loaded = adapter.load_all().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, "ben/crm/items/a");
+    }
+
+    #[test]
+    fn load_all_fails_on_corrupt_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter: YamlFsAdapter<TestItem> = YamlFsAdapter::new(dir.path().to_path_buf());
+
+        let path = dir.path().join("ben/crm/items/a.yaml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "label: [unclosed").unwrap();
+
+        assert!(matches!(adapter.load_all(), Err(Error::Yaml(_))));
+    }
+
+    #[test]
+    fn write_rejects_traversal_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter: YamlFsAdapter<TestItem> = YamlFsAdapter::new(dir.path().join("store"));
+        let err = adapter.write("../escape", &item("a", "A")).unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+        assert!(!dir.path().join("escape.yaml").exists());
     }
 
     #[test]
