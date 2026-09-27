@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::value::Value;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub id: String,
     pub dataset_id: String,

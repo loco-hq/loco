@@ -71,6 +71,9 @@ pub fn lake_error_to_response(err: loco_lake::Error) -> Response {
         loco_lake::Error::InvalidDataset(msg) => {
             error_response(StatusCode::BAD_REQUEST, &format!("invalid dataset: {msg}"))
         }
+        loco_lake::Error::InvalidQuery(msg) => {
+            error_response(StatusCode::BAD_REQUEST, &format!("invalid query: {msg}"))
+        }
         loco_lake::Error::Internal(msg) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg),
     }
 }
