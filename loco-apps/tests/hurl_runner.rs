@@ -160,7 +160,16 @@ fn suite_schema_crud() {
 
 #[test]
 fn suite_bundle() {
-    run_suite(&suites_dir().join("bundle"));
+    let tmp = run_suite(&suites_dir().join("bundle"));
+    // `missing_version.hurl`: every refused write left nothing behind.
+    let orphan = tmp
+        .path()
+        .join("schemas/instances/alice/testapp/versions/9.9.9-dev");
+    assert!(
+        !orphan.exists(),
+        "a write to a missing version left {} on disk",
+        orphan.display()
+    );
 }
 
 #[test]

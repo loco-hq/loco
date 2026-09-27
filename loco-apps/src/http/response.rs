@@ -116,6 +116,9 @@ pub fn version_schema_error_to_response(
         | VersionSchemaError::InvalidFieldType(_)) => {
             error_response(StatusCode::BAD_REQUEST, &e.to_string())
         }
+        e @ VersionSchemaError::UnknownVersion(_) => {
+            error_response(StatusCode::NOT_FOUND, &e.to_string())
+        }
         VersionSchemaError::Schema(e) => schema_error_to_response(e),
     }
 }
