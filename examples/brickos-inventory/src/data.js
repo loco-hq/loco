@@ -1,12 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as api from './api.js';
+import { createClient } from 'loco-client';
+
+// Hosted at dev.inventory.brickos.<host>, the server infers the site from the
+// Host header. Under `vite dev` the page is on localhost:5177 and the proxy
+// reaches the apex, which has no site, so the client names it.
+export const loco = createClient(
+  import.meta.env.DEV ? { projectId: 'brickos/inventory', siteId: 'dev' } : {},
+);
 
 export const useRecords = (collection) =>
-  useQuery({ queryKey: [collection], queryFn: () => api.list(collection) });
+  useQuery({ queryKey: [collection], queryFn: () => loco.data(collection).list() });
 
 // A batch's lots, filtered and ordered by the server.
 const batchLots = (batchId, extra) =>
-  api.queryAll({
+  loco.queryAll({
     collection: 'lot',
     where: { field: 'batch_id', op: 'eq', value: batchId },
     ...extra,
@@ -29,9 +36,12 @@ export function useLots(batchId) {
   return { ...q, data: q.data ?? [] };
 }
 
-/** A field's `options` ({ value, label }) from its /schema metadata. */
+/** A field's `options` ({ value, label }), from the version this site pins. */
 export function useOptions(collection, field) {
-  const q = useQuery({ queryKey: ['fields', collection], queryFn: () => api.fields(collection) });
+  const q = useQuery({
+    queryKey: ['fields', collection],
+    queryFn: () => loco.data(collection).fields(),
+  });
   return q.data?.find((f) => f.name === field)?.options ?? [];
 }
 
@@ -52,10 +62,12 @@ function useWrite(collection, fn) {
   });
 }
 
-export const useAdd = (collection) => useWrite(collection, (fields) => api.add(collection, fields));
+export const useAdd = (collection) =>
+  useWrite(collection, (fields) => loco.data(collection).add(fields));
 export const useUpdate = (collection) =>
-  useWrite(collection, ({ id, fields }) => api.update(collection, id, fields));
-export const useRemove = (collection) => useWrite(collection, (id) => api.remove(collection, id));
+  useWrite(collection, ({ id, fields }) => loco.data(collection).update(id, fields));
+export const useRemove = (collection) =>
+  useWrite(collection, (id) => loco.data(collection).remove(id));
 
 /** Deletes a batch's lots, then the batch. There is no cascade on /data. */
 export function useRemoveBatch() {
@@ -63,9 +75,9 @@ export function useRemoveBatch() {
   return useMutation({
     mutationFn: async (batchId) => {
       for (const lot of await batchLots(batchId, { fields: [] })) {
-        await api.remove('lot', lot.id);
+        await loco.data('lot').remove(lot.id);
       }
-      await api.remove('batch', batchId);
+      await loco.data('batch').remove(batchId);
     },
     // `exact`: the deleted batch's own ['batch', id] query must not refetch
     // into a 404 before the page navigates away.
