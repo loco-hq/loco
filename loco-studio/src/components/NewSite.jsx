@@ -58,8 +58,8 @@ export default function NewSite() {
         <TextField
           label="Name"
           required
-          pattern="[a-z][a-z0-9_-]*"
-          placeholder="e.g. acme-prod"
+          pattern="[a-z_][a-z0-9_]{0,62}"
+          placeholder="e.g. acme_prod"
           value={name}
           onChange={setName}
         />

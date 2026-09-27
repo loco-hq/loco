@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use loco_schema_runtime::{Error, SchemaInstance};
 
+use crate::http::names::{check_slug, check_version};
 use crate::http::version_schema::{check_dependencies, parse_dependency};
 use crate::{
     Bundle, Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate,
@@ -52,6 +53,9 @@ pub(crate) fn lock_pins() -> MutexGuard<'static, ()> {
 
 #[derive(Debug)]
 pub enum ConfigError {
+    /// A project, dataset, site, or version name outside its charset
+    /// (`crate::http::names`).
+    InvalidName(String),
     /// A site names a version or dataset this project does not have.
     InvalidPin(String),
     /// A dataset, version, or project cannot be deleted while a site pins it
@@ -68,7 +72,10 @@ pub enum ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidPin(msg) | Self::Pinned(msg) | Self::InvalidDependency(msg) => {
+            Self::InvalidName(msg)
+            | Self::InvalidPin(msg)
+            | Self::Pinned(msg)
+            | Self::InvalidDependency(msg) => {
                 write!(f, "{msg}")
             }
             Self::Purge(msg) => write!(f, "failed to purge dataset records: {msg}"),
@@ -134,12 +141,13 @@ impl ProjectConfig {
         &self,
         label: impl Into<String>,
         description: impl Into<String>,
-    ) -> Result<Arc<Project>, Error> {
-        self.store.projects().create(Project::new(
+    ) -> Result<Arc<Project>, ConfigError> {
+        check_slug("project", &self.project).map_err(ConfigError::InvalidName)?;
+        Ok(self.store.projects().create(Project::new(
             self.project_id(),
             label.into(),
             description.into(),
-        ))
+        ))?)
     }
 
     pub fn update_project(&self, patch: ProjectUpdate) -> Result<Arc<Project>, Error> {
@@ -217,9 +225,10 @@ impl ProjectConfig {
             .get(&Dataset::to_path(&self.project_id(), name))
     }
 
-    pub fn create_dataset(&self, mut input: Dataset) -> Result<Arc<Dataset>, Error> {
+    pub fn create_dataset(&self, mut input: Dataset) -> Result<Arc<Dataset>, ConfigError> {
+        check_slug("dataset", &input.name).map_err(ConfigError::InvalidName)?;
         input.project = self.project_id();
-        self.store.datasets().create(input)
+        Ok(self.store.datasets().create(input)?)
     }
 
     pub fn update_dataset(&self, name: &str, patch: DatasetUpdate) -> Result<Arc<Dataset>, Error> {
@@ -267,6 +276,7 @@ impl ProjectConfig {
 
     /// Create a site. Its `version` and `dataset` must exist in this project.
     pub fn create_site(&self, mut input: Site) -> Result<Arc<Site>, ConfigError> {
+        check_slug("site", &input.name).map_err(ConfigError::InvalidName)?;
         input.project = self.project_id();
         let _pins = lock_pins();
         self.check_pin(Some(&input.version), Some(&input.dataset))?;
@@ -334,9 +344,10 @@ impl ProjectConfig {
             .get(&Manifest::to_path(&self.project_id(), version))
     }
 
-    pub fn create_version(&self, version: String) -> Result<Arc<Manifest>, Error> {
+    pub fn create_version(&self, version: String) -> Result<Arc<Manifest>, ConfigError> {
+        check_version(&version).map_err(ConfigError::InvalidName)?;
         let manifest = Manifest::new(self.project_id(), version, Vec::new(), Vec::new());
-        self.store.manifests().create(manifest)
+        Ok(self.store.manifests().create(manifest)?)
     }
 
     /// Delete a version: cascade-removes the manifest plus all collections,
@@ -444,7 +455,11 @@ impl ProjectConfig {
     /// manifest's always hold — its targets cannot be deleted while it names
     /// them — but one loaded from disk was never checked, and copying it into
     /// a published version would make a bad dependency permanent.
+    ///
+    /// `to` must be a valid version name; `from` need only exist, since a
+    /// version loaded from disk may predate the charset.
     pub fn copy_version(&self, from: &str, to: &str) -> Result<Arc<Manifest>, ConfigError> {
+        check_version(to).map_err(ConfigError::InvalidName)?;
         let _pins = lock_pins();
         let source_manifest = self
             .manifest(from)

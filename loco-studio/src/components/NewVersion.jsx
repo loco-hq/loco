@@ -31,8 +31,8 @@ export default function NewVersion() {
       <form onSubmit={handleSubmit}>
         <div className="form-field">
           <label htmlFor="version">Version</label>
-          <input id="version" name="version" required pattern="[a-z0-9._-]+" placeholder="e.g. 0.0.1-dev" />
-          <span className="field-help">Lowercase, single path segment.</span>
+          <input id="version" name="version" required pattern="[a-z0-9_\-][a-z0-9._\-]{0,62}" placeholder="e.g. 0.0.1-dev" />
+          <span className="field-help">Lowercase letters, digits, dots, hyphens, underscores; not starting with a dot.</span>
         </div>
         {create.error && <p className="error">{create.error.message}</p>}
         <div className="form-actions">

@@ -1,0 +1,2 @@
+label: "Legacy App"
+description: "Names from before the charset (issue #82); boot must still load them"

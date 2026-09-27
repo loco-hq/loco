@@ -34,7 +34,7 @@ export default function NewDataset() {
       <form onSubmit={handleSubmit}>
         <div className="form-field">
           <label htmlFor="name">Name</label>
-          <input id="name" name="name" required pattern="[a-z][a-z0-9_-]*" placeholder="e.g. prod" />
+          <input id="name" name="name" required pattern="[a-z_][a-z0-9_]{0,62}" placeholder="e.g. prod" />
         </div>
         <div className="form-field">
           <label htmlFor="label">Label</label>

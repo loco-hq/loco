@@ -32,8 +32,8 @@ export default function NewProject() {
       <form onSubmit={handleSubmit}>
         <div className="form-field">
           <label htmlFor="name">Name</label>
-          <input id="name" name="name" required pattern="[a-z][a-z0-9_-]*" placeholder="e.g. crm" />
-          <span className="field-help">Lowercase letters, digits, hyphens, underscores. Used as a path segment.</span>
+          <input id="name" name="name" required pattern="[a-z_][a-z0-9_]{0,62}" placeholder="e.g. crm" />
+          <span className="field-help">Lowercase letters, digits, underscores. Used as a path segment.</span>
         </div>
         <div className="form-field">
           <label htmlFor="label">Label</label>
