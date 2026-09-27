@@ -287,6 +287,11 @@ fn suite_project_lifecycle() {
 }
 
 #[test]
+fn suite_site_pins() {
+    run_suite(&suites_dir().join("site_pins"));
+}
+
+#[test]
 fn suite_data_validation_writes() {
     run_suite(&suites_dir().join("data_validation_writes"));
 }

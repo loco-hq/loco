@@ -7,7 +7,9 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::auth::{auth_error_to_response, OrgRole, ProjectRole};
-use crate::http::response::{error_response, schema_error_to_response, ApiResponse};
+use crate::http::response::{
+    config_error_to_response, error_response, schema_error_to_response, ApiResponse,
+};
 use crate::http::scope::{ConfigProjectScope, ConfigUserScope};
 use crate::server::AppState;
 use crate::{Dataset, DatasetUpdate, ProjectUpdate, Site, SiteUpdate};
@@ -242,16 +244,15 @@ pub async fn delete_dataset(
     Path((_, _, name)): Path<(String, String, String)>,
 ) -> Response {
     let qualified = format!("{}/{name}", scope.project_id());
-    if let Err(e) = state.data_adapter.delete_dataset(&qualified) {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("failed to purge dataset records: {e}"),
-        );
-    }
-
-    match scope.config.delete_dataset(&name) {
+    let purge = || {
+        state
+            .data_adapter
+            .delete_dataset(&qualified)
+            .map_err(|e| e.to_string())
+    };
+    match scope.config.delete_dataset(&name, purge) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
-        Err(e) => schema_error_to_response(e),
+        Err(e) => config_error_to_response(e),
     }
 }
 
@@ -260,7 +261,7 @@ pub async fn delete_dataset(
 pub async fn create_site(scope: ConfigProjectScope, Json(input): Json<Site>) -> Response {
     match scope.config.create_site(input) {
         Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
-        Err(e) => schema_error_to_response(e),
+        Err(e) => config_error_to_response(e),
     }
 }
 
@@ -288,7 +289,7 @@ pub async fn update_site(
 ) -> Response {
     match scope.config.update_site(&name, patch) {
         Ok(v) => ApiResponse::success(v).into_response(),
-        Err(e) => schema_error_to_response(e),
+        Err(e) => config_error_to_response(e),
     }
 }
 
@@ -361,7 +362,7 @@ pub async fn delete_version(
 ) -> Response {
     match scope.config.delete_version(&version) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
-        Err(e) => schema_error_to_response(e),
+        Err(e) => config_error_to_response(e),
     }
 }
 

@@ -140,6 +140,7 @@ An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalC
 - A **version** is a schema snapshot under `{project}/versions/{version}/`. A version whose name ends in `-dev` is a draft (`0.0.1-dev`); only drafts accept `/schema` writes. Any other name — `1.0.0`, `my-app`, `0-draft` — is published.
 - A **dataset** is a lake partition. Record keys are `(dataset_id, collection, id)` where `dataset_id` is `{user}/{project}/{dataset_name}`.
 - A **site** pins a `version` + `dataset`. Requests identify the site with `X-Project-Id: {user}/{project}` and `X-Site-Id: {site}`. There is no tenant header. Token-less `public` may perform any `/data` verb a permission set the **pinned version's manifest** assigns (`public_permission_sets`) grants. Policy is on the version, not the site: two sites pinning one version cannot disagree. Grants are not on the collection. Unspecified verbs default to false.
+- A site's pin must exist: site create/update is a 400 when `version` is not a version of this project or `dataset` is not one of its datasets. Deleting a dataset or version a site still pins is a 409 naming the sites — re-pin or delete them first; project delete still cascades everything. Check and write run under one process-wide lock (`PINS` in `http/project_config.rs`), since each store's writer lock covers only that store.
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
