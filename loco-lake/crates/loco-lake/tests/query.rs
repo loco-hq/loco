@@ -280,18 +280,93 @@ fn large_integers_compare_exactly_with_floats() {
 
 #[test]
 fn awkward_field_names() {
+    // Each key has a decoy: what the name would mean if a JSON path read it
+    // unescaped (`\b` a backspace, `\u0041` an `A`, `\"` ending the key).
+    let keys = [
+        ("a.b", "a"),
+        ("c[0]", "c"),
+        ("é", "e"),
+        ("a\\b", "a\u{8}"),
+        ("q\"uote", "q"),
+        ("\\u0041", "A"),
+        ("back\\", "back"),
+    ];
     for (name, a) in adapters() {
-        put(
-            a.as_ref(),
-            COLL,
-            "x",
-            vec![("a.b", i(1)), ("c[0]", i(2)), ("é", i(3))],
-        );
-        put(a.as_ref(), COLL, "y", vec![("a", i(1))]);
-        for (field, value) in [("a.b", 1), ("c[0]", 2), ("é", 3)] {
-            let page = run(a.as_ref(), filtered(cmp(field, CompareOp::Eq, i(value))));
-            assert_eq!(tags(&page), vec!["x"], "{name}: {field}");
+        for (n, (key, decoy)) in keys.iter().enumerate() {
+            let n = n as i64;
+            put(a.as_ref(), COLL, "x", vec![(key, i(n))]);
+            put(a.as_ref(), COLL, "y", vec![(decoy, i(n))]);
         }
+        for (n, (key, _)) in keys.iter().enumerate() {
+            let n = n as i64;
+            let page = run(a.as_ref(), filtered(cmp(key, CompareOp::Eq, i(n))));
+            assert_eq!(tags(&page), vec!["x"], "{name}: eq on {key:?}");
+            let exists = run(
+                a.as_ref(),
+                filtered(Filter::Exists {
+                    field: FieldRef::field(*key),
+                    exists: true,
+                }),
+            );
+            assert_eq!(tags(&exists), vec!["x"], "{name}: exists on {key:?}");
+            // As an order key the x record, which has the value, sorts last.
+            let page = run(
+                a.as_ref(),
+                ordered(OrderKey::asc(FieldRef::field(*key)), 100),
+            );
+            assert_eq!(tags(&page).last().unwrap(), "x", "{name}: order by {key:?}");
+        }
+    }
+}
+
+/// Insert a record as `user` with no fields but `tag`.
+fn put_as(a: &dyn DataAdapter, user: &str, tag: &str) -> String {
+    a.insert(
+        DS,
+        COLL,
+        InsertRequest {
+            user: user.to_string(),
+            fields: HashMap::from([("tag".to_string(), s(tag))]),
+        },
+    )
+    .unwrap()
+    .id
+}
+
+#[test]
+fn ties_break_on_id_not_on_another_system_field() {
+    for (name, a) in adapters() {
+        // `z` is created by zoe and `m` by amy, and z's id sorts first, so
+        // created_by order and id order disagree.
+        let z = put_as(a.as_ref(), "zoe", "z");
+        loop {
+            let m = put_as(a.as_ref(), "amy", "m");
+            if m > z {
+                break;
+            }
+            a.delete(DS, COLL, &m).unwrap();
+        }
+        let want = vec!["z", "m"];
+
+        let by_id = ordered(OrderKey::asc(FieldRef::System(SystemField::Id)), 100);
+        assert_eq!(tags(&run(a.as_ref(), by_id)), want, "{name}: $id");
+        assert_eq!(
+            tags(&run(a.as_ref(), LakeQuery::new(COLL, 100))),
+            want,
+            "{name}: default"
+        );
+        // Neither record has `qty`, so every key but the trailing id ties.
+        for key in [
+            OrderKey::asc(FieldRef::field("qty")),
+            OrderKey::desc(FieldRef::field("qty")),
+        ] {
+            let q = ordered(key.clone(), 100);
+            assert_eq!(tags(&run(a.as_ref(), q)), want, "{name}: {key:?}");
+            let q = ordered(key.clone(), 1);
+            assert_eq!(walk(a.as_ref(), q), want, "{name}: walk {key:?}");
+        }
+        let by_owner = ordered(OrderKey::asc(FieldRef::System(SystemField::Owner)), 1);
+        assert_eq!(walk(a.as_ref(), by_owner), vec!["m", "z"], "{name}: $owner");
     }
 }
 
@@ -566,12 +641,12 @@ fn invalid_queries_are_rejected() {
             filtered(cmp("qty", CompareOp::Lt, Value::Boolean(true))),
         ),
         (
-            "quote in a field name",
-            filtered(cmp("a\"b", CompareOp::Eq, i(1))),
+            "NUL in a field name",
+            filtered(cmp("nul\0x", CompareOp::Eq, i(1))),
         ),
         (
-            "quote in an order key",
-            ordered(OrderKey::asc(FieldRef::field("a\"b")), 1),
+            "NUL in an order key",
+            ordered(OrderKey::asc(FieldRef::field("nul\0x")), 1),
         ),
         (
             "after shorter than the effective order",

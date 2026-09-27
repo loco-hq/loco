@@ -226,9 +226,10 @@ fn invalid(msg: &str) -> Error {
 
 fn validate_field(field: &FieldRef) -> Result<(), Error> {
     match field {
-        // Field names go into a quoted sqlite JSON path, which cannot escape `"`.
-        FieldRef::Field(name) if name.contains('"') => {
-            Err(invalid(&format!("field name {name:?} contains '\"'")))
+        // sqlite's JSON path lookup stops at NUL, even written as `\u0000`,
+        // so it would match the key cut short there.
+        FieldRef::Field(name) if name.contains('\0') => {
+            Err(invalid(&format!("field name {name:?} contains NUL")))
         }
         _ => Ok(()),
     }

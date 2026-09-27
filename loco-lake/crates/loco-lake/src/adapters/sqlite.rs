@@ -336,15 +336,26 @@ impl Sql {
     }
 
     fn path(name: &str) -> rusqlite::types::Value {
-        // Quoted so `.` and `[` in a name stay part of the key; `"` is
-        // rejected by `LakeQuery::validate`.
-        format!("$.\"{name}\"").into()
+        // Quoted so `.` and `[` stay part of the key. Inside the quotes
+        // sqlite unescapes `\\` and `\"`. NUL is rejected by
+        // `LakeQuery::validate`: sqlite cuts the key there, escaped or not.
+        let mut path = String::from("$.\"");
+        for c in name.chars() {
+            match c {
+                '\\' => path.push_str("\\\\"),
+                '"' => path.push_str("\\\""),
+                c => path.push(c),
+            }
+        }
+        path.push('"');
+        path.into()
     }
 
     /// The field's `query::Kind` as an integer. Never NULL.
     fn kind(&mut self, field: &FieldRef) {
         match field {
-            FieldRef::System(_) => self.push(&(Kind::String as i64).to_string()),
+            // Not a bare integer: in ORDER BY that would be a column index.
+            FieldRef::System(_) => self.push(&format!("CAST({} AS INTEGER)", Kind::String as i64)),
             FieldRef::Field(name) => {
                 self.push(&format!(
                     "(CASE json_type(fields, ?) \
