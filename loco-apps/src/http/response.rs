@@ -109,7 +109,9 @@ pub fn version_schema_error_to_response(
 ) -> Response {
     use crate::http::version_schema::VersionSchemaError;
     match err {
-        e @ (VersionSchemaError::NotWritable(_) | VersionSchemaError::InvalidDependency(_)) => {
+        e @ (VersionSchemaError::NotWritable(_)
+        | VersionSchemaError::InvalidDependency(_)
+        | VersionSchemaError::InvalidFieldType(_)) => {
             error_response(StatusCode::BAD_REQUEST, &e.to_string())
         }
         VersionSchemaError::Schema(e) => schema_error_to_response(e),

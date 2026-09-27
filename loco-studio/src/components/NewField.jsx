@@ -3,9 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TextField, SelectField } from 'loco-ui';
 import { createField } from '../api.js';
-
-const FIELD_TYPES = ['string', 'integer', 'float', 'boolean', 'list'];
-const TYPE_OPTIONS = FIELD_TYPES.map((t) => ({ value: t, label: t }));
+import { TYPE_OPTIONS } from '../fieldTypes.js';
 
 export default function NewField() {
   const { user, project, version, name: collection } = useParams();

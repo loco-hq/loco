@@ -26,6 +26,11 @@ pub mod kind {
     pub const INVALID_OPTION: &str = "invalid_option";
 }
 
+/// The types a collection field may declare. `/schema` field writes reject
+/// anything else; these are exactly the types [`type_mismatch`] enforces and
+/// the lake `Value` can hold.
+pub const FIELD_TYPES: [&str; 4] = ["string", "integer", "float", "boolean"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -171,10 +176,9 @@ pub fn validate_record(
 /// dedicated required-field check belongs alongside a future `required` flag
 /// on `Field`.
 ///
-/// Unknown declared types (anything outside string/integer/float/boolean) are
-/// treated as "can't enforce" and pass — keeps us forward-compatible with new
-/// type strings (e.g. "list") that the schema layer may add before the
-/// validator catches up.
+/// A declared type outside [`FIELD_TYPES`] passes: `/schema` no longer
+/// accepts one, but boot still loads older field YAML that has one (e.g.
+/// "list"), and reads of those records should not fail.
 fn type_mismatch(declared: &str, value: &Value) -> Option<&'static str> {
     if matches!(value, Value::Null) {
         return None;
@@ -270,7 +274,7 @@ mod tests {
 
     #[test]
     fn unknown_declared_type_is_not_enforced() {
-        // A future type string we don't know about should NOT trigger a
+        // A type written before /schema checked it should NOT trigger a
         // type_mismatch — we'd rather pass-through than reject blindly.
         assert!(type_mismatch("list", &Value::String("x".into())).is_none());
         assert!(type_mismatch("date", &Value::Integer(1)).is_none());
