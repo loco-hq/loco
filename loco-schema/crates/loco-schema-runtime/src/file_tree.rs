@@ -8,7 +8,7 @@
 //! to a [`crate::FileTreePersistence`] adapter.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use crate::adapters::FileTreePersistence;
 use crate::error::Error;
@@ -103,8 +103,13 @@ pub fn validate_relative_path(path: &str) -> Result<(), Error> {
 /// The cache holds identities (template variables), never file bytes: reads go
 /// to the adapter every time. Writes are whole-tree replace — there is no patch
 /// of one file.
+///
+/// Mutations serialize on `writer` the same way [`crate::InstanceStore`]'s
+/// do, with the same lock order (`writer`, then `cache`, never another
+/// store's).
 pub struct FileTreeStore<T: FileTreeInstance> {
     cache: RwLock<BTreeMap<String, Arc<T>>>,
+    writer: Mutex<()>,
     adapter: Arc<dyn FileTreePersistence<T>>,
 }
 
@@ -112,8 +117,14 @@ impl<T: FileTreeInstance> FileTreeStore<T> {
     pub fn new(adapter: Arc<dyn FileTreePersistence<T>>) -> Self {
         Self {
             cache: RwLock::new(BTreeMap::new()),
+            writer: Mutex::new(()),
             adapter,
         }
+    }
+
+    /// Serializes mutations. It guards no data, so poison is ignored.
+    fn lock_writer(&self) -> MutexGuard<'_, ()> {
+        self.writer.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Record a tree that already exists on disk. Used by `SchemaStore::load`.
@@ -164,6 +175,7 @@ impl<T: FileTreeInstance> FileTreeStore<T> {
     /// Replace the tree at `key` with `tree`, atomically. Creates it if absent.
     pub fn put(&self, key: &str, tree: &FileTree) -> Result<Arc<T>, Error> {
         let vars = T::from_path(key).ok_or_else(|| Error::InvalidPath(key.to_string()))?;
+        let _writer = self.lock_writer();
         self.adapter.write_tree(key, tree)?;
         let arc = Arc::new(T::from_vars(&vars));
         self.cache
@@ -180,11 +192,9 @@ impl<T: FileTreeInstance> FileTreeStore<T> {
     }
 
     pub fn delete(&self, key: &str) -> Result<(), Error> {
-        {
-            let cache = self.cache.read().unwrap();
-            if !cache.contains_key(key) {
-                return Err(Error::NotFound(key.to_string()));
-            }
+        let _writer = self.lock_writer();
+        if !self.has(key) {
+            return Err(Error::NotFound(key.to_string()));
         }
         self.adapter.delete(key)?;
         self.cache.write().unwrap().remove(key);
@@ -192,38 +202,40 @@ impl<T: FileTreeInstance> FileTreeStore<T> {
     }
 
     /// Drop every tree whose key starts with `prefix`. Lets a project or
-    /// version delete cascade into file-tree instances.
+    /// version delete cascade into file-tree instances. As with
+    /// [`crate::InstanceStore::delete_by_prefix`], a tree that fails to delete
+    /// stays cached and the first error is returned after the rest are tried.
     pub fn delete_by_prefix(&self, prefix: &str) -> Result<Vec<String>, Error> {
-        let to_delete: Vec<String> = {
-            let cache = self.cache.read().unwrap();
-            cache
-                .range(prefix.to_string()..)
-                .take_while(|(k, _)| k.starts_with(prefix))
-                .map(|(k, _)| k.clone())
-                .collect()
-        };
-        for key in &to_delete {
-            let _ = self.adapter.delete(key);
+        let _writer = self.lock_writer();
+        let keys: Vec<String> = self.list(prefix).into_iter().map(|(k, _)| k).collect();
+        let mut deleted = Vec::new();
+        let mut first_err = None;
+        for key in keys {
+            match self.adapter.delete(&key) {
+                Ok(()) => {
+                    self.cache.write().unwrap().remove(&key);
+                    deleted.push(key);
+                }
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
         }
-        let mut cache = self.cache.write().unwrap();
-        for key in &to_delete {
-            cache.remove(key);
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(deleted),
         }
-        Ok(to_delete)
     }
 
     /// Duplicate every tree under `from_prefix` to the same suffix under
     /// `to_prefix`. The copy primitive a later copy-version builds on; keys
     /// that do not match this type's template after rewriting are skipped.
+    ///
+    /// Each destination is cached as soon as it is written, so an error part
+    /// way through leaves the cache matching the trees that did land.
     pub fn copy_by_prefix(&self, from_prefix: &str, to_prefix: &str) -> Result<Vec<String>, Error> {
-        let sources: Vec<String> = {
-            let cache = self.cache.read().unwrap();
-            cache
-                .range(from_prefix.to_string()..)
-                .take_while(|(k, _)| k.starts_with(from_prefix))
-                .map(|(k, _)| k.clone())
-                .collect()
-        };
+        let _writer = self.lock_writer();
+        let sources: Vec<String> = self.list(from_prefix).into_iter().map(|(k, _)| k).collect();
         let mut copied = Vec::new();
         for src in &sources {
             let dest = format!("{to_prefix}{}", &src[from_prefix.len()..]);
@@ -291,5 +303,60 @@ mod tests {
         assert_eq!(tree.total_bytes(), 2);
         assert_eq!(tree.get("index.html"), Some(b"hi".as_slice()));
         assert_eq!(tree.paths(), vec!["index.html"]);
+    }
+
+    #[derive(Debug, Clone)]
+    struct Tree;
+
+    impl FileTreeInstance for Tree {
+        fn to_path(&self) -> String {
+            String::new()
+        }
+        fn from_path(path: &str) -> Option<HashMap<String, String>> {
+            path.starts_with("p/").then(HashMap::new)
+        }
+        fn from_vars(_vars: &HashMap<String, String>) -> Self {
+            Tree
+        }
+    }
+
+    /// Writes succeed; deletes fail for any key containing `fail`.
+    struct FailingDeletes;
+
+    impl FileTreePersistence<Tree> for FailingDeletes {
+        fn list_trees(&self) -> Result<Vec<(String, Tree)>, Error> {
+            Ok(Vec::new())
+        }
+        fn read_tree(&self, _key: &str) -> Result<Option<FileTree>, Error> {
+            Ok(None)
+        }
+        fn read_file(&self, _key: &str, _path: &str) -> Result<Option<Vec<u8>>, Error> {
+            Ok(None)
+        }
+        fn write_tree(&self, _key: &str, _tree: &FileTree) -> Result<(), Error> {
+            Ok(())
+        }
+        fn modified_at(&self, _key: &str) -> Result<Option<std::time::SystemTime>, Error> {
+            Ok(None)
+        }
+        fn delete(&self, key: &str) -> Result<(), Error> {
+            if key.contains("fail") {
+                Err(Error::Io(std::io::Error::other("disk says no")))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn delete_by_prefix_reports_failure_and_keeps_undeleted_keys() {
+        let store = FileTreeStore::new(Arc::new(FailingDeletes));
+        for key in ["p/a", "p/fail", "p/z"] {
+            store.put(key, &FileTree::new()).unwrap();
+        }
+        assert!(matches!(store.delete_by_prefix("p/"), Err(Error::Io(_))));
+        assert!(!store.has("p/a"));
+        assert!(store.has("p/fail"));
+        assert!(!store.has("p/z"));
     }
 }

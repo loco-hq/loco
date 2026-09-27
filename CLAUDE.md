@@ -239,7 +239,7 @@ Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, 
 - **Rust keyword escaping**: Codegen emits `r#type` (etc.) for property names that are Rust keywords. See `rust_ident()` in `codegen.rs`.
 - **Error types**: Each crate has its own error enum — `loco_gen_schema::Error`, `loco_schema_runtime::Error`, `loco_lake::Error`.
 - **Tests**: Unit tests are co-located (`#[cfg(test)] mod tests`). Filesystem tests use `tempfile`. API tests are Hurl suites under `loco-apps/tests/suites/`, driven by `tests/hurl_runner.rs`.
-- **Thread safety**: `InstanceStore` uses `RwLock<BTreeMap<...>>`. `InMemoryAdapter` uses `RwLock<HashMap<...>>`. `SqliteAdapter` uses `Mutex<Connection>`.
+- **Thread safety**: `InstanceStore` uses `RwLock<BTreeMap<...>>` for reads, and every mutation holds a per-store writer mutex across check, persist, and cache update (`FileTreeStore` too). Read-modify-write goes through `InstanceStore::update_with`, never `get` then `update`. No store locks another, so nothing nests: a caller touching several stores takes them one after another. `InMemoryAdapter` uses `RwLock<HashMap<...>>`. `SqliteAdapter` uses `Mutex<Connection>`.
 
 ## Frontend Apps
 
