@@ -20,6 +20,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/{name}/add", post(add))
         .route("/{name}/list", route_get(list))
+        .route("/{name}/fields", route_get(fields))
         .route("/{name}/get/{id}", route_get(get))
         .route("/{name}/update/{id}", put(update))
         .route("/{name}/delete/{id}", route_delete(delete))
@@ -68,6 +69,17 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
         }
         Err(e) => lake_error_to_response(e),
     }
+}
+
+/// The collection's fields in the site's pinned version — the same list, order,
+/// and shape as `/schema/{user}/{project}/{version}/field/{collection}/list`,
+/// but the version comes from the site, so a hosted frontend never has to be
+/// told which version it runs on. Readable by whoever may read the records.
+pub async fn fields(scope: CollectionScope) -> Response {
+    if let Err(resp) = scope.require_can_read_data() {
+        return resp;
+    }
+    ApiResponse::success(scope.site.schema.fields(&scope.collection_name)).into_response()
 }
 
 pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Response {

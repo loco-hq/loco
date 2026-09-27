@@ -16,7 +16,7 @@ version="${LOCO_VERSION:-0.0.1-dev}"
 : "${LOCO_USER:?set LOCO_USER to a developer on brickos/inventory}"
 : "${LOCO_PASSWORD:?set LOCO_PASSWORD}"
 
-VITE_LOCO_VERSION="$version" npx vite build
+npx vite build
 
 zip="$(mktemp -d)/bundle.zip"
 trap 'rm -rf "$(dirname "$zip")"' EXIT

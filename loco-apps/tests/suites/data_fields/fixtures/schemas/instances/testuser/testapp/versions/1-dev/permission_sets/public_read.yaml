@@ -1,0 +1,8 @@
+label: "Public read"
+description: "Read on items only; notes stays members-only"
+collections:
+  - collection: "items"
+    read: true
+    create: false
+    update: false
+    delete: false

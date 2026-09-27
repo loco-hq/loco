@@ -1,0 +1,5 @@
+label: "Default"
+fields:
+  - status
+  - title
+auto_add: true
