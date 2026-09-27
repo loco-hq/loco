@@ -186,6 +186,8 @@ Request routing:
 
 Apex without a default site is today's API-only process. Vite-dev talks to the apex with headers (or its proxy). Hosting is not involved.
 
+A hosted frontend does not know its version either. `/schema` reads name `{account}/{project}/{version}`, so a bundle that read field metadata there would carry its version and read the wrong one once the site is re-pinned. It reads `GET /data/{collection}/fields` instead: the same list, order, and shape as `/schema/.../field/{collection}/list`, resolved against the version the request's site pins, readable by whoever may read that collection's records. The BrickOS example (`examples/brickos-inventory`) builds with no version in it.
+
 Local Vite, `vite preview`, and an agent's browser tool still run the same `dist/` against the apex. They do not need a subdomain. Subdomains are how *hosted* visitors hit a site.
 
 ## Authz

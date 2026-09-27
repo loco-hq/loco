@@ -1,0 +1,5 @@
+label: "Default"
+fields:
+  - title
+  - priority
+auto_add: true

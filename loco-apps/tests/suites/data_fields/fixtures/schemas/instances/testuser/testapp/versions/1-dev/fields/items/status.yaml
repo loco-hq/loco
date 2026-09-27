@@ -1,0 +1,7 @@
+type: "string"
+label: "Status"
+options:
+  - value: "open"
+    label: "Open"
+  - value: "closed"
+    label: "Closed"

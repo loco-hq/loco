@@ -190,7 +190,7 @@ Mounted in `server.rs`:
 
 | Prefix | Role |
 |--------|------|
-| `/data` | Record CRUD. Site-scoped via headers. Strict validation on write; diagnostics on read. |
+| `/data` | Record CRUD, plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version. Site-scoped via headers. Strict validation on write; diagnostics on read. |
 | `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, bundle). |
 | `/config` | Unversioned project / dataset / site / version lifecycle. |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
@@ -215,7 +215,7 @@ Handlers sit on request extractors in `http/scope/`:
 - `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema` writes.
 - `VersionReadScope` — read-only `VersionSchema` for GET `/schema`. Developer/editor on the path project (any version, no site headers). `public` (and authenticated non-members) on a site whose pinned version assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required).
 - `ConfigProjectScope` / `ConfigUserScope` — `/config` routes. Project-targeted routes require developer; list/create/org do not need site headers.
-- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the pinned version's manifest assigns to `public` grants that verb on that collection.
+- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the pinned version's manifest assigns to `public` grants that verb on that collection. `GET /data/{collection}/fields` follows the read rule. It is how a hosted frontend reads field metadata (labels, `options`) without knowing its version: same list, order, and shape as `/schema/.../field/{collection}/list`, but the version comes from the site pin, so re-pinning the site changes the answer.
 
 Membership: `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Effective project access = org owner ∪ project role, plus implicit developer when the identity owns the person account (`alice` → `alice/*`).
 
