@@ -197,7 +197,7 @@ pub async fn delete_project(
             }
             ApiResponse::success("deleted").into_response()
         }
-        Err(e) => schema_error_to_response(e),
+        Err(e) => config_error_to_response(e),
     }
 }
 
@@ -344,7 +344,7 @@ pub async fn create_version(
     }
     match scope.config.copy_version(&from, &body.version) {
         Ok(v) => (StatusCode::CREATED, ApiResponse::success(v)).into_response(),
-        Err(e) => schema_error_to_response(e),
+        Err(e) => config_error_to_response(e),
     }
 }
 

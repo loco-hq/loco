@@ -1,0 +1,5 @@
+# Written before dependencies were checked on write. Boot must still load it;
+# a copy must refuse to carry it into a new version.
+dependencies:
+  - nope
+  - alice/ghost@1

@@ -150,6 +150,8 @@ Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a 
 
 Each version has a `manifest` instance declaring `dependencies` as `{user}/{project}@{version}` strings and `public_permission_sets` as the names of the permission sets this version assigns to `public`. A consuming version opts into a set a dependency ships by naming it here. `manifest` is a regular schema type — loco-gen treats it no differently than `collection` or `site`.
 
+Dependencies are checked on write (`PUT /schema/.../manifest`, and again when `POST /config/version` copies a manifest): each must be `{account}/{project}@{version}`, name an existing version of **another** project, and name no project twice — a qualified name carries no version, so one project at two versions could not both be addressed. A bad entry is a 400 and nothing is stored. Boot does not check: a manifest on disk with bad entries loads, and reads skip the malformed ones. A version another project depends on cannot be deleted, nor can its project (409 naming the dependents); these checks run under the same `PINS` lock as site pins.
+
 Dependency grammar and the scoped view live in `loco-apps/src/http/version_schema.rs` (`VersionSchema`). Reads see the version itself plus **direct** dependencies only (not transitive). Writes go to the version's own project, and only when the `VersionSchema` was constructed writable and the version is a draft.
 
 `ProjectConfig` (`http/project_config.rs`) is the same idea for unversioned config: projects, datasets, sites, version create/delete.

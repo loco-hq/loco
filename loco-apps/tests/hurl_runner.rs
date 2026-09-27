@@ -292,6 +292,11 @@ fn suite_site_pins() {
 }
 
 #[test]
+fn suite_manifest_deps() {
+    run_suite(&suites_dir().join("manifest_deps"));
+}
+
+#[test]
 fn suite_data_validation_writes() {
     run_suite(&suites_dir().join("data_validation_writes"));
 }
