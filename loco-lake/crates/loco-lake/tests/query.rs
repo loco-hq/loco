@@ -5,8 +5,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use loco_lake::{
-    CompareOp, DataAdapter, Direction, Error, FieldRef, Filter, InMemoryAdapter, InsertRequest,
-    LakeQuery, OrderKey, Page, SqliteAdapter, SystemField, Value,
+    CompareOp, DataAdapter, Error, FieldRef, Filter, InMemoryAdapter, InsertRequest, LakeQuery,
+    OrderKey, Page, SqliteAdapter, SystemField, Value,
 };
 
 const DS: &str = "ben/test/dev";
@@ -540,10 +540,7 @@ fn filter_and_order_and_after_combine() {
         seed(a.as_ref());
         let q = LakeQuery {
             filter: Some(cmp("qty", CompareOp::Ne, Value::Null)),
-            order: vec![OrderKey {
-                field: FieldRef::field("name"),
-                dir: Direction::Desc,
-            }],
+            order: vec![OrderKey::desc(FieldRef::field("name"))],
             ..LakeQuery::new(COLL, 2)
         };
         assert_eq!(
@@ -678,5 +675,132 @@ fn explicit_trailing_id_is_not_doubled() {
         );
         let last = ids.values().max().unwrap();
         assert_eq!(page.next, Some(vec![s(last)]), "{name}");
+    }
+}
+
+/// Codes for `Collation::Natural`, plus the kinds a drifted `code` can
+/// have. Tag → value; `q` and `s` tie.
+fn seed_codes(a: &dyn DataAdapter) -> HashMap<String, String> {
+    let rows: Vec<(&str, Option<Value>)> = vec![
+        ("p", Some(s("10247"))),
+        ("q", Some(s("3001"))),
+        ("r", Some(s("3001pr0001"))),
+        ("s", Some(s("3001"))),
+        ("t", Some(s("007"))),
+        ("u", Some(s("7"))),
+        ("v", Some(s("07"))),
+        ("w", Some(s("a10"))),
+        ("x", Some(s("a2"))),
+        ("y", Some(s(&format!("1{}", "0".repeat(30))))),
+        ("z", Some(s(&"9".repeat(29)))),
+        ("k", Some(s(""))),
+        ("i", Some(i(5))),
+        ("b", Some(Value::Boolean(true))),
+        ("n", Some(Value::Null)),
+        ("m", None),
+    ];
+    rows.into_iter()
+        .map(|(tag, v)| {
+            let fields = v.map(|v| vec![("code", v)]).unwrap_or_default();
+            (tag.to_string(), put(a, COLL, tag, fields))
+        })
+        .collect()
+}
+
+const NATURAL_ASC: [&str; 14] = [
+    "mn", "b", "i", "k", "t", "v", "u", "qs", "r", "p", "z", "y", "x", "w",
+];
+const BINARY_ASC: [&str; 14] = [
+    "mn", "b", "i", "k", "t", "v", "y", "p", "qs", "r", "u", "z", "w", "x",
+];
+
+fn reversed(groups: &[&'static str]) -> Vec<&'static str> {
+    groups.iter().rev().copied().collect()
+}
+
+#[test]
+fn natural_collation_orders_digit_runs_by_value() {
+    for (name, a) in adapters() {
+        let ids = seed_codes(a.as_ref());
+        let code = || FieldRef::field("code");
+        for (key, groups) in [
+            (OrderKey::asc(code()).natural(), NATURAL_ASC.to_vec()),
+            (OrderKey::desc(code()).natural(), reversed(&NATURAL_ASC)),
+            (OrderKey::asc(code()), BINARY_ASC.to_vec()),
+            (OrderKey::desc(code()), reversed(&BINARY_ASC)),
+        ] {
+            let want = by_groups(&groups, &ids);
+            let all = tags(&run(a.as_ref(), ordered(key.clone(), 100)));
+            assert_eq!(all, want, "{name}: {key:?}");
+            // Every page boundary, including between the tied `q` and `s`.
+            for limit in 1..=want.len() {
+                let paged = walk(a.as_ref(), ordered(key.clone(), limit));
+                assert_eq!(paged, want, "{name}: {key:?} limit {limit}");
+            }
+        }
+    }
+}
+
+#[test]
+fn natural_collation_on_a_system_field_and_a_second_key() {
+    for (name, a) in adapters() {
+        let ids = seed_codes(a.as_ref());
+        // Ids are uuids: hex with digit runs, so natural and byte order differ.
+        let mut want: Vec<(&String, &String)> = ids.iter().map(|(t, id)| (id, t)).collect();
+        want.sort_by(|x, y| loco_lake::natural_cmp(y.0, x.0));
+        let want: Vec<String> = want.into_iter().map(|(_, t)| t.clone()).collect();
+        let key = OrderKey::desc(FieldRef::System(SystemField::Id)).natural();
+        for limit in 1..=want.len() {
+            let paged = walk(a.as_ref(), ordered(key.clone(), limit));
+            assert_eq!(paged, want, "{name}: limit {limit}");
+        }
+
+        // Natural first key, natural descending id to break its ties.
+        let two = LakeQuery {
+            order: vec![
+                OrderKey::asc(FieldRef::field("code")).natural(),
+                key.clone(),
+            ],
+            ..LakeQuery::new(COLL, 1)
+        };
+        let all = tags(&run(
+            a.as_ref(),
+            LakeQuery {
+                limit: 100,
+                ..two.clone()
+            },
+        ));
+        let mut tied = [("q", &ids["q"]), ("s", &ids["s"])];
+        tied.sort_by(|x, y| loco_lake::natural_cmp(y.1, x.1));
+        let qs = &all[8..10];
+        assert_eq!(qs, [tied[0].0, tied[1].0], "{name}");
+        for limit in 1..=all.len() {
+            let paged = walk(
+                a.as_ref(),
+                LakeQuery {
+                    limit,
+                    ..two.clone()
+                },
+            );
+            assert_eq!(paged, all, "{name}: two keys, limit {limit}");
+        }
+    }
+}
+
+#[test]
+fn natural_collation_does_not_change_filters() {
+    for (name, a) in adapters() {
+        seed_codes(a.as_ref());
+        // `lt` is bytewise whatever the order: "10247" < "3001" < "7".
+        let q = LakeQuery {
+            filter: Some(cmp("code", CompareOp::Lt, s("3001"))),
+            order: vec![OrderKey::asc(FieldRef::field("code")).natural()],
+            ..LakeQuery::new(COLL, 100)
+        };
+        assert_eq!(
+            tags(&run(a.as_ref(), q)),
+            vec!["k", "t", "v", "p", "y"],
+            "{name}"
+        );
     }
 }

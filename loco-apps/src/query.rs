@@ -17,7 +17,9 @@ use base64::Engine;
 use serde_json::{json, Map, Value as Json};
 use sha2::{Digest, Sha256};
 
-use loco_lake::{CompareOp, Direction, FieldRef, Filter, LakeQuery, OrderKey, SystemField, Value};
+use loco_lake::{
+    Collation, CompareOp, Direction, FieldRef, Filter, LakeQuery, OrderKey, SystemField, Value,
+};
 
 use crate::http::paths::collection_key;
 use crate::http::version_schema::VersionSchema;
@@ -628,7 +630,7 @@ impl Resolver<'_> {
             self.error(
                 kind::INVALID_QUERY,
                 path,
-                "'order' must be a list of {\"field\", \"dir\"}".into(),
+                "'order' must be a list of {\"field\", \"dir\", \"collation\"}".into(),
             );
             return None;
         };
@@ -645,7 +647,10 @@ impl Resolver<'_> {
                 ok = false;
                 continue;
             };
-            if let Some(key) = obj.keys().find(|k| !matches!(k.as_str(), "field" | "dir")) {
+            if let Some(key) = obj
+                .keys()
+                .find(|k| !matches!(k.as_str(), "field" | "dir" | "collation"))
+            {
                 self.error(
                     kind::INVALID_QUERY,
                     format!("{path}/{key}"),
@@ -665,6 +670,18 @@ impl Resolver<'_> {
                     None
                 }
             };
+            let collation = match obj.get("collation").map(|c| c.as_str()) {
+                None | Some(Some("binary")) => Some(Collation::Binary),
+                Some(Some("natural")) => Some(Collation::Natural),
+                Some(_) => {
+                    self.error(
+                        kind::INVALID_QUERY,
+                        format!("{path}/collation"),
+                        "'collation' must be \"binary\" or \"natural\"".into(),
+                    );
+                    None
+                }
+            };
             let Some(field) = obj.get("field") else {
                 self.error(
                     kind::INVALID_QUERY,
@@ -675,8 +692,8 @@ impl Resolver<'_> {
                 continue;
             };
             let field = self.field(field, format!("{path}/field"));
-            match (field, dir) {
-                (Some((_, Ty::List)), _) => {
+            match (field, dir, collation) {
+                (Some((_, Ty::List)), _, _) => {
                     self.error(
                         kind::INVALID_QUERY,
                         format!("{path}/field"),
@@ -684,7 +701,21 @@ impl Resolver<'_> {
                     );
                     ok = false;
                 }
-                (Some((field, _)), Some(dir)) => keys.push(OrderKey { field, dir }),
+                // Collation only orders strings; on a number or boolean field
+                // it would be a silent no-op.
+                (Some((_, Ty::Integer | Ty::Float | Ty::Boolean)), _, Some(Collation::Natural)) => {
+                    self.error(
+                        kind::INVALID_QUERY,
+                        format!("{path}/collation"),
+                        "'natural' collation orders strings; this field is not a string".into(),
+                    );
+                    ok = false;
+                }
+                (Some((field, _)), Some(dir), Some(collation)) => keys.push(OrderKey {
+                    field,
+                    dir,
+                    collation,
+                }),
                 _ => ok = false,
             }
         }
@@ -752,7 +783,8 @@ fn compare_op(op: &str) -> Option<CompareOp> {
 
 /// Hash of what a cursor is only valid for. Taken over the *resolved* query,
 /// so `lot` and `brickos/inventory.lot`, or an omitted `dir` and `"asc"`,
-/// are the same query.
+/// are the same query. An order key's collation is in it only when it is
+/// natural, so binary keys hash as they did before collation existed.
 fn query_hash(lake: &LakeQuery) -> String {
     let canonical = json!({
         "collection": lake.collection,
@@ -760,7 +792,13 @@ fn query_hash(lake: &LakeQuery) -> String {
         "order": lake
             .effective_order()
             .iter()
-            .map(|k| json!([field_json(&k.field), matches!(k.dir, Direction::Desc)]))
+            .map(|k| {
+                let key = json!([field_json(&k.field), matches!(k.dir, Direction::Desc)]);
+                match k.collation {
+                    Collation::Binary => key,
+                    Collation::Natural => json!([key, "natural"]),
+                }
+            })
             .collect::<Vec<_>>(),
     });
     let digest = Sha256::digest(canonical.to_string().as_bytes());
@@ -916,6 +954,16 @@ mod tests {
         let mut e = a.clone();
         e.order = vec![OrderKey::asc(FieldRef::System(SystemField::Id))];
         assert_eq!(query_hash(&a), query_hash(&e));
+
+        // Collation binds too, in either direction.
+        let mut f = a.clone();
+        f.order = vec![OrderKey::asc(FieldRef::field("name"))];
+        let mut g = f.clone();
+        g.order = vec![OrderKey::asc(FieldRef::field("name")).natural()];
+        let mut h = f.clone();
+        h.order = vec![OrderKey::desc(FieldRef::field("name")).natural()];
+        assert_ne!(query_hash(&f), query_hash(&g));
+        assert_ne!(query_hash(&g), query_hash(&h));
     }
 
     #[test]

@@ -12,20 +12,19 @@ const batchLots = (batchId, extra) =>
     ...extra,
   });
 
-// The server compares strings as bytes (`10247` before `3001`). Re-sort by
-// item_no numerically for display; the sort is stable, so the server's
-// color and condition order still breaks ties.
-const collator = new Intl.Collator(undefined, { numeric: true });
-const byItemNo = (a, b) => collator.compare(String(a ?? ''), String(b ?? ''));
-
 export function useLots(batchId) {
   // Under ['lot'], so a lot write, which invalidates ['lot'], refetches it.
+  // `natural` puts item 3001 before 10247, as a person reads part numbers.
   const q = useQuery({
     queryKey: ['lot', { batchId }],
     queryFn: () =>
       batchLots(batchId, {
-        order: [{ field: 'item_no' }, { field: 'color_code' }, { field: 'condition' }],
-      }).then((lots) => lots.sort((a, b) => byItemNo(a.fields.item_no, b.fields.item_no))),
+        order: [
+          { field: 'item_no', collation: 'natural' },
+          { field: 'color_code' },
+          { field: 'condition' },
+        ],
+      }),
   });
   return { ...q, data: q.data ?? [] };
 }

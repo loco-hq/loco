@@ -101,7 +101,7 @@ later custom record- and field-level checks, belong.
         { "field": "qty", "op": "gt", "value": 0 }
       ] },
       "fields": ["item_no", "color_code", "condition", "qty"],
-      "order": [{ "field": "item_no" }, { "field": "color_code" }],
+      "order": [{ "field": "item_no", "collation": "natural" }, { "field": "color_code" }],
       "limit": 100
     },
     "colors": { "collection": "color", "fields": ["code", "label"], "limit": 500 }
@@ -201,7 +201,7 @@ combinator  = { "and": [condition, …] } | { "or": [condition, …] } | { "not"
 | op | value | matches when the field is… |
 |---|---|---|
 | `eq` / `ne` | scalar | equal / not equal |
-| `lt` `lte` `gt` `gte` | number or string | ordered below / above (strings compare as bytes; timestamps are RFC 3339 so this orders them). `null` or a boolean is `invalid_query`. |
+| `lt` `lte` `gt` `gte` | number or string | ordered below / above (strings compare as bytes, whatever `order`'s collation; timestamps are RFC 3339 so this orders them). `null` or a boolean is `invalid_query`. |
 | `in` | non-empty list of scalars | equal to one of them (each is type-checked; `null` is allowed) |
 | `exists` | `true` / `false` | present and not null / absent or null |
 
@@ -226,7 +226,8 @@ combinator  = { "and": [condition, …] } | { "or": [condition, …] } | { "not"
 
 ### `order`
 
-A list of `{ "field": name, "dir": "asc" | "desc" }`, `dir` defaulting to `asc`. Every order is
+A list of `{ "field": name, "dir": "asc" | "desc", "collation": "binary" | "natural" }`, `dir`
+defaulting to `asc` and `collation` to `binary`. Every order is
 total, which is what makes a cursor possible. The lake makes it so: it appends `id ASC` unless
 the last key is already `$id`, in either direction, and never appends a second one. An empty
 `order` becomes `[id ASC]` alone.
@@ -238,6 +239,33 @@ Values sort by kind first, then value: null < boolean < number < string, with `f
 So nulls sort first ascending and last descending, and a value that drifted to another type sorts
 with its kind. A total order across kinds is what lets a cursor resume after any value.
 
+#### Collation
+
+`collation` decides how two strings compare under that key. It changes nothing else: kinds
+still sort as above, numbers still compare as numbers, and `where` always compares bytes.
+
+- **`binary`** (default): bytewise. `10247` < `3001` < `3001pr0001`.
+- **`natural`**: digit runs compare by numeric value. `3001` < `3001pr0001` < `10247`, and
+  `a2` < `a10`. For part numbers, SKUs, and version-like codes, so an app need not re-sort in
+  the browser and break paging.
+
+`natural`, exactly (`loco_lake::natural_cmp`):
+
+1. Walk both strings from the start. Where both are at an ASCII digit, take the whole run of
+   ASCII digits on each side and compare the runs by value: strip leading zeros, then the
+   longer run is larger, then compare bytes. Runs are never parsed into an integer, so any
+   length works.
+2. Everywhere else compare one byte at a time. A digit run therefore ranks against a
+   non-digit byte as its first digit would: `a-` < `a1` < `a:` < `aa`. Non-ASCII compares
+   as its UTF-8 bytes, as in `binary`.
+3. A string that runs out first is smaller: `3001` < `3001pr0001`.
+4. **Leading zeros.** Strings equal under 1–3 differ only in leading zeros. Byte order
+   breaks that tie, so `007` < `07` < `7` < `008`. Two strings are equal only if they are
+   identical, which keeps the order total and deterministic without leaning on `$id`.
+
+`natural` on an `integer`, `float`, or `boolean` field would change nothing, so it is
+`invalid_query`. It is allowed on system fields, which are strings.
+
 ### `limit` and `cursor`
 
 The response carries `cursor`: `null` when there is nothing more, otherwise an opaque string.
@@ -245,13 +273,16 @@ Send it back as `"cursor"` on the same query to get the next page.
 
 - A cursor encodes the order-key values of the last record returned (keyset pagination), not an
   offset. Inserts and deletes between pages don't skip or repeat records.
-- It also encodes a hash of the query's `collection`, `where`, and `order`. A cursor sent with a
-  different query is a `cursor_mismatch` error. `limit` and `fields` may change between pages.
+- It also encodes a hash of the query's `collection`, `where`, and `order`, collation
+  included. A cursor sent with a different query is a `cursor_mismatch` error, so a cursor
+  from a `natural` order can't resume a `binary` one. `limit` and `fields` may change between
+  pages.
 - It is opaque and unsigned. Tampering with one can only produce a different page of a query
   the caller is already allowed to run.
 - Encoding: base64url, no padding, of `{"h": hash, "k": [values]}`. The hash is over the
-  *resolved* query, so `lot` and `brickos/inventory.lot`, or an omitted `dir` and `"asc"`, are
-  the same query. A cursor that doesn't decode, or has the wrong number of values, is
+  *resolved* query, so `lot` and `brickos/inventory.lot`, an omitted `dir` and `"asc"`, or an
+  omitted `collation` and `"binary"`, are the same query. A `binary` key hashes as it did
+  before collation existed, so cursors issued before it still resume. A cursor that doesn't decode, or has the wrong number of values, is
   `invalid_query`.
 - No total count in v1: a count means a second scan.
 
@@ -306,7 +337,7 @@ receives a resolved query in its own terms:
 pub struct LakeQuery {
     pub collection: String,        // collection_key: "brickos/inventory.lot"
     pub filter: Option<Filter>,    // field names are storage keys; system fields are an enum
-    pub order: Vec<OrderKey>,      // always ends with id
+    pub order: Vec<OrderKey>,      // field, dir, collation; always ends with id
     pub limit: usize,
     pub after: Option<Vec<Value>>, // decoded cursor
     pub fields: Option<Vec<String>>,
@@ -344,7 +375,14 @@ Memory evaluates the filter in process. Sqlite compiles it to `json_extract(fiel
 comparisons with bound parameters, each guarded by a `json_type` kind check (without it,
 `json_extract` returns `true` as `1` and `flag eq 1` would match). Both adapters apply the
 `fields` projection in Rust, in `finish_page`, after sorting, `after`, and `next`, so they return
-the same rows. Nothing requires the projection to happen in SQL. Indexes on hot fields are a later concern; a full scan of one
+the same rows.
+
+`Collation::Natural` is one Rust function, `natural_cmp`. Memory calls it; sqlite registers
+it on the connection as the collation `loco_natural` (not `natural`, a keyword) and writes
+`json_extract(…) COLLATE loco_natural` in both the ORDER BY and the keyset `after`
+predicate, so a page boundary resumes under the order that produced it. The shared adapter
+tests walk every page size in both directions, over ties, nulls, missing and drifted values,
+leading zeros, and digit runs longer than any integer. Nothing requires the projection to happen in SQL. Indexes on hot fields are a later concern; a full scan of one
 `(dataset_id, collection)` is fine at today's sizes.
 
 ## Relationship to other issues
@@ -391,5 +429,5 @@ from them. Most are folded into the sections above; these don't have a better ho
   such a query reads whatever the dataset holds under that key, which today is nothing.
 - **Authorization** is the same rule as `CollectionScope::require_can_read_data`, now on
   `SiteScope::may_read_collection` so a query can ask it per collection.
-- **BrickOS ordering.** The batch page used to sort `item_no` with a numeric-aware
-  `localeCompare`. The server compares strings as bytes, so `10247` now sorts before `3001`.
+- **BrickOS ordering.** The batch page orders lots by `item_no` with `collation: natural`
+  (#72). It used to re-sort each page in the browser with a numeric-aware collator.

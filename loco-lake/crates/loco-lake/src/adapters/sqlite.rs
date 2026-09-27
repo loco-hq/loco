@@ -6,9 +6,15 @@ use rusqlite::Connection;
 
 use crate::adapter::DataAdapter;
 use crate::error::Error;
-use crate::query::{self, CompareOp, Direction, FieldRef, Filter, Kind, LakeQuery, Page};
+use crate::query::{
+    self, Collation, CompareOp, Direction, FieldRef, Filter, Kind, LakeQuery, Page,
+};
 use crate::record::{InsertRequest, Record, UpdatePatch};
 use crate::value::Value;
+
+/// The registered name of `query::natural_cmp`. Not `natural`: that is a
+/// keyword (`NATURAL JOIN`).
+const NATURAL: &str = "loco_natural";
 
 pub struct SqliteAdapter {
     conn: Mutex<Connection>,
@@ -32,6 +38,9 @@ impl SqliteAdapter {
             )",
         )
         .map_err(|e| Error::Internal(e.to_string()))?;
+        // `Collation::Natural`: the memory adapter's comparator, verbatim.
+        conn.create_collation(NATURAL, query::natural_cmp)
+            .map_err(|e| Error::Internal(e.to_string()))?;
 
         Ok(SqliteAdapter {
             conn: Mutex::new(conn),
@@ -281,7 +290,7 @@ fn run_query(conn: &Connection, dataset_id: &str, q: &LakeQuery) -> Result<Page,
         sql.kind(&key.field);
         sql.push(dir);
         sql.push(", ");
-        sql.val(&key.field);
+        sql.val(&key.field, key.collation);
         sql.push(dir);
     }
     sql.push(" LIMIT ?");
@@ -373,13 +382,18 @@ impl Sql {
     }
 
     /// The field's value. Booleans read as 0 / 1, null and missing as NULL.
-    fn val(&mut self, field: &FieldRef) {
+    /// `collation` applies when it is compared with a string; sqlite ignores
+    /// it for numbers.
+    fn val(&mut self, field: &FieldRef, collation: Collation) {
         match field {
             FieldRef::System(s) => self.push(s.column()),
             FieldRef::Field(name) => {
                 self.push("json_extract(fields, ?)");
                 self.bind(Self::path(name));
             }
+        }
+        if collation == Collation::Natural {
+            self.push(&format!(" COLLATE {NATURAL}"));
         }
     }
 
@@ -394,9 +408,10 @@ impl Sql {
         self.bind(v);
     }
 
-    /// `field` is `value` under `op`, within `value`'s kind. `op` is `=`
-    /// for equality. Null has only equality: its kind is null.
-    fn cmp_in_kind(&mut self, field: &FieldRef, op: &str, value: &Value) {
+    /// `field` is `value` under `op`, within `value`'s kind, strings compared
+    /// under `collation`. `op` is `=` for equality. Null has only equality:
+    /// its kind is null.
+    fn cmp_in_kind(&mut self, field: &FieldRef, op: &str, value: &Value, collation: Collation) {
         let k = query::kind(value);
         self.push("(");
         self.kind(field);
@@ -409,7 +424,7 @@ impl Sql {
             return;
         }
         self.push(&format!(" = {} AND ", k as i64));
-        self.val(field);
+        self.val(field, collation);
         self.push(&format!(" {op} ?"));
         self.bind_value(value);
         self.push(")");
@@ -428,7 +443,7 @@ impl Sql {
                 if *op == CompareOp::Ne {
                     self.push("NOT ");
                 }
-                self.cmp_in_kind(field, sym, value);
+                self.cmp_in_kind(field, sym, value, Collation::Binary);
             }
             Filter::In { field, values } => {
                 self.push("(");
@@ -436,7 +451,7 @@ impl Sql {
                     if i > 0 {
                         self.push(" OR ");
                     }
-                    self.cmp_in_kind(field, "=", v);
+                    self.cmp_in_kind(field, "=", v, Collation::Binary);
                 }
                 self.push(")");
             }
@@ -473,7 +488,9 @@ impl Sql {
 
     /// Keyset: the row's order-key tuple sorts strictly after `after`.
     /// `(k0 > a0) OR (k0 = a0 AND k1 > a1) OR …`, each `>` direction-aware
-    /// and comparing kind before value, as `query::sort_cmp` does.
+    /// and comparing kind before value, then strings under the key's
+    /// collation, as `query::sort_cmp` does. The ORDER BY uses the same
+    /// collation, so a page resumes exactly where the last one stopped.
     fn after(&mut self, order: &[query::OrderKey], after: &[Value]) {
         self.push("(");
         for i in 0..order.len() {
@@ -482,7 +499,7 @@ impl Sql {
             }
             self.push("(");
             for j in 0..i {
-                self.cmp_in_kind(&order[j].field, "=", &after[j]);
+                self.cmp_in_kind(&order[j].field, "=", &after[j], order[j].collation);
                 self.push(" AND ");
             }
             self.past(&order[i], &after[i]);
@@ -502,7 +519,7 @@ impl Sql {
         self.push(&format!("{kind_op}{}", k as i64));
         if k != Kind::Null {
             self.push(" OR ");
-            self.cmp_in_kind(&key.field, val_op, value);
+            self.cmp_in_kind(&key.field, val_op, value, key.collation);
         }
         self.push(")");
     }
