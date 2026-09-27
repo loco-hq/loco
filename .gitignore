@@ -38,3 +38,6 @@ NOTES.md
 /loco-apps/schemas/instances/*
 !/loco-apps/schemas/instances/loco/
 !/loco-apps/schemas/instances/brickos/
+
+# A deployed brickos bundle is a build, not source (examples/brickos-inventory).
+/loco-apps/schemas/instances/brickos/**/bundle/
