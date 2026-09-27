@@ -42,6 +42,8 @@ jsonpath "$.data[?(@.name == 'qty')].type" nth 0 == "integer"
 jsonpath "$.data[?(@.name == 'condition')].options[*].value" count == 2
 jsonpath "$.data[?(@.name == 'condition')].options[*].value" nth 0 == "new"
 jsonpath "$.data[?(@.name == 'condition')].options[*].value" nth 1 == "used"
+# The lot key and qty are required; nothing else on a lot is optional yet.
+jsonpath "$.data[?(@.required == true)]" count == 5
 
 GET http://127.0.0.1:{{port}}/schema/brickos/inventory/0.0.1-dev/field/batch/list
 Authorization: Bearer {{token}}
@@ -84,6 +86,66 @@ X-Site-Id: dev
 Content-Type: application/json
 {"batch_id": "{{batch_id}}", "item_no": "3001", "color_code": 11, "condition": "new", "qty": "ten"}
 HTTP 400
+
+# A lot needs its whole key and a qty. A blank item no. is not one: the
+# batch page sends what was typed and shows this diagnostic's message.
+POST http://127.0.0.1:{{port}}/data/lot/add
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"batch_id": "{{batch_id}}", "item_no": "", "color_code": 11, "condition": "new", "qty": 1}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics" count == 1
+jsonpath "$.diagnostics[0].kind" == "required"
+jsonpath "$.diagnostics[0].path" == "item_no"
+jsonpath "$.diagnostics[0].message" == "field 'item_no' is required"
+
+POST http://127.0.0.1:{{port}}/data/lot/add
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"item_no": "3001", "color_code": 11, "condition": "new"}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics" count == 2
+jsonpath "$.diagnostics[*].path" includes "batch_id"
+jsonpath "$.diagnostics[*].path" includes "qty"
+
+# A batch needs a label; its item no. is only for a set or minifig.
+POST http://127.0.0.1:{{port}}/data/batch/add
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"label": "", "kind": "inventory", "item_no": ""}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics" count == 1
+jsonpath "$.diagnostics[0].kind" == "required"
+jsonpath "$.diagnostics[0].path" == "label"
+
+# Editing one cell sends only that field, so the rest need not be resent;
+# clearing a required one is refused.
+PUT http://127.0.0.1:{{port}}/data/batch/update/{{batch_id}}
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"label": ""}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics[0].kind" == "required"
+
+PUT http://127.0.0.1:{{port}}/data/batch/update/{{batch_id}}
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"item_no": "10188-1"}
+HTTP 200
 
 # A condition is one of the field's options; a typo is not a new condition.
 POST http://127.0.0.1:{{port}}/data/lot/add

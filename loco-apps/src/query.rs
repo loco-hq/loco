@@ -856,18 +856,21 @@ fn decode_cursor(
 }
 
 /// Read-drift warnings for one query's records, with paths
-/// `{query}/{record id}/{field}`.
+/// `{query}/{record id}/{field}`. `projection` is the query's `fields`: a
+/// required field left out of it is not reported missing.
 pub fn record_diagnostics(
     schema: &VersionSchema,
     query: &str,
     collection: &str,
     records: &[loco_lake::Record],
+    projection: Option<&[String]>,
 ) -> Vec<Diagnostic> {
     crate::validation::validate_records(
         schema,
         collection,
         records.iter().map(|r| (r.id.as_str(), &r.fields)),
         crate::validation::ValidationMode::Read,
+        projection,
     )
     .prefix_paths(query)
     .diagnostics

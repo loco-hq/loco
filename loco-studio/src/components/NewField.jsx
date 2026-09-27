@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { TextField, SelectField } from 'loco-ui';
+import { TextField, SelectField, CheckboxField } from 'loco-ui';
 import { createField } from '../api.js';
 import { TYPE_OPTIONS } from '../fieldTypes.js';
 
@@ -14,6 +14,7 @@ export default function NewField() {
   const [name, setName] = useState('');
   const [label, setLabel] = useState('');
   const [type, setType] = useState('string');
+  const [required, setRequired] = useState(false);
 
   const create = useMutation({
     mutationFn: (body) => createField(user, project, version, body),
@@ -25,7 +26,7 @@ export default function NewField() {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    create.mutate({ collection, name, type, label });
+    create.mutate({ collection, name, type, label, required });
   };
 
   return (
@@ -53,6 +54,12 @@ export default function NewField() {
           options={TYPE_OPTIONS}
           value={type}
           onChange={setType}
+        />
+        <CheckboxField
+          label="Required"
+          description="Records must give this field a value."
+          value={required}
+          onChange={setRequired}
         />
         {create.error && <p className="error">{create.error.message}</p>}
         <div className="form-actions">

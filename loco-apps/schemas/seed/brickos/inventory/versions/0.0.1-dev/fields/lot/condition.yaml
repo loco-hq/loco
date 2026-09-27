@@ -1,5 +1,6 @@
 type: "string"
 label: "Condition"
+required: true
 options:
   - value: "new"
     label: "New"

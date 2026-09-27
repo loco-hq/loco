@@ -51,7 +51,9 @@ export default function FieldDetail() {
           </Link>
         </div>
         <p className="resource-id">{field.name}</p>
-        <p className="detail-meta">Type: <code>{field.type}</code></p>
+        <p className="detail-meta">
+          Type: <code>{field.type}</code>{field.required ? ' · Required' : ''}
+        </p>
       </section>
 
       <section className="danger-zone">

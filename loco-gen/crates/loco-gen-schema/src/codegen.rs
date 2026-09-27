@@ -238,6 +238,10 @@ fn generate_new(out: &mut String, type_def: &TypeDef, fields: &[(String, FieldTy
         .iter()
         .map(|(name, ft)| format!("{}: {}", rust_ident(name), ft.rust_type()))
         .collect();
+    // One positional parameter per property, however many the type declares.
+    if params.len() > 7 {
+        out.push_str("    #[allow(clippy::too_many_arguments)]\n");
+    }
     out.push_str(&format!(
         "    pub fn new({}) -> Self {{\n",
         params.join(", ")

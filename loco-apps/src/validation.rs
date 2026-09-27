@@ -24,6 +24,7 @@ pub mod kind {
     pub const UNKNOWN_FIELD: &str = "unknown_field";
     pub const TYPE_MISMATCH: &str = "type_mismatch";
     pub const INVALID_OPTION: &str = "invalid_option";
+    pub const REQUIRED: &str = "required";
 }
 
 /// The types a collection field may declare. `/schema` field writes reject
@@ -72,12 +73,15 @@ impl Diagnostic {
 /// severity assigned to findings differs.
 #[derive(Debug, Clone, Copy)]
 pub enum ValidationMode {
-    /// Full record going in for the first time. Findings are errors.
+    /// Full record going in for the first time. Findings are errors, and a
+    /// required field that is absent is one.
     Create,
-    /// Partial patch — only fields present are checked. Findings are errors.
+    /// Partial patch — only fields present are checked, so a patch need not
+    /// resend every required field. Findings are errors.
     Update,
-    /// Reading existing data. Findings are warnings (drift is informational,
-    /// never fails the request).
+    /// Reading existing data, a whole record like `Create`. Findings are
+    /// warnings (drift is informational, never fails the request) — a field
+    /// made required after records were written is reported, not enforced.
     Read,
 }
 
@@ -125,6 +129,19 @@ pub fn validate_record(
     fields: &HashMap<String, Value>,
     mode: ValidationMode,
 ) -> ValidationReport {
+    check_record(schema, collection, fields, mode, None)
+}
+
+/// [`validate_record`], where `projection` names the only fields the record
+/// was read with (a `/data/query` `fields` list): a required field outside it
+/// is absent because it was not asked for, not because it is unset.
+fn check_record(
+    schema: &VersionSchema,
+    collection: &str,
+    fields: &HashMap<String, Value>,
+    mode: ValidationMode,
+    projection: Option<&[String]>,
+) -> ValidationReport {
     let field_defs = schema.fields(collection);
     let by_name: HashMap<&str, &Field> = field_defs.iter().map(|f| (f.name(), &**f)).collect();
 
@@ -149,7 +166,13 @@ pub fn validate_record(
         };
 
         let declared = field.r#type();
-        if let Some(actual) = type_mismatch(declared, value) {
+        if field.required && is_blank(field, value) {
+            diagnostics.push(make(
+                kind::REQUIRED,
+                Some(name.clone()),
+                format!("field '{name}' is required"),
+            ));
+        } else if let Some(actual) = type_mismatch(declared, value) {
             diagnostics.push(make(
                 kind::TYPE_MISMATCH,
                 Some(name.clone()),
@@ -168,13 +191,38 @@ pub fn validate_record(
         }
     }
 
+    if !matches!(mode, ValidationMode::Update) {
+        for field in field_defs.iter().filter(|f| f.required) {
+            let name = field.name();
+            let read = projection.is_none_or(|p| p.iter().any(|n| n == name));
+            if read && !fields.contains_key(name) {
+                diagnostics.push(make(
+                    kind::REQUIRED,
+                    Some(name.to_string()),
+                    format!("field '{name}' is required"),
+                ));
+            }
+        }
+    }
+
     ValidationReport { diagnostics }
 }
 
+/// Whether `value` leaves a required field unfilled: `Null` for any type, and
+/// `""` for a string field. An empty string is what a cleared text input
+/// sends, so if it counted as a value, `required` would stop nothing a form
+/// submits. `false` and `0` are values.
+fn is_blank(field: &Field, value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(s) => s.is_empty() && field.r#type() == "string",
+        _ => false,
+    }
+}
+
 /// Return `None` if the value matches the declared type; otherwise the actual
-/// type as a stable string. `Null` is currently allowed for any type — a
-/// dedicated required-field check belongs alongside a future `required` flag
-/// on `Field`.
+/// type as a stable string. `Null` is allowed for any type; a required field
+/// rejects it separately ([`is_blank`]).
 ///
 /// A declared type outside [`FIELD_TYPES`] passes: `/schema` no longer
 /// accepts one, but boot still loads older field YAML that has one (e.g.
@@ -228,18 +276,20 @@ fn value_type_name(value: &Value) -> &'static str {
 
 /// Convenience: validate every record in a list, prefixing each diagnostic's
 /// path with the record id so call sites can flatten without losing context.
+/// `projection` is as for [`check_record`]; `None` means whole records.
 pub fn validate_records<'a, I>(
     schema: &VersionSchema,
     collection: &str,
     records: I,
     mode: ValidationMode,
+    projection: Option<&[String]>,
 ) -> ValidationReport
 where
     I: IntoIterator<Item = (&'a str, &'a HashMap<String, Value>)>,
 {
     let mut combined = ValidationReport::default();
     for (id, fields) in records {
-        let report = validate_record(schema, collection, fields, mode);
+        let report = check_record(schema, collection, fields, mode, projection);
         if !report.is_empty() {
             combined.extend(report.prefix_paths(id));
         }
@@ -323,6 +373,7 @@ mod tests {
         assert_eq!(kind::UNKNOWN_FIELD, "unknown_field");
         assert_eq!(kind::TYPE_MISMATCH, "type_mismatch");
         assert_eq!(kind::INVALID_OPTION, "invalid_option");
+        assert_eq!(kind::REQUIRED, "required");
     }
 
     #[test]

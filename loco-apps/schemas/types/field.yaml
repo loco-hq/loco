@@ -18,6 +18,11 @@ properties:
     type: string
   label:
     type: string
+  # A /data create must give the field a value: missing, null, and (for a
+  # string) "" are errors (kind required). An update checks it only when the
+  # patch names the field; reads report a gap as a warning.
+  required:
+    type: boolean
   # The allowed values of a string field. Empty means any string. /data
   # writes reject a value that is not one of them (invalid_option).
   options:

@@ -1,5 +1,6 @@
 type: "string"
 label: "Kind"
+required: true
 options:
   - value: "inventory"
     label: "Inventory"

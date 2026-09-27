@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { TextField, SelectField } from 'loco-ui';
+import { TextField, SelectField, CheckboxField } from 'loco-ui';
 import { listFields, updateField } from '../api.js';
 import { FIELD_TYPES, TYPE_OPTIONS } from '../fieldTypes.js';
 
@@ -34,6 +34,7 @@ function EditFieldForm({ field }) {
 
   const [label, setLabel] = useState(field.label || '');
   const [type, setType] = useState(field.type);
+  const [required, setRequired] = useState(!!field.required);
   // A field saved before the server checked types may have one it no longer
   // accepts. Show it so the select is not blank, and send `type` only when
   // it changes, so the label can still be edited.
@@ -51,13 +52,13 @@ function EditFieldForm({ field }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    update.mutate(type === field.type ? { label } : { type, label });
+    update.mutate(type === field.type ? { label, required } : { type, label, required });
   };
 
   return (
     <div className="form-page">
       <h2>Edit field</h2>
-      <p className="form-help">Field name is immutable. Update the label or type.</p>
+      <p className="form-help">Field name is immutable. Update the label, type, or whether it is required.</p>
       <form onSubmit={handleSubmit}>
         <TextField label="Name" value={field.name} onChange={() => {}} disabled />
         <TextField
@@ -72,6 +73,12 @@ function EditFieldForm({ field }) {
           options={typeOptions}
           value={type}
           onChange={setType}
+        />
+        <CheckboxField
+          label="Required"
+          description="Records must give this field a value. Existing records without one are reported, not changed."
+          value={required}
+          onChange={setRequired}
         />
         {update.error && <p className="error">{update.error.message}</p>}
         <div className="form-actions">

@@ -779,15 +779,14 @@ mod tests {
     }
 
     fn field(collection: &str, name: &str) -> Field {
-        Field::new(
-            PROJECT.to_string(),
-            VERSION.to_string(),
-            collection.to_string(),
-            name.to_string(),
-            "string".to_string(),
-            String::new(),
-            Vec::new(),
-        )
+        Field {
+            project: PROJECT.to_string(),
+            version: VERSION.to_string(),
+            collection: collection.to_string(),
+            name: name.to_string(),
+            r#type: "string".to_string(),
+            ..Field::default()
+        }
     }
 
     /// Races `create_field` calls on one collection and returns the auto-add

@@ -98,7 +98,12 @@ async function request(path, options = {}) {
       window.location.hash = '#/login';
     }
   }
-  if (!json.ok) throw new Error(json.error || 'Unknown error');
+  if (!json.ok) {
+    // A rejected write's error is only "validation failed"; its diagnostics
+    // say which field and why (`field 'qty' is required`).
+    const errors = (json.diagnostics ?? []).filter((d) => d.severity === 'error');
+    throw new Error(errors.map((d) => d.message).join('; ') || json.error || 'Unknown error');
+  }
   return json.data;
 }
 

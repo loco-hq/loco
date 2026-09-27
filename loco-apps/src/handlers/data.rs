@@ -192,6 +192,7 @@ pub async fn query(
                 &name,
                 &plan.target.name,
                 &page.records,
+                plan.lake.fields.as_deref(),
             ));
             let cursor = page.next.map(|next| q::encode_cursor(&plan.hash, &next));
             results.insert(name, json!({ "records": page.records, "cursor": cursor }));
