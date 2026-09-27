@@ -3,11 +3,10 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '../api.js';
 import {
-  BATCH_KINDS,
-  CONDITIONS,
   useAdd,
   useCatalog,
   useLots,
+  useOptions,
   useRemove,
   useRemoveBatch,
   useUpdate,
@@ -20,6 +19,8 @@ export default function BatchPage() {
   const batch = useQuery({ queryKey: ['batch', id], queryFn: () => api.get('batch', id) });
   const lots = useLots(id);
   const { colorLabel, itemLabel } = useCatalog();
+  const kinds = useOptions('batch', 'kind');
+  const conditions = useOptions('lot', 'condition');
   const updateBatch = useUpdate('batch');
   const updateLot = useUpdate('lot');
   const removeLot = useRemove('lot');
@@ -54,12 +55,7 @@ export default function BatchPage() {
         </label>
         <label>
           Kind
-          <EditCell value={b.kind} list="batch-kinds" onSave={saveBatch('kind')} />
-          <datalist id="batch-kinds">
-            {BATCH_KINDS.map((k) => (
-              <option key={k} value={k} />
-            ))}
-          </datalist>
+          <EditCell value={b.kind} kind="select" options={kinds} onSave={saveBatch('kind')} />
         </label>
         <label>
           Item no.
@@ -114,7 +110,7 @@ export default function BatchPage() {
                   <EditCell
                     value={f.condition}
                     kind="select"
-                    options={CONDITIONS}
+                    options={conditions}
                     onSave={saveLot(lot.id, 'condition')}
                   />
                 </td>
@@ -139,7 +135,7 @@ export default function BatchPage() {
               </tr>
             );
           })}
-          <AddLotRow batchId={id} lots={lots.data} />
+          <AddLotRow batchId={id} lots={lots.data} conditions={conditions} />
         </tbody>
       </table>
       {lots.data.length === 0 && !lots.isPending && (
@@ -155,15 +151,17 @@ export default function BatchPage() {
   );
 }
 
-const EMPTY_LOT = { item_no: '', color_code: '', condition: 'new', qty: '1' };
+const EMPTY_LOT = { item_no: '', color_code: '', condition: '', qty: '1' };
 
 /**
  * A lot is one quantity of a lot key (item_no, color_code, condition). Adding
  * a key the batch already holds adds to that lot instead of making a second
  * one (docs/brickos.md).
  */
-function AddLotRow({ batchId, lots }) {
+function AddLotRow({ batchId, lots, conditions }) {
   const [lot, setLot] = useState(EMPTY_LOT);
+  // Until one is picked, the condition is the field's first option.
+  const condition = lot.condition || conditions[0]?.value;
   const [error, setError] = useState(null);
   const add = useAdd('lot');
   const update = useUpdate('lot');
@@ -179,17 +177,17 @@ function AddLotRow({ batchId, lots }) {
     if (!Number.isInteger(qty) || qty <= 0) return setError('Qty must be a positive whole number');
     setError(null);
 
-    const done = { onSuccess: () => setLot({ ...EMPTY_LOT, condition: lot.condition }) };
+    const done = { onSuccess: () => setLot({ ...EMPTY_LOT, condition }) };
     const same = lots.find(
       (l) =>
         l.fields.item_no === item_no &&
         l.fields.color_code === color_code &&
-        l.fields.condition === lot.condition,
+        l.fields.condition === condition,
     );
     if (same) {
       update.mutate({ id: same.id, fields: { qty: (same.fields.qty ?? 0) + qty } }, done);
     } else {
-      add.mutate({ batch_id: batchId, item_no, color_code, condition: lot.condition, qty }, done);
+      add.mutate({ batch_id: batchId, item_no, color_code, condition, qty }, done);
     }
   }
 
@@ -218,9 +216,11 @@ function AddLotRow({ batchId, lots }) {
           />
         </td>
         <td>
-          <select form="add-lot" value={lot.condition} onChange={set('condition')}>
-            {CONDITIONS.map((c) => (
-              <option key={c}>{c}</option>
+          <select form="add-lot" value={condition} onChange={set('condition')}>
+            {conditions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
             ))}
           </select>
         </td>

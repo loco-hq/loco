@@ -1,9 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from './api.js';
 
-export const BATCH_KINDS = ['inventory', 'set', 'minifig', 'order', 'commission'];
-export const CONDITIONS = ['new', 'used'];
-
 // Whole-collection reads: /data has no filter yet (#15), so "lots in this
 // batch" is every lot, filtered here.
 export const useRecords = (collection) =>
@@ -22,6 +19,12 @@ export function useLots(batchId) {
         String(a.fields.condition).localeCompare(String(b.fields.condition)),
     );
   return { ...q, data: lots };
+}
+
+/** A field's `options` ({ value, label }) from its /schema metadata. */
+export function useOptions(collection, field) {
+  const q = useQuery({ queryKey: ['fields', collection], queryFn: () => api.fields(collection) });
+  return q.data?.find((f) => f.name === field)?.options ?? [];
 }
 
 /** code → label lookups from the catalog, for display next to raw codes. */

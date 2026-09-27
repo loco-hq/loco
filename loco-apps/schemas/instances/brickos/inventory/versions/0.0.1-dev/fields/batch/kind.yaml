@@ -1,2 +1,13 @@
 type: "string"
 label: "Kind"
+options:
+  - value: "inventory"
+    label: "Inventory"
+  - value: "set"
+    label: "Set"
+  - value: "minifig"
+    label: "Minifig"
+  - value: "order"
+    label: "Order"
+  - value: "commission"
+    label: "Commission"

@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 
 /**
  * An input that saves one field on blur or Enter; Escape reverts.
- * `kind` is `text`, `int`, or `select` (with `options`). An `int` that does
+ * `kind` is `text`, `int`, or `select` (with a field's `options`). An `int` that does
  * not parse is not sent — the server would reject it anyway.
  */
-export default function EditCell({ value, kind = 'text', options, list, onSave, ...rest }) {
+export default function EditCell({ value, kind = 'text', options, onSave, ...rest }) {
   const shown = value ?? '';
   const [draft, setDraft] = useState(String(shown));
   const [invalid, setInvalid] = useState(false);
@@ -36,9 +36,11 @@ export default function EditCell({ value, kind = 'text', options, list, onSave, 
         }}
         {...rest}
       >
-        {!options.includes(draft) && <option value={draft}>{draft || '—'}</option>}
+        {!options.some((o) => o.value === draft) && <option value={draft}>{draft || '—'}</option>}
         {options.map((o) => (
-          <option key={o}>{o}</option>
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
         ))}
       </select>
     );
@@ -49,7 +51,6 @@ export default function EditCell({ value, kind = 'text', options, list, onSave, 
       className={invalid ? 'invalid' : undefined}
       value={draft}
       inputMode={kind === 'int' ? 'numeric' : undefined}
-      list={list}
       onChange={(e) => {
         setDraft(e.target.value);
         setInvalid(false);

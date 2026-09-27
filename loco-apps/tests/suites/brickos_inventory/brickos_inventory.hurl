@@ -39,6 +39,16 @@ jsonpath "$.data" count == 5
 jsonpath "$.data[?(@.name == 'batch_id')].type" nth 0 == "string"
 jsonpath "$.data[?(@.name == 'color_code')].type" nth 0 == "integer"
 jsonpath "$.data[?(@.name == 'qty')].type" nth 0 == "integer"
+jsonpath "$.data[?(@.name == 'condition')].options[*].value" count == 2
+jsonpath "$.data[?(@.name == 'condition')].options[*].value" nth 0 == "new"
+jsonpath "$.data[?(@.name == 'condition')].options[*].value" nth 1 == "used"
+
+GET http://127.0.0.1:{{port}}/schema/brickos/inventory/0.0.1-dev/field/batch/list
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data[?(@.name == 'kind')].options[*].value" count == 5
+jsonpath "$.data[?(@.name == 'kind')].options[*].value" contains "commission"
 
 # --- 2. A batch and one of its lots, through ordinary record CRUD on `dev`.
 
@@ -74,6 +84,29 @@ X-Site-Id: dev
 Content-Type: application/json
 {"batch_id": "{{batch_id}}", "item_no": "3001", "color_code": 11, "condition": "new", "qty": "ten"}
 HTTP 400
+
+# A condition is one of the field's options; a typo is not a new condition.
+POST http://127.0.0.1:{{port}}/data/lot/add
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"batch_id": "{{batch_id}}", "item_no": "3001", "color_code": 11, "condition": "nwe", "qty": 1}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics[0].kind" == "invalid_option"
+jsonpath "$.diagnostics[0].path" == "condition"
+
+PUT http://127.0.0.1:{{port}}/data/batch/update/{{batch_id}}
+Authorization: Bearer {{token}}
+X-Project-Id: brickos/inventory
+X-Site-Id: dev
+Content-Type: application/json
+{"kind": "stash"}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics[0].kind" == "invalid_option"
+jsonpath "$.diagnostics[0].path" == "kind"
 
 # --- 3. Inventory is private: public has no permission set.
 

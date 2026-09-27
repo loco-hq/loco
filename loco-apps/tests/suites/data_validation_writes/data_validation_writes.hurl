@@ -1,11 +1,13 @@
 # Data validation on writes
 #
 # Fixtures: an "items" collection with fields:
-#   name:string, quantity:integer, price:float, in_stock:boolean
+#   name:string, quantity:integer, price:float, in_stock:boolean,
+#   size:string with options s / m / l
 #
 # Verifies that add/update reject:
 #   - unknown fields (kind=unknown_field, severity=error)
 #   - type mismatches (kind=type_mismatch, severity=error)
+#   - a value outside a string field's options (kind=invalid_option)
 # and that valid records succeed (no diagnostics on the response).
 # Collection is private, so these run as the project owner.
 
@@ -207,3 +209,136 @@ HTTP 400
 [Asserts]
 jsonpath "$.ok" == false
 jsonpath "$.diagnostics[0].kind" == "unknown_field"
+
+# 13. /schema field reads return a field's options unchanged; a field
+# without options returns an empty list.
+GET http://127.0.0.1:{{port}}/schema/testuser/testapp/0-dev/field/items/list
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data[?(@.name == 'size')].options[*].value" count == 3
+jsonpath "$.data[?(@.name == 'size')].options[*].value" nth 0 == "s"
+jsonpath "$.data[?(@.name == 'size')].options[*].label" nth 0 == "Small"
+jsonpath "$.data[?(@.name == 'size')].options[*].value" nth 2 == "l"
+jsonpath "$.data[?(@.name == 'name')].options[*]" isEmpty
+
+# 14. A listed option is accepted
+POST http://127.0.0.1:{{port}}/data/items/add
+X-Project-Id: testuser/testapp
+X-Site-Id: dev
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "name": "Shirt",
+  "size": "m"
+}
+HTTP 201
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data.fields.size" == "m"
+jsonpath "$.diagnostics" not exists
+[Captures]
+shirt_id: jsonpath "$.data.id"
+
+# 15. An unlisted value is rejected, naming the field
+POST http://127.0.0.1:{{port}}/data/items/add
+X-Project-Id: testuser/testapp
+X-Site-Id: dev
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "name": "Shirt",
+  "size": "xl"
+}
+HTTP 400
+[Asserts]
+jsonpath "$.ok" == false
+jsonpath "$.diagnostics" count == 1
+jsonpath "$.diagnostics[0].severity" == "error"
+jsonpath "$.diagnostics[0].kind" == "invalid_option"
+jsonpath "$.diagnostics[0].path" == "size"
+jsonpath "$.diagnostics[0].message" contains "xl"
+
+# 16. Options match the stored value exactly: a label is not a value, and
+# the empty string is not an option.
+POST http://127.0.0.1:{{port}}/data/items/add
+X-Project-Id: testuser/testapp
+X-Site-Id: dev
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "size": "Medium"
+}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics[0].kind" == "invalid_option"
+
+POST http://127.0.0.1:{{port}}/data/items/add
+X-Project-Id: testuser/testapp
+X-Site-Id: dev
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "size": ""
+}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics[0].kind" == "invalid_option"
+
+# 17. Null still passes for a field with options
+POST http://127.0.0.1:{{port}}/data/items/add
+X-Project-Id: testuser/testapp
+X-Site-Id: dev
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "name": "Blank",
+  "size": null
+}
+HTTP 201
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.diagnostics" not exists
+
+# 18. A wrong type on a field with options is a type_mismatch, not also an
+# invalid_option
+POST http://127.0.0.1:{{port}}/data/items/add
+X-Project-Id: testuser/testapp
+X-Site-Id: dev
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "size": 3
+}
+HTTP 400
+[Asserts]
+jsonpath "$.diagnostics" count == 1
+jsonpath "$.diagnostics[0].kind" == "type_mismatch"
+
+# 19. Update checks options too
+PUT http://127.0.0.1:{{port}}/data/items/update/{{shirt_id}}
+X-Project-Id: testuser/testapp
+X-Site-Id: dev
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "size": "xxl"
+}
+HTTP 400
+[Asserts]
+jsonpath "$.ok" == false
+jsonpath "$.diagnostics[0].kind" == "invalid_option"
+jsonpath "$.diagnostics[0].path" == "size"
+
+PUT http://127.0.0.1:{{port}}/data/items/update/{{shirt_id}}
+X-Project-Id: testuser/testapp
+X-Site-Id: dev
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "size": "l"
+}
+HTTP 200
+[Asserts]
+jsonpath "$.data.fields.size" == "l"
+jsonpath "$.diagnostics" not exists

@@ -18,6 +18,8 @@ export function coerce(field, raw) {
     const n = parseFloat(raw);
     return Number.isNaN(n) ? null : n;
   }
+  // No choice is null: '' is not one of a field's options.
+  if (field.options?.length) return raw === '' || raw === undefined ? null : raw;
   return raw ?? '';
 }
 

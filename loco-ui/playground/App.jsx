@@ -41,6 +41,7 @@ export function App() {
     weight: null,
     active: false,
     notifications: true,
+    condition: null,
   });
 
   const set = (key) => (v) => setDraft((d) => ({ ...d, [key]: v }));
@@ -51,6 +52,15 @@ export function App() {
     { name: 'weight', type: 'float', label: 'Weight (kg)' },
     { name: 'active', type: 'boolean', label: 'Active' },
     { name: 'notifications', type: 'boolean', variant: 'toggle', label: 'Notifications' },
+    {
+      name: 'condition',
+      type: 'string',
+      label: 'Condition',
+      options: [
+        { value: 'new', label: 'New' },
+        { value: 'used', label: 'Used' },
+      ],
+    },
   ];
 
   return (
@@ -176,7 +186,7 @@ export function App() {
 
       <Section title="Field dispatcher (live)">
         {fields.map((f) => (
-          <Cell key={f.name} label={`type: ${f.type}${f.variant ? ` / ${f.variant}` : ''}`}>
+          <Cell key={f.name} label={`type: ${f.type}${f.variant ? ` / ${f.variant}` : ''}${f.options ? ' / options' : ''}`}>
             <Field field={f} value={draft[f.name]} onChange={set(f.name)} />
           </Cell>
         ))}

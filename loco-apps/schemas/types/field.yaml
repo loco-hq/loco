@@ -18,3 +18,15 @@ properties:
     type: string
   label:
     type: string
+  # The allowed values of a string field. Empty means any string. /data
+  # writes reject a value that is not one of them (invalid_option).
+  options:
+    type: list
+    items:
+      type: object
+      name: field_option
+      properties:
+        value:
+          type: string
+        label:
+          type: string
