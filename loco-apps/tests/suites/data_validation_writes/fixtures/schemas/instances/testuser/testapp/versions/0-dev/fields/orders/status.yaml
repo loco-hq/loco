@@ -1,0 +1,8 @@
+type: "string"
+label: "Status"
+required: true
+options:
+  - value: "open"
+    label: "Open"
+  - value: "shipped"
+    label: "Shipped"

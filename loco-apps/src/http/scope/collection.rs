@@ -74,7 +74,13 @@ impl CollectionScope {
     where
         I: IntoIterator<Item = (&'a str, &'a HashMap<String, Value>)>,
     {
-        validate_records(&self.site.schema, &self.collection_name, records, mode)
+        validate_records(
+            &self.site.schema,
+            &self.collection_name,
+            records,
+            mode,
+            None,
+        )
     }
 
     fn public_allowed(&self, verb: DataVerb) -> bool {

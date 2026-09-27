@@ -156,7 +156,9 @@ const EMPTY_LOT = { item_no: '', color_code: '', condition: '', qty: '1' };
 /**
  * A lot is one quantity of a lot key (item_no, color_code, condition). Adding
  * a key the batch already holds adds to that lot instead of making a second
- * one (docs/brickos.md).
+ * one (docs/brickos.md). The schema marks the key and qty required, so a
+ * blank item no. comes back from the server as a `required` diagnostic; the
+ * checks here are only for text that does not parse as a number.
  */
 function AddLotRow({ batchId, lots, conditions }) {
   const [lot, setLot] = useState(EMPTY_LOT);
@@ -172,7 +174,6 @@ function AddLotRow({ batchId, lots, conditions }) {
     const item_no = lot.item_no.trim();
     const color_code = parseInt(lot.color_code, 10);
     const qty = parseInt(lot.qty, 10);
-    if (!item_no) return setError('Item no. is required');
     if (!Number.isInteger(color_code)) return setError('Color must be a BrickLink color id');
     if (!Number.isInteger(qty) || qty <= 0) return setError('Qty must be a positive whole number');
     setError(null);

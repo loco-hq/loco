@@ -30,11 +30,16 @@ export function Field({ field, variant, value, onChange, ...rest }) {
     ? { options: field.options, placeholder: '—' }
     : entry._props ?? {};
 
+  // A required field must not be left blank. A checkbox never is: unchecked
+  // is false, a value. The native `required` on one means "must be checked",
+  // so a boolean does not pass it on.
+  const required = field.type !== 'boolean' && field.required;
+
   return (
     <Component
       label={field.label ?? field.name}
       description={field.description}
-      required={field.required}
+      required={required}
       value={value}
       onChange={onChange}
       {...typeProps}
