@@ -43,6 +43,8 @@ loco/
 ├── loco-apps/                                 # Axum server: /data /schema /config /auth
 ├── loco-studio/                               # Schema + record editor (port 5174)
 ├── loco-ui/                                   # Field primitives consumed by studio
+├── loco-client/                               # Plain-JS API client for Loco frontends
+├── examples/brickos-inventory/                # Hosted BrickOS batch editor (port 5177)
 └── examples/public-page/                      # Static cross-origin page (port 5176)
 ```
 
@@ -189,6 +191,10 @@ curl -X POST 'http://localhost:3000/data/pet/add' \
 
 - **loco-studio** (5174 in dev) — project / version / collection / field / record UI. Static production build in `dist/`, deployed like any other frontend: a zip PUT to a version's bundle. API client is `src/api.js`; session token in `localStorage`. API origin is `API_ORIGIN` in `src/config.js` (`''`, same origin).
 - **loco-ui** (5175 playground) — field primitives (`TextField`, `NumberField`, `CheckboxField`, `ToggleField`, `SelectField`) plus a `<Field field={meta} />` dispatcher. Consumed by studio as an npm workspace package.
+- **loco-client** — `createClient({ origin, projectId, siteId })`: session, Bearer header, site headers, record CRUD, `/data/query` with cursor paging, and errors that carry `diagnostics`. No framework, no build. The BrickOS example uses it; Studio and `examples/public-page` do not yet.
+- **examples/brickos-inventory** (5177 in dev) — the BrickOS batch editor, deployed as the `brickos/inventory` bundle ([its README](examples/brickos-inventory/README.md)).
+
+The npm workspaces are `loco-studio`, `loco-ui`, `loco-client`, and `examples/brickos-inventory`; one `npm install` at the root installs all of them.
 
 ## Tests
 

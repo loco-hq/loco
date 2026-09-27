@@ -41,7 +41,10 @@ npm run dev -w loco-ui        # loco-ui playground on :5175
 npm run deploy --prefix examples/brickos-inventory
                               # build + PUT the BrickOS batch editor as the
                               # brickos/inventory@0.0.1-dev bundle; needs
-                              # LOCO_USER / LOCO_PASSWORD (its README)
+                              # LOCO_USER / LOCO_PASSWORD (its README). A
+                              # root `npm install` covers it: it is a
+                              # workspace, like loco-client
+npm test -w loco-client       # loco-client unit tests (node --test; not in CI)
 ```
 
 ## CI
@@ -63,6 +66,7 @@ loco/
 │   └── schemas/{types,seed,instances}/        # type defs, committed seed projects, live store (gitignored)
 ├── loco-studio/                               # Schema + record editor
 ├── loco-ui/                                   # Field component library (npm workspace)
+├── loco-client/                               # Plain-JS API client (npm workspace)
 ├── examples/public-page/                      # Static cross-origin page (no Node)
 └── examples/brickos-inventory/                # Hosted Vite app: BrickOS batch editor
 ```
@@ -243,7 +247,7 @@ All frontend apps use the same stack:
 - **React** (functional components, hooks)
 - **React Router** (`react-router-dom`, `createHashRouter`)
 - **TanStack Query**
-- API client in `src/api.js` (plain JS, not a hook). Auth helpers in `src/auth.js`.
+- API client: `loco-client` (below) for new apps. Studio still has its own `src/api.js` (plain JS, not a hook) and `src/auth.js`; moving it onto `loco-client` is a follow-up.
 - Components in `src/components/` as `.jsx` files
 - Dev-only Vite proxy of `/auth` `/config` `/schema` `/data` to `localhost:3000` (no `/api` prefix). `API_ORIGIN` in `loco-studio/src/config.js` is `''` — same origin — which is what both the proxy and a hosted bundle need; set it absolute only for a deliberately cross-origin build like `examples/public-page`
 
@@ -251,6 +255,18 @@ All frontend apps use the same stack:
 
 - `loco-studio/` — Schema + record UI (port 5174). The token is the person. Schema/config calls do not need site headers. Data calls send `X-Project-Id` / `X-Site-Id` for the browsed site.
 - `loco-ui/` — Reusable field library (no library build; consumed via npm workspaces). Playground at port 5175 (`npm run dev -w loco-ui`).
+- `loco-client/` — API client, consumed the same way. Used by `examples/brickos-inventory`.
+- `examples/brickos-inventory/` — Hosted BrickOS batch editor (port 5177 in dev). A workspace, so it resolves `loco-client` from the repo.
+
+### loco-client
+
+`createClient({ origin = '', projectId, siteId })`: plain JS with JSDoc, no framework dependency, no build step (`loco-client/src/index.js`). The app keeps its data layer (TanStack Query) and calls the client from it.
+
+- **Session.** `login`, `logout`, `me`, `isLoggedIn`. The token is stored per API origin (`loco_session:{origin|same-origin}`) and sent as `Authorization: Bearer`. A 401 on a request that carried the token drops it. `onSessionChange(listener)` hears login, logout, and that drop, and returns an unsubscribe, so `useSyncExternalStore(client.onSessionChange, client.isLoggedIn)` is the whole of an app's session state.
+- **Site headers** only when `projectId` / `siteId` are given — a dev server on another host. A hosted bundle omits them and the server infers the site from `Host`.
+- **Records.** `data(collection)` → `{ list, get, add, update, remove, fields }`. `fields()` is `GET /data/{collection}/fields`, the pinned version's field metadata with `options`.
+- **Queries.** `query(batch)` is one `POST /data/query` and resolves to the per-query results, failed ones included. `queryAll(query)` follows one query's cursors to the end and rejects if it fails.
+- **Errors** are `LocoError` with `status` (0 when unreachable) and `diagnostics`. The message is the error diagnostics' messages, so a rejected write reads as what was wrong, not `validation failed`.
 
 ### loco-ui
 

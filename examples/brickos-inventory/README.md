@@ -15,8 +15,9 @@ curl -s localhost:3000/config/org -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"handle":"brickos"}'
 ```
 
+Then, from the repo root (the example is an npm workspace, and imports `loco-client` from it):
+
 ```bash
-cd examples/brickos-inventory
 npm install
 ```
 
@@ -36,10 +37,12 @@ The bundle lands in `loco-apps/schemas/instances/brickos/inventory/versions/0.0.
 npm run dev   # http://localhost:5177, proxied to :3000
 ```
 
-On `localhost:5177` there is no site host, so the client sends `X-Project-Id: brickos/inventory` and `X-Site-Id: dev` itself (dev builds only). Hosted, the server infers both from the host name.
+On `localhost:5177` there is no site host, so `src/data.js` creates the client with `projectId: 'brickos/inventory'` and `siteId: 'dev'` (dev builds only), and it sends them as headers. Hosted, the server infers both from the host name.
+
+All API calls go through [`loco-client`](../../loco-client/src/index.js): `src/data.js` wraps it in TanStack Query hooks, and `App.jsx` reads the session from it with `useSyncExternalStore`.
 
 ## Limits
 
-- `/data` has no filter yet ([#15](https://github.com/loco-hq/loco/issues/15)): a batch page downloads every lot and filters by `batch_id` in the browser.
+- The batch list still downloads every lot to count lots and pieces per batch; a batch page reads only its own lots through `POST /data/query`.
 - Deleting a batch deletes its lots one request at a time; there is no cascade on `/data`.
 - Adding a lot whose key (`item_no`, `color_code`, `condition`) the batch already holds adds to that lot. Editing a lot into a duplicate key is not prevented.

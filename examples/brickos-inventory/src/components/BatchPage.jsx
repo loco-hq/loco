@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import * as api from '../api.js';
 import {
+  loco,
   useAdd,
   useCatalog,
   useLots,
@@ -16,7 +16,7 @@ import EditCell from './EditCell.jsx';
 export default function BatchPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const batch = useQuery({ queryKey: ['batch', id], queryFn: () => api.get('batch', id) });
+  const batch = useQuery({ queryKey: ['batch', id], queryFn: () => loco.data('batch').get(id) });
   const lots = useLots(id);
   const { colorLabel, itemLabel } = useCatalog();
   const kinds = useOptions('batch', 'kind');

@@ -3,6 +3,8 @@
   "private": true,
   "workspaces": [
     "loco-studio",
-    "loco-ui"
+    "loco-ui",
+    "loco-client",
+    "examples/brickos-inventory"
   ]
 }

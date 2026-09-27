@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { login } from '../api.js';
+import { loco } from '../data.js';
 
-export default function Login({ onLogin }) {
+// Signing in flips the session App watches; no callback needed.
+export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
@@ -12,8 +13,7 @@ export default function Login({ onLogin }) {
     setBusy(true);
     setError(null);
     try {
-      await login(username, password);
-      onLogin();
+      await loco.login(username, password);
     } catch (err) {
       setError(err.message);
     } finally {
