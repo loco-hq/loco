@@ -1,0 +1,2 @@
+label: "Leads"
+description: "Depends on acme/crm only; base/core is transitive"

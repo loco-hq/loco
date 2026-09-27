@@ -1,0 +1,4 @@
+label: "Core view"
+fields:
+  - tier
+auto_add: false

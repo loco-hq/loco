@@ -1,0 +1,6 @@
+# acme/crm depends on base/core; acme/leads does not. Naming core_read here
+# is deliberate: base/core owns it, so it must not resolve.
+dependencies:
+  - acme/crm@0-dev
+public_permission_sets:
+  - core_read
