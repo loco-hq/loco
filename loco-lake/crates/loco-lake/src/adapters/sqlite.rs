@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, Row};
 
 use crate::adapter::DataAdapter;
 use crate::error::Error;
@@ -104,31 +104,20 @@ impl DataAdapter for SqliteAdapter {
             .lock()
             .map_err(|e| Error::Internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare(
-                "SELECT id, created_at, created_by, updated_at, updated_by, owner, fields
-                 FROM records WHERE dataset_id = ?1 AND collection = ?2 AND id = ?3",
-            )
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM records WHERE dataset_id = ?1 AND collection = ?2 AND id = ?3"
+            ))
             .map_err(|e| Error::Internal(e.to_string()))?;
 
-        let record = stmt
-            .query_row(rusqlite::params![dataset_id, collection, id], |row| {
-                let fields_json: String = row.get(6)?;
-                let fields: HashMap<String, Value> =
-                    serde_json::from_str(&fields_json).unwrap_or_default();
-                Ok(Record {
-                    id: row.get(0)?,
-                    dataset_id: dataset_id.to_string(),
-                    created_at: row.get(1)?,
-                    created_by: row.get(2)?,
-                    updated_at: row.get(3)?,
-                    updated_by: row.get(4)?,
-                    owner: row.get(5)?,
-                    fields,
-                })
-            })
-            .ok();
-
-        Ok(record)
+        // Only no row is `None`. A locked database or an unreadable row is
+        // an error, not a 404.
+        stmt.query_row(rusqlite::params![dataset_id, collection, id], |row| {
+            read_row(row, dataset_id)
+        })
+        .optional()
+        .map_err(|e| Error::Internal(e.to_string()))?
+        .map(decode)
+        .transpose()
     }
 
     fn update(
@@ -198,33 +187,16 @@ impl DataAdapter for SqliteAdapter {
             .lock()
             .map_err(|e| Error::Internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare(
-                "SELECT id, created_at, created_by, updated_at, updated_by, owner, fields
-                 FROM records WHERE dataset_id = ?1 AND collection = ?2",
-            )
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM records WHERE dataset_id = ?1 AND collection = ?2"
+            ))
             .map_err(|e| Error::Internal(e.to_string()))?;
-
-        let records = stmt
+        let rows = stmt
             .query_map(rusqlite::params![dataset_id, collection], |row| {
-                let fields_json: String = row.get(6)?;
-                let fields: HashMap<String, Value> =
-                    serde_json::from_str(&fields_json).unwrap_or_default();
-                Ok(Record {
-                    id: row.get(0)?,
-                    dataset_id: dataset_id.to_string(),
-                    created_at: row.get(1)?,
-                    created_by: row.get(2)?,
-                    updated_at: row.get(3)?,
-                    updated_by: row.get(4)?,
-                    owner: row.get(5)?,
-                    fields,
-                })
+                read_row(row, dataset_id)
             })
-            .map_err(|e| Error::Internal(e.to_string()))?
-            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| Error::Internal(e.to_string()))?;
-
-        Ok(records)
+        decode_all(rows)
     }
 
     fn delete_dataset(&self, dataset_id: &str) -> Result<(), Error> {
@@ -261,13 +233,49 @@ impl DataAdapter for SqliteAdapter {
     }
 }
 
+/// The columns `read_row` reads, in its order. Every record SELECT uses it.
+const COLUMNS: &str = "id, created_at, created_by, updated_at, updated_by, owner, fields";
+
+/// A row selected as `COLUMNS`: the record with its `fields` JSON still
+/// unparsed, since a rusqlite row callback can only fail with a rusqlite
+/// error. `decode` finishes it.
+fn read_row(row: &Row, dataset_id: &str) -> rusqlite::Result<(Record, String)> {
+    Ok((
+        Record {
+            id: row.get(0)?,
+            dataset_id: dataset_id.to_string(),
+            created_at: row.get(1)?,
+            created_by: row.get(2)?,
+            updated_at: row.get(3)?,
+            updated_by: row.get(4)?,
+            owner: row.get(5)?,
+            fields: HashMap::new(),
+        },
+        row.get(6)?,
+    ))
+}
+
+/// Parses a row's `fields`. Malformed JSON is an error naming the record,
+/// never empty fields: those would read as data that is not there.
+fn decode((mut record, fields_json): (Record, String)) -> Result<Record, Error> {
+    record.fields = serde_json::from_str(&fields_json)
+        .map_err(|e| Error::Internal(format!("record {}: {e}", record.id)))?;
+    Ok(record)
+}
+
+fn decode_all(
+    rows: impl Iterator<Item = rusqlite::Result<(Record, String)>>,
+) -> Result<Vec<Record>, Error> {
+    rows.map(|row| decode(row.map_err(|e| Error::Internal(e.to_string()))?))
+        .collect()
+}
+
 fn run_query(conn: &Connection, dataset_id: &str, q: &LakeQuery) -> Result<Page, Error> {
     let order = q.effective_order();
     let mut sql = Sql::default();
-    sql.push(
-        "SELECT id, created_at, created_by, updated_at, updated_by, owner, fields
-         FROM records WHERE dataset_id = ? AND collection = ?",
-    );
+    sql.push(&format!(
+        "SELECT {COLUMNS} FROM records WHERE dataset_id = ? AND collection = ?"
+    ));
     sql.bind(dataset_id.to_string().into());
     sql.bind(q.collection.clone().into());
     if let Some(filter) = &q.filter {
@@ -302,28 +310,10 @@ fn run_query(conn: &Connection, dataset_id: &str, q: &LakeQuery) -> Result<Page,
         .map_err(|e| Error::Internal(e.to_string()))?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(sql.params.iter()), |row| {
-            Ok((
-                Record {
-                    id: row.get(0)?,
-                    dataset_id: dataset_id.to_string(),
-                    created_at: row.get(1)?,
-                    created_by: row.get(2)?,
-                    updated_at: row.get(3)?,
-                    updated_by: row.get(4)?,
-                    owner: row.get(5)?,
-                    fields: HashMap::new(),
-                },
-                row.get::<_, String>(6)?,
-            ))
+            read_row(row, dataset_id)
         })
         .map_err(|e| Error::Internal(e.to_string()))?;
-    let mut records = Vec::new();
-    for row in rows {
-        let (mut record, fields_json) = row.map_err(|e| Error::Internal(e.to_string()))?;
-        record.fields = serde_json::from_str(&fields_json)
-            .map_err(|e| Error::Internal(format!("record {}: {e}", record.id)))?;
-        records.push(record);
-    }
+    let records = decode_all(rows)?;
     Ok(query::finish_page(q, &order, records))
 }
 
@@ -697,6 +687,62 @@ mod tests {
         assert!(adapter.list("ds", "users").unwrap().is_empty());
         assert!(adapter.list("ds", "orders").unwrap().is_empty());
         assert_eq!(adapter.list("other", "users").unwrap().len(), 1);
+    }
+
+    /// Inserts Alice, then overwrites one column of her row directly.
+    fn corrupt(adapter: &SqliteAdapter, column: &str, value: rusqlite::types::Value) -> String {
+        let id = adapter
+            .insert(DATASET, "users", make_request("Alice"))
+            .unwrap()
+            .id;
+        adapter
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                &format!("UPDATE records SET {column} = ?1 WHERE id = ?2"),
+                rusqlite::params![value, id],
+            )
+            .unwrap();
+        id
+    }
+
+    fn assert_internal<T: std::fmt::Debug>(result: Result<T, Error>, needle: &str) {
+        match result {
+            Err(Error::Internal(msg)) => assert!(msg.contains(needle), "{msg}"),
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_malformed_fields_is_internal_naming_the_record() {
+        let adapter = make_adapter();
+        let id = corrupt(&adapter, "fields", "{not json".to_string().into());
+
+        assert_internal(adapter.get(DATASET, "users", &id), &id);
+        assert_internal(adapter.list(DATASET, "users"), &id);
+        assert_internal(adapter.query(DATASET, &[LakeQuery::new("users", 10)]), &id);
+        assert_internal(
+            adapter.update(DATASET, "users", &id, make_patch("Bob")),
+            &id,
+        );
+    }
+
+    #[test]
+    fn test_unreadable_row_is_internal_not_missing() {
+        // A blob where a string belongs (TEXT affinity would convert an
+        // integer): a rusqlite error other than no rows, which `get` used
+        // to answer as `None`.
+        let adapter = make_adapter();
+        let id = corrupt(&adapter, "created_at", vec![0xff_u8].into());
+
+        assert_internal(adapter.get(DATASET, "users", &id), "");
+        assert_internal(adapter.list(DATASET, "users"), "");
+        assert_internal(adapter.query(DATASET, &[LakeQuery::new("users", 10)]), "");
+        assert!(adapter
+            .get(DATASET, "users", "nonexistent")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
