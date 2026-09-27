@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use crate::adapters::SchemaPersistence;
 use crate::error::Error;
@@ -32,8 +32,23 @@ pub trait SchemaInstance: Clone + Sized + serde::Serialize + 'static {
 ///
 /// All persistence I/O is delegated to the [`SchemaPersistence`] adapter; the
 /// store only manages the in-memory index and the read/write coordination.
+///
+/// # Locking
+///
+/// Every mutation holds `writer` from its existence check through the adapter
+/// write to the cache update, so check-persist-cache is one step: two creates
+/// of one key cannot both win, and a read-modify-write through
+/// [`Self::update_with`] cannot lose a concurrent change. Readers only take the
+/// `cache` lock, briefly, and never wait on disk I/O.
+///
+/// Lock order is `writer` then `cache`, within one store only. No method here
+/// calls into another store, so the stores in a `SchemaStore` never nest
+/// their locks and cannot deadlock one another. Keep it that way: a caller
+/// that needs several stores takes them one after another, never one inside
+/// another.
 pub struct InstanceStore<T: SchemaInstance> {
     cache: RwLock<BTreeMap<String, Arc<T>>>,
+    writer: Mutex<()>,
     adapter: Arc<dyn SchemaPersistence<T>>,
 }
 
@@ -41,6 +56,7 @@ impl<T: SchemaInstance> InstanceStore<T> {
     pub fn new(adapter: Arc<dyn SchemaPersistence<T>>) -> Self {
         Self {
             cache: RwLock::new(BTreeMap::new()),
+            writer: Mutex::new(()),
             adapter,
         }
     }
@@ -73,64 +89,103 @@ impl<T: SchemaInstance> InstanceStore<T> {
         cache.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
+    /// Serializes mutations. It guards no data of its own, so a panic while
+    /// it was held leaves nothing inconsistent and the poison is ignored.
+    fn lock_writer(&self) -> MutexGuard<'_, ()> {
+        self.writer.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn create(&self, value: T) -> Result<Arc<T>, Error> {
         let key = value.to_path();
-        {
-            let cache = self.cache.read().unwrap();
-            if cache.contains_key(&key) {
-                return Err(Error::AlreadyExists(key));
-            }
+        let _writer = self.lock_writer();
+        if self.has(&key) {
+            return Err(Error::AlreadyExists(key));
         }
-        self.adapter.write(&key, &value)?;
+        let written = persisted(self.adapter.write(&key, &value))?;
         let arc = Arc::new(value);
         self.cache.write().unwrap().insert(key, arc.clone());
-        Ok(arc)
+        written.map(|()| arc)
     }
 
     pub fn update(&self, key: &str, patch: T::Update) -> Result<Arc<T>, Error> {
+        self.update_with(key, |_| Some(patch))
+    }
+
+    /// Read-modify-write one instance atomically with respect to every other
+    /// mutation of this store. `f` sees the current value and returns the
+    /// patch to apply, or `None` to leave it as is (nothing is written, and
+    /// the current value is returned).
+    ///
+    /// `f` runs with this store's writer lock held: it must not call back
+    /// into this store, and must not mutate any other store.
+    pub fn update_with<F>(&self, key: &str, f: F) -> Result<Arc<T>, Error>
+    where
+        F: FnOnce(&T) -> Option<T::Update>,
+    {
+        let _writer = self.lock_writer();
         let current = self
             .get(key)
             .ok_or_else(|| Error::NotFound(key.to_string()))?;
+        let Some(patch) = f(&current) else {
+            return Ok(current);
+        };
         let mut updated: T = (*current).clone();
         updated.apply_update(&patch);
-        self.adapter.write(key, &updated)?;
+        let written = persisted(self.adapter.write(key, &updated))?;
         let arc = Arc::new(updated);
         self.cache
             .write()
             .unwrap()
             .insert(key.to_string(), arc.clone());
-        Ok(arc)
+        written.map(|()| arc)
     }
 
     pub fn delete(&self, key: &str) -> Result<(), Error> {
-        {
-            let cache = self.cache.read().unwrap();
-            if !cache.contains_key(key) {
-                return Err(Error::NotFound(key.to_string()));
-            }
+        let _writer = self.lock_writer();
+        if !self.has(key) {
+            return Err(Error::NotFound(key.to_string()));
         }
         self.adapter.delete(key)?;
         self.cache.write().unwrap().remove(key);
         Ok(())
     }
 
+    /// Delete every instance whose key starts with `prefix`, returning the
+    /// deleted keys. Every key is attempted; one whose adapter delete fails
+    /// stays in the cache (it is still on disk) and the first such error is
+    /// returned once the rest are done, so cache and disk agree either way.
     pub fn delete_by_prefix(&self, prefix: &str) -> Result<Vec<String>, Error> {
-        let to_delete: Vec<String> = {
-            let cache = self.cache.read().unwrap();
-            cache
-                .range(prefix.to_string()..)
-                .take_while(|(k, _)| k.starts_with(prefix))
-                .map(|(k, _)| k.clone())
-                .collect()
-        };
-        for key in &to_delete {
-            let _ = self.adapter.delete(key);
+        let _writer = self.lock_writer();
+        let keys: Vec<String> = self.list(prefix).into_iter().map(|(k, _)| k).collect();
+        let mut deleted = Vec::new();
+        let mut first_err = None;
+        for key in keys {
+            match self.adapter.delete(&key) {
+                Ok(()) => {
+                    self.cache.write().unwrap().remove(&key);
+                    deleted.push(key);
+                }
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
         }
-        let mut cache = self.cache.write().unwrap();
-        for key in &to_delete {
-            cache.remove(key);
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(deleted),
         }
-        Ok(to_delete)
+    }
+}
+
+/// Sort an adapter write's result into "did not happen" (the outer `Err`: skip
+/// the cache update) and "happened" (the inner result: update the cache, then
+/// return it). [`Error::NotDurable`] is the one error that means the new
+/// contents are already what readers of the file see.
+fn persisted(result: Result<(), Error>) -> Result<Result<(), Error>, Error> {
+    match result {
+        Err(e @ Error::NotDurable(_)) => Ok(Err(e)),
+        Err(e) => Err(e),
+        Ok(()) => Ok(Ok(())),
     }
 }
 
@@ -286,5 +341,153 @@ mod tests {
         assert_eq!(crm.len(), 2);
         let all = store.list_all();
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn concurrent_create_of_one_key_has_one_winner() {
+        const N: usize = 16;
+        let (dir, store) = fresh_store();
+        let store = Arc::new(store);
+        let barrier = Arc::new(std::sync::Barrier::new(N));
+        let results: Vec<Result<Arc<TestItem>, Error>> = (0..N)
+            .map(|i| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.create(sample("ben/crm", "a", &format!("A{i}")))
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect();
+
+        let winners: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        assert_eq!(winners.len(), 1);
+        assert!(results
+            .iter()
+            .filter(|r| r.is_err())
+            .all(|r| matches!(r, Err(Error::AlreadyExists(_)))));
+
+        // The file on disk is the winner's, and so is the cache.
+        let on_disk = std::fs::read_to_string(dir.path().join("ben/crm/items/a.yaml")).unwrap();
+        assert!(on_disk.contains(&winners[0].label));
+        assert_eq!(
+            store.get("ben/crm/items/a").unwrap().label,
+            winners[0].label
+        );
+    }
+
+    #[test]
+    fn concurrent_update_with_loses_nothing() {
+        const N: usize = 16;
+        let (_dir, store) = fresh_store();
+        let store = Arc::new(store);
+        store.create(sample("ben/crm", "a", "")).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(N));
+        let handles: Vec<_> = (0..N)
+            .map(|i| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .update_with("ben/crm/items/a", |cur| {
+                            Some(TestItemUpdate {
+                                label: Some(format!("{}{},", cur.label, i)),
+                            })
+                        })
+                        .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let label = store.get("ben/crm/items/a").unwrap().label.clone();
+        assert_eq!(label.split_terminator(',').count(), N);
+    }
+
+    #[test]
+    fn update_with_none_writes_nothing() {
+        let (dir, store) = fresh_store();
+        let created = store.create(sample("ben/crm", "a", "A")).unwrap();
+        let path = dir.path().join("ben/crm/items/a.yaml");
+        std::fs::remove_file(&path).unwrap();
+        let got = store.update_with("ben/crm/items/a", |_| None).unwrap();
+        assert!(Arc::ptr_eq(&created, &got));
+        assert!(!path.exists());
+    }
+
+    /// Writes succeed; deletes fail for any key containing `fail`.
+    struct FailingDeletes;
+
+    impl SchemaPersistence<TestItem> for FailingDeletes {
+        fn load_all(&self) -> Result<Vec<(String, TestItem)>, Error> {
+            Ok(Vec::new())
+        }
+        fn write(&self, _key: &str, _value: &TestItem) -> Result<(), Error> {
+            Ok(())
+        }
+        fn delete(&self, key: &str) -> Result<(), Error> {
+            if key.contains("fail") {
+                Err(Error::Io(std::io::Error::other("disk says no")))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// Every write lands but reports that the directory flush failed.
+    struct UnflushedWrites;
+
+    impl SchemaPersistence<TestItem> for UnflushedWrites {
+        fn load_all(&self) -> Result<Vec<(String, TestItem)>, Error> {
+            Ok(Vec::new())
+        }
+        fn write(&self, _key: &str, _value: &TestItem) -> Result<(), Error> {
+            Err(Error::NotDurable(std::io::Error::other("fsync failed")))
+        }
+        fn delete(&self, _key: &str) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn not_durable_write_still_updates_the_cache_and_reports() {
+        let store = InstanceStore::new(Arc::new(UnflushedWrites));
+        assert!(matches!(
+            store.create(sample("ben/crm", "a", "A")),
+            Err(Error::NotDurable(_))
+        ));
+        assert_eq!(store.get("ben/crm/items/a").unwrap().label, "A");
+
+        let res = store.update(
+            "ben/crm/items/a",
+            TestItemUpdate {
+                label: Some("A2".to_string()),
+            },
+        );
+        assert!(matches!(res, Err(Error::NotDurable(_))));
+        assert_eq!(store.get("ben/crm/items/a").unwrap().label, "A2");
+    }
+
+    #[test]
+    fn delete_by_prefix_reports_failure_and_keeps_undeleted_keys() {
+        let store = InstanceStore::new(Arc::new(FailingDeletes));
+        store.create(sample("ben/crm", "a", "A")).unwrap();
+        store.create(sample("ben/crm", "fail", "F")).unwrap();
+        store.create(sample("ben/crm", "z", "Z")).unwrap();
+
+        assert!(matches!(
+            store.delete_by_prefix("ben/crm/"),
+            Err(Error::Io(_))
+        ));
+        // Keys on either side of the failure are gone; the one still on disk
+        // is still cached.
+        assert!(!store.has("ben/crm/items/a"));
+        assert!(store.has("ben/crm/items/fail"));
+        assert!(!store.has("ben/crm/items/z"));
     }
 }

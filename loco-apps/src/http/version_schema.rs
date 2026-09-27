@@ -567,6 +567,13 @@ impl VersionSchema {
     /// seeded with every existing field in this project+version so collections
     /// that predate the feature don't end up with a partial default. The new
     /// `field_name` is appended last regardless.
+    ///
+    /// Each append is a [`InstanceStore::update_with`] on the fieldset store,
+    /// so the list it extends is the current one, not a snapshot a concurrent
+    /// `create_field` has since changed. Only the fieldset store is locked
+    /// there; the field store is read beforehand, never inside it.
+    ///
+    /// [`InstanceStore::update_with`]: loco_schema_runtime::InstanceStore::update_with
     fn append_to_auto_add_sets(&self, collection: &str, field_name: &str) {
         let auto_sets = self.auto_add_fieldsets(collection);
         if auto_sets.is_empty() {
@@ -583,7 +590,7 @@ impl VersionSchema {
                 .filter(|n| n != field_name)
                 .collect();
             seed.push(field_name.to_string());
-            let _ = self.store.fieldsets().create(Fieldset {
+            match self.store.fieldsets().create(Fieldset {
                 project: self.project_id.clone(),
                 version: self.version.clone(),
                 collection: collection.to_string(),
@@ -591,53 +598,58 @@ impl VersionSchema {
                 label: String::new(),
                 fields: seed,
                 auto_add: true,
-            });
-            return;
-        }
-        for fs in auto_sets {
-            if fs.fields.iter().any(|n| n == field_name) {
-                continue;
+            }) {
+                // A concurrent create_field made the default first, maybe
+                // from a field list that predates ours: append to it instead.
+                Err(loco_schema_runtime::Error::AlreadyExists(_)) => {}
+                _ => return,
             }
-            let mut next = fs.fields.clone();
-            next.push(field_name.to_string());
-            let key = Fieldset::to_path(&self.project_id, &self.version, collection, &fs.name);
-            let _ = self.store.fieldsets().update(
-                &key,
-                FieldsetUpdate {
+        }
+        let prefix = format!(
+            "{}/versions/{}/fieldsets/{}/",
+            self.project_id, self.version, collection
+        );
+        for (key, _) in self.store.fieldsets().list(&prefix) {
+            let _ = self.store.fieldsets().update_with(&key, |fs| {
+                if !fs.auto_add || fs.fields.iter().any(|n| n == field_name) {
+                    return None;
+                }
+                let mut next = fs.fields.clone();
+                next.push(field_name.to_string());
+                Some(FieldsetUpdate {
                     label: None,
                     fields: Some(next),
                     auto_add: None,
-                },
-            );
+                })
+            });
         }
     }
 
     /// Strip `field_name` from every fieldset in this project+version's view of
-    /// the collection. Touches only sets that actually reference the name.
+    /// the collection. Touches only sets that actually reference the name,
+    /// each under the fieldset store's write lock like the append above.
     fn remove_from_all_fieldsets(&self, collection: &str, field_name: &str) {
         let prefix = format!(
             "{}/versions/{}/fieldsets/{}/",
             self.project_id, self.version, collection
         );
-        let sets = self.store.fieldsets().list(&prefix);
-        for (key, fs) in sets {
-            if !fs.fields.iter().any(|n| n == field_name) {
-                continue;
-            }
-            let next: Vec<String> = fs
-                .fields
-                .iter()
-                .filter(|n| *n != field_name)
-                .cloned()
-                .collect();
-            let _ = self.store.fieldsets().update(
-                &key,
-                FieldsetUpdate {
+        for (key, _) in self.store.fieldsets().list(&prefix) {
+            let _ = self.store.fieldsets().update_with(&key, |fs| {
+                if !fs.fields.iter().any(|n| n == field_name) {
+                    return None;
+                }
+                let next: Vec<String> = fs
+                    .fields
+                    .iter()
+                    .filter(|n| *n != field_name)
+                    .cloned()
+                    .collect();
+                Some(FieldsetUpdate {
                     label: None,
                     fields: Some(next),
                     auto_add: None,
-                },
-            );
+                })
+            });
         }
     }
 }
@@ -659,4 +671,96 @@ fn direct_dependencies(
         }
     }
     deps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    const PROJECT: &str = "ben/crm";
+    const VERSION: &str = "0.0.1-dev";
+
+    fn draft_schema() -> (tempfile::TempDir, Arc<SchemaStore>) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SchemaStore::load(dir.path()).unwrap());
+        (dir, store)
+    }
+
+    fn field(collection: &str, name: &str) -> Field {
+        Field::new(
+            PROJECT.to_string(),
+            VERSION.to_string(),
+            collection.to_string(),
+            name.to_string(),
+            "string".to_string(),
+            String::new(),
+            Vec::new(),
+        )
+    }
+
+    /// Races `create_field` calls on one collection and returns the auto-add
+    /// fieldset's `fields` afterwards.
+    fn race_field_creates(store: &Arc<SchemaStore>, collection: &str, n: usize) -> Vec<String> {
+        let barrier = Arc::new(Barrier::new(n));
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                let collection = collection.to_string();
+                std::thread::spawn(move || {
+                    let schema = VersionSchema::new(store, PROJECT, VERSION);
+                    barrier.wait();
+                    schema
+                        .create_field(field(&collection, &format!("f{i}")))
+                        .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let key = Fieldset::to_path(PROJECT, VERSION, collection, DEFAULT_FIELDSET_NAME);
+        store.fieldsets().get(&key).unwrap().fields.clone()
+    }
+
+    fn assert_all_present(fields: &[String], n: usize) {
+        let mut got = fields.to_vec();
+        got.sort();
+        let mut want: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
+        want.sort();
+        assert_eq!(got, want, "auto-add fieldset lost or duplicated a name");
+    }
+
+    #[test]
+    fn concurrent_create_field_keeps_every_name_in_auto_add_set() {
+        const N: usize = 16;
+        let (_dir, store) = draft_schema();
+        let schema = VersionSchema::new(store.clone(), PROJECT, VERSION);
+        for round in 0..5 {
+            let collection = format!("c{round}");
+            schema
+                .create_collection(Collection::new(
+                    PROJECT.to_string(),
+                    VERSION.to_string(),
+                    collection.clone(),
+                    String::new(),
+                    String::new(),
+                ))
+                .unwrap();
+            assert_all_present(&race_field_creates(&store, &collection, N), N);
+        }
+    }
+
+    /// No default fieldset yet: the racers all try to lazy-create it, and the
+    /// losers must still land their name in the winner's set.
+    #[test]
+    fn concurrent_create_field_lazy_creates_one_default_set() {
+        const N: usize = 16;
+        let (_dir, store) = draft_schema();
+        for round in 0..5 {
+            let collection = format!("c{round}");
+            assert_all_present(&race_field_creates(&store, &collection, N), N);
+        }
+    }
 }
