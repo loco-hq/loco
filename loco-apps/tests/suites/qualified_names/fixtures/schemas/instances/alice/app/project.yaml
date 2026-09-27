@@ -1,0 +1,2 @@
+label: "App"
+description: "Consumer: depends on acme/crm and beta/crm, which both own `contacts`"

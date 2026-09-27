@@ -1,0 +1,4 @@
+label: "Summary"
+fields:
+  - email
+auto_add: false

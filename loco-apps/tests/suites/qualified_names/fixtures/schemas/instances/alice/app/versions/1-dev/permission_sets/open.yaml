@@ -1,0 +1,5 @@
+label: "Open"
+description: "Public read on alice/app's own contacts — and nothing of a dependency's"
+collections:
+  - collection: contacts
+    read: true

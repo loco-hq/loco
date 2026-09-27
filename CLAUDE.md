@@ -150,7 +150,7 @@ Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a 
 
 ### Manifests and dependency visibility
 
-Each version has a `manifest` instance declaring `dependencies` as `{user}/{project}@{version}` strings and `public_permission_sets` as the names of the permission sets this version assigns to `public`. A consuming version opts into a set a dependency ships by naming it here. `manifest` is a regular schema type — loco-gen treats it no differently than `collection` or `site`.
+Each version has a `manifest` instance declaring `dependencies` as `{user}/{project}@{version}` strings and `public_permission_sets` as the names of the permission sets this version assigns to `public`. A consuming version opts into a set a dependency ships by naming it here, qualified (`acme/crm.public_contacts`) — a bare name is the version's own set (see "Name resolution"). `manifest` is a regular schema type — loco-gen treats it no differently than `collection` or `site`.
 
 Dependencies are checked on write (`PUT /schema/.../manifest`, and again when `POST /config/version` copies a manifest): each must be `{account}/{project}@{version}`, name an existing version of **another** project, and name no project twice — a qualified name carries no version, so one project at two versions could not both be addressed. A bad entry is a 400 and nothing is stored. Boot does not check: a manifest on disk with bad entries loads, and reads skip the malformed ones. A version another project depends on cannot be deleted, nor can its project (409 naming the dependents); these checks run under the same `PINS` lock as site pins.
 
@@ -167,20 +167,35 @@ fully qualified (`{user}/{project}.{name}`) to be reachable.**
 The point is that installing a dependency can never silently change what an existing
 bare name resolves to. Resolution is a property of the name, not of manifest order.
 
-**This rule is implemented only by `POST /data/query`** (`loco-apps/src/query.rs`),
-which resolves through the strict `VersionSchema::collection_in` / `field_in`. Everywhere
-else it is not yet: every other `VersionSchema` lookup
-(`collection`, `field`, `fieldset`, `permission_set`) walks self first and
-then falls through to direct deps in manifest order, returning the first match. That
-means a bare name *can* resolve into a dependency today, and two deps that share a
-name make the second unreachable. `collection_grant_matches` (`http/authz.rs`) is the
-only place that already accepts the qualified form. Issue #28 tracks making the rule
-real across `/data`, `/schema`, and permission-set references. Do not write new code
-that relies on the fall-through.
+It holds everywhere a name is looked up. `VersionSchema` (`http/version_schema.rs`)
+resolves every name through `split`: bare → self, qualified → that project, which must
+be self or a **direct** dependency; anything else is not found (404 on `/schema` and
+`/data`, `unknown_collection` / `unknown_field` in `/data/query`). No lookup walks the
+dependency list for a match, so two deps that share a name are both addressable.
+
+- **Collections** — `/schema/.../collection/{name}` and `/data/{collection}/…` take the
+  qualified name percent-encoded as one segment: `/data/acme%2Fcrm.contacts/list`
+  (`loco-client`'s `data('acme/crm.contacts')` encodes it). A qualified name for self
+  equals the bare one. Records of a dependency's collection live in the site's dataset
+  under the lake key `{owner_project}.{name}`.
+- **Fields and fieldsets** belong to the collection's owner. `acme/crm.contacts` has the
+  fields acme/crm declares on `contacts`; neither the running project nor another
+  dependency adds to it by declaring fields under the same collection name. A fieldset
+  on a dependency's collection is named qualified too:
+  `/schema/.../fieldset/acme%2Fcrm.contacts/acme%2Fcrm.summary`.
+- **Permission sets** in `public_permission_sets`: bare is this version's own set; a
+  dependency's is opted into as `acme/crm.public_contacts`. A consumer's set may share a
+  name with a dependency's — they are different sets.
+- **Grants** inside a permission set resolve from the set's own project
+  (`collection_grant_matches`, `http/authz.rs`): a bare grant `contacts` in the
+  consumer's set opens only the consumer's `contacts`, and in a set a dependency ships
+  only the dependency's. A qualified grant names its owner exactly.
+- **Listings** (`collection/list`, `permission_set/list`) span self + direct deps and
+  return each item's `project`, from which a client builds the qualified name.
 
 ### Fieldsets
 
-A fieldset is an ordered named subset of a collection's fields. `auto_add: true` marks the set that new fields are appended to. `VersionSchema::fields(collection)` returns fields in auto-add fieldset order (then leftover fields alphabetically). Studio uses that order for the collection table; record create/edit forms currently render the same list as returned by `/schema/.../field/{collection}/list`. The edit form sends only the fields the user changed, so a stored value the schema no longer accepts does not block saving another field.
+A fieldset is an ordered named subset of a collection's fields. `auto_add: true` marks the set that new fields are appended to. `VersionSchema::fields(collection)` returns the owner's fields in the owner's auto-add fieldset order (then leftover fields alphabetically). Studio uses that order for the collection table; record create/edit forms currently render the same list as returned by `/schema/.../field/{collection}/list`. The edit form sends only the fields the user changed, so a stored value the schema no longer accepts does not block saving another field.
 
 ## Naming Conventions
 
@@ -203,7 +218,7 @@ Mounted in `server.rs`:
 
 | Prefix | Role |
 |--------|------|
-| `/data` | Record CRUD, plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version — and `POST /data/query`, named batched reads with filters and cursors ([`docs/query.md`](docs/query.md)). Site-scoped via headers. Strict validation on write; diagnostics on read. |
+| `/data` | Record CRUD on `/data/{collection}/…` — bare for the site's own collection, a dependency's qualified and percent-encoded (`acme%2Fcrm.contacts`) — plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version — and `POST /data/query`, named batched reads with filters and cursors ([`docs/query.md`](docs/query.md)). Site-scoped via headers. Strict validation on write; diagnostics on read. |
 | `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, bundle). |
 | `/config` | Unversioned project / dataset / site / version lifecycle. |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |

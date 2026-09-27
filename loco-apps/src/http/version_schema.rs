@@ -5,7 +5,9 @@
 //!
 //! - **read** any metadata in its own version OR a directly-declared
 //!   dependency. Transitive deps are not visible — to use a piece of
-//!   metadata, the project must depend on its owner directly.
+//!   metadata, the project must depend on its owner directly. A bare name
+//!   means this version's own project; a dependency's must be written
+//!   `{account}/{project}.{name}` ("Name resolution" in CLAUDE.md).
 //! - **write** to its own `(project_id, version)` *only* when constructed
 //!   writable AND the version is a draft (`-dev` suffix).
 //!
@@ -71,16 +73,8 @@ pub struct VersionSchema {
     project_id: String,
     version: String,
     /// Self entry plus direct deps as `(project_id, version)` pairs. Self is
-    /// always index 0.
-    ///
-    /// Order **is** significant. Every lookup below (`collection`, `field`,
-    /// `fieldset`, `permission_set`) returns the first match walking this
-    /// list, so self shadows a dep and an earlier dep shadows a later one —
-    /// which also means a dep owning a name no one else uses is reachable by
-    /// that bare name. That is not the intended semantic ("Name resolution"
-    /// in CLAUDE.md: a bare name means self, deps must be qualified), but it
-    /// is the behavior today; issue #28 changes it. Do not write new code
-    /// that relies on the fall-through.
+    /// always index 0. Lookups find a project here by name; none walks the
+    /// list for a match, so its order carries no meaning.
     dependencies: Vec<(String, String)>,
     /// Names of the permission sets this version's manifest assigns to
     /// `public`, snapshotted with `dependencies` for the same reason.
@@ -88,8 +82,9 @@ pub struct VersionSchema {
     /// Assignment lives on the manifest, not on the site: a site is a URL
     /// pointing at `(version, dataset)`, so two sites pinning one version
     /// share its public policy. Names resolve through
-    /// [`Self::permission_set`], which is what lets a consuming version opt
-    /// into a set a dependency ships.
+    /// [`Self::permission_set`]: a bare name is this project's own set, and a
+    /// consuming version opts into a set a dependency ships by naming it
+    /// qualified (`acme/crm.public_contacts`).
     public_permission_sets: Vec<String>,
     read_only: bool,
 }
@@ -159,7 +154,14 @@ impl VersionSchema {
         &self.public_permission_sets
     }
 
-    // --- Reads: union across self + every installed dependency ---
+    // --- Reads: self + direct dependencies, resolved strictly ---
+    //
+    // Every lookup below takes a name as a client writes it and resolves it
+    // by the rule in CLAUDE.md ("Name resolution"): a bare name means this
+    // version's own project, and a dependency's must be written
+    // `{account}/{project}.{name}`. Nothing walks the dependency list looking
+    // for a match, so installing a dependency never changes what a bare name
+    // means, and two dependencies that share a name are both addressable.
 
     /// Manifest for `(self.project_id, self.version)`. Manifests are
     /// inherently per-version; there's no cross-namespace flavor.
@@ -169,7 +171,45 @@ impl VersionSchema {
             .get(&Manifest::to_path(&self.project_id, &self.version))
     }
 
+    /// The version of `project` this view sees: the running version when
+    /// `project` is self, the pinned version when it is a **direct**
+    /// dependency, otherwise `None`.
+    pub fn visible_version(&self, project: &str) -> Option<&str> {
+        self.dependencies
+            .iter()
+            .find(|(p, _)| p == project)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// `name` as `(owning project, bare name)`: this project for a bare name,
+    /// the named project for a qualified one. The project need not be visible
+    /// — see [`Self::resolve`] for that.
+    pub fn split<'a>(&'a self, name: &'a str) -> (&'a str, &'a str) {
+        split_qualified(name).unwrap_or((&self.project_id, name))
+    }
+
+    /// `name` as `(project, version, bare name)` when its project is self or
+    /// a direct dependency; `None` otherwise (a transitive or unknown
+    /// project is not found, never an error of another kind).
+    fn resolve<'a>(&'a self, name: &'a str) -> Option<(&'a str, &'a str, &'a str)> {
+        let (project, bare) = self.split(name);
+        let version = self.visible_version(project)?;
+        Some((project, version, bare))
+    }
+
+    /// How a client names `name` owned by `project` from this version: bare
+    /// for this project's own, qualified for a dependency's.
+    pub fn reference(&self, project: &str, name: &str) -> String {
+        if project == self.project_id {
+            name.to_string()
+        } else {
+            format!("{project}.{name}")
+        }
+    }
+
     /// Every collection visible to this version, across self + direct deps.
+    /// Each carries its `project`, from which a client builds the qualified
+    /// name of a dependency's.
     pub fn collections(&self) -> Vec<Arc<Collection>> {
         self.dependencies
             .iter()
@@ -184,42 +224,15 @@ impl VersionSchema {
             .collect()
     }
 
-    /// First collection with the given `name` across self + direct deps.
+    /// The collection `name` names: this project's for a bare name, a direct
+    /// dependency's for `{account}/{project}.{name}`.
     pub fn collection(&self, name: &str) -> Option<Arc<Collection>> {
-        self.dependencies.iter().find_map(|(project_id, version)| {
-            self.store
-                .collections()
-                .get(&Collection::to_path(project_id, version, name))
-        })
-    }
-
-    /// The collection owned by *this* version's own project, ignoring deps.
-    ///
-    /// `/data` resolves through this rather than [`Self::collection`] so record
-    /// access already follows the rule a bare name means self ("Name
-    /// resolution" in CLAUDE.md). A dependency's collection becomes reachable
-    /// when #28 adds a way to name it qualified — not by falling through here
-    /// in the meantime, which would make dep records addressable under a bare
-    /// name and then take that away again.
-    pub fn own_collection(&self, name: &str) -> Option<Arc<Collection>> {
-        self.store
-            .collections()
-            .get(&Collection::to_path(&self.project_id, &self.version, name))
-    }
-
-    /// The version of `project` this view sees: the running version when
-    /// `project` is self, the pinned version when it is a **direct**
-    /// dependency, otherwise `None`. No fall-through — this is the strict
-    /// lookup `POST /data/query` resolves qualified names with (#28).
-    pub fn visible_version(&self, project: &str) -> Option<&str> {
-        self.dependencies
-            .iter()
-            .find(|(p, _)| p == project)
-            .map(|(_, v)| v.as_str())
+        let (project, bare) = self.split(name);
+        self.collection_in(project, bare)
     }
 
     /// The collection `name` owned by `project`, when `project` is self or a
-    /// direct dependency. Strict: never looks in another project.
+    /// direct dependency.
     pub fn collection_in(&self, project: &str, name: &str) -> Option<Arc<Collection>> {
         let version = self.visible_version(project)?;
         self.store
@@ -227,27 +240,60 @@ impl VersionSchema {
             .get(&Collection::to_path(project, version, name))
     }
 
-    /// The field `name` that `project` declares on `collection`, when
-    /// `project` is self or a direct dependency. Strict, like
-    /// [`Self::collection_in`].
-    pub fn field_in(&self, project: &str, collection: &str, name: &str) -> Option<Arc<Field>> {
-        let version = self.visible_version(project)?;
+    /// The field `name` that `project` declares on the collection
+    /// `collection` owned by `owner`. A collection's fields are its owner's:
+    /// `None` unless `project` is `owner` and is self or a direct dependency.
+    ///
+    /// Nobody else's declarations under the same collection name apply —
+    /// not another dependency's, which would let installing it change what
+    /// `owner`'s collection accepts, and not the running project's, which
+    /// would make its own `contacts` fields leak onto every dependency's
+    /// `contacts`. Whether a project may extend a dependency's collection is
+    /// open (docs/query.md, open question 1).
+    pub fn field_in(
+        &self,
+        owner: &str,
+        collection: &str,
+        project: &str,
+        name: &str,
+    ) -> Option<Arc<Field>> {
+        if project != owner {
+            return None;
+        }
+        let version = self.visible_version(owner)?;
         self.store
             .fields()
-            .get(&Field::to_path(project, version, collection, name))
+            .get(&Field::to_path(owner, version, collection, name))
     }
 
-    /// Every field across self + direct deps that targets the given
-    /// collection name. Deps may declare fields that extend a collection
-    /// owned by another dep; those extensions are picked up here.
-    ///
-    /// Order is driven by `auto_add` fieldsets on this collection (concatenated
-    /// in fieldset-name order, dedup'd). Fields not named in any auto_add set
-    /// are appended in alphabetical-by-key fallback order. Unknown names in
-    /// a fieldset are silently skipped — that's how cascade-delete drift, and
-    /// in-flight half-applied writes, stay safe to read.
+    /// The fields of the collection `collection` names (bare or qualified),
+    /// which are the ones its owner declares ([`Self::field_in`]). Empty when
+    /// the name's project is not visible.
     pub fn fields(&self, collection: &str) -> Vec<Arc<Field>> {
-        let raw = self.fields_unordered(collection);
+        let (owner, bare) = self.split(collection);
+        self.fields_of(owner, bare)
+    }
+
+    /// [`Self::fields`] for the collection `collection` owned by `owner`.
+    ///
+    /// Order is driven by the owner's `auto_add` fieldsets on this collection
+    /// (concatenated in fieldset-name order, dedup'd). Fields not named in
+    /// any auto_add set are appended in alphabetical-by-key fallback order.
+    /// Unknown names in a fieldset are silently skipped — that's how
+    /// cascade-delete drift, and in-flight half-applied writes, stay safe to
+    /// read.
+    pub fn fields_of(&self, owner: &str, collection: &str) -> Vec<Arc<Field>> {
+        let Some(version) = self.visible_version(owner) else {
+            return Vec::new();
+        };
+        let prefix = format!("{owner}/versions/{version}/fields/{collection}/");
+        let raw: Vec<Arc<Field>> = self
+            .store
+            .fields()
+            .list(&prefix)
+            .into_iter()
+            .map(|(_, f)| f)
+            .collect();
 
         let mut by_name: std::collections::HashMap<String, Arc<Field>> =
             raw.iter().map(|f| (f.name.clone(), f.clone())).collect();
@@ -255,7 +301,7 @@ impl VersionSchema {
         let mut ordered: Vec<Arc<Field>> = Vec::with_capacity(raw.len());
         let mut seen = std::collections::HashSet::new();
 
-        for fs in self.auto_add_fieldsets(collection) {
+        for fs in auto_add_fieldsets(&self.store, owner, version, collection) {
             for name in &fs.fields {
                 if seen.insert(name.clone()) {
                     if let Some(f) = by_name.remove(name) {
@@ -276,56 +322,38 @@ impl VersionSchema {
         ordered
     }
 
-    /// First field with the given `(collection, name)` across self + direct deps.
-    pub fn field(&self, collection: &str, name: &str) -> Option<Arc<Field>> {
-        self.dependencies.iter().find_map(|(project_id, version)| {
-            self.store
-                .fields()
-                .get(&Field::to_path(project_id, version, collection, name))
-        })
-    }
-
-    /// Raw field list (no fieldset ordering applied). Used as the input to
-    /// `fields()` and internally by create/delete cascade logic.
-    fn fields_unordered(&self, collection: &str) -> Vec<Arc<Field>> {
-        self.dependencies
-            .iter()
-            .flat_map(|(project_id, version)| {
-                let prefix = format!("{project_id}/versions/{version}/fields/{collection}/");
-                self.store
-                    .fields()
-                    .list(&prefix)
-                    .into_iter()
-                    .map(|(_, f)| f)
-            })
-            .collect()
-    }
-
-    /// All fieldsets across self + direct deps for a given collection.
+    /// The fieldsets on the collection `collection` names (bare or
+    /// qualified) — its owner's, like its fields.
     pub fn fieldsets(&self, collection: &str) -> Vec<Arc<Fieldset>> {
-        self.dependencies
-            .iter()
-            .flat_map(|(project_id, version)| {
-                let prefix = format!("{project_id}/versions/{version}/fieldsets/{collection}/");
-                self.store
-                    .fieldsets()
-                    .list(&prefix)
-                    .into_iter()
-                    .map(|(_, fs)| fs)
-            })
+        let Some((owner, version, bare)) = self.resolve(collection) else {
+            return Vec::new();
+        };
+        let prefix = format!("{owner}/versions/{version}/fieldsets/{bare}/");
+        self.store
+            .fieldsets()
+            .list(&prefix)
+            .into_iter()
+            .map(|(_, fs)| fs)
             .collect()
     }
 
-    /// First fieldset matching `(collection, name)` across self + direct deps.
+    /// The fieldset `name` on the collection `collection` names. Both follow
+    /// the rule, so a dependency's set on its own collection is
+    /// `acme/crm.contacts` + `acme/crm.summary`; a bare set name means this
+    /// project's, which only its own collections have.
     pub fn fieldset(&self, collection: &str, name: &str) -> Option<Arc<Fieldset>> {
-        self.dependencies.iter().find_map(|(project_id, version)| {
-            self.store
-                .fieldsets()
-                .get(&Fieldset::to_path(project_id, version, collection, name))
-        })
+        let (owner, version, bare_collection) = self.resolve(collection)?;
+        let (project, bare) = self.split(name);
+        if project != owner {
+            return None;
+        }
+        self.store
+            .fieldsets()
+            .get(&Fieldset::to_path(owner, version, bare_collection, bare))
     }
 
-    /// Every permission set visible to this version, across self + direct deps.
+    /// Every permission set visible to this version, across self + direct
+    /// deps. Each carries its `project`, like [`Self::collections`].
     pub fn permission_sets(&self) -> Vec<Arc<PermissionSet>> {
         self.dependencies
             .iter()
@@ -340,29 +368,14 @@ impl VersionSchema {
             .collect()
     }
 
-    /// First permission set with the given `name` across self + direct deps.
-    /// Self wins on a name collision so a consumer can shadow a package set.
+    /// The permission set `name` names: this project's for a bare name, a
+    /// direct dependency's for `{account}/{project}.{name}`. A consumer's own
+    /// set of the same name as a dependency's is simply a different set.
     pub fn permission_set(&self, name: &str) -> Option<Arc<PermissionSet>> {
-        self.dependencies.iter().find_map(|(project_id, version)| {
-            self.store
-                .permission_sets()
-                .get(&PermissionSet::to_path(project_id, version, name))
-        })
-    }
-
-    /// Auto-add fieldsets only, scoped to this project+version (deps don't
-    /// influence ordering — each project's fields land in its own sets).
-    fn auto_add_fieldsets(&self, collection: &str) -> Vec<Arc<Fieldset>> {
-        let prefix = format!(
-            "{}/versions/{}/fieldsets/{}/",
-            self.project_id, self.version, collection
-        );
+        let (project, version, bare) = self.resolve(name)?;
         self.store
-            .fieldsets()
-            .list(&prefix)
-            .into_iter()
-            .filter_map(|(_, fs)| if fs.auto_add { Some(fs) } else { None })
-            .collect()
+            .permission_sets()
+            .get(&PermissionSet::to_path(project, version, bare))
     }
 
     // --- Writes: scoped to (self.project_id, self.version), draft-only ---
@@ -596,7 +609,8 @@ impl VersionSchema {
     ///
     /// [`InstanceStore::update_with`]: loco_schema_runtime::InstanceStore::update_with
     fn append_to_auto_add_sets(&self, collection: &str, field_name: &str) {
-        let auto_sets = self.auto_add_fieldsets(collection);
+        let auto_sets =
+            auto_add_fieldsets(&self.store, &self.project_id, &self.version, collection);
         if auto_sets.is_empty() {
             let prefix = format!(
                 "{}/versions/{}/fields/{}/",
@@ -673,6 +687,31 @@ impl VersionSchema {
             });
         }
     }
+}
+
+/// `{account}/{project}.{name}` → `(project, name)`. `None` for a bare name —
+/// one with no `/`, since every project id has one and no name does.
+pub fn split_qualified(name: &str) -> Option<(&str, &str)> {
+    if !name.contains('/') {
+        return None;
+    }
+    name.rsplit_once('.')
+}
+
+/// The `auto_add` fieldsets `project` declares on `collection` in `version`.
+fn auto_add_fieldsets(
+    store: &SchemaStore,
+    project: &str,
+    version: &str,
+    collection: &str,
+) -> Vec<Arc<Fieldset>> {
+    let prefix = format!("{project}/versions/{version}/fieldsets/{collection}/");
+    store
+        .fieldsets()
+        .list(&prefix)
+        .into_iter()
+        .filter_map(|(_, fs)| if fs.auto_add { Some(fs) } else { None })
+        .collect()
 }
 
 /// Split a manifest dependency, `{account}/{project}@{version}`, into

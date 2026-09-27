@@ -3,13 +3,16 @@
 # Chain (each arrow is the only dependency its manifest declares):
 #   acme/leads@0-dev -> acme/crm@0-dev -> base/core@0-dev
 #
-# base/core owns: collection user (field email), field tier on account,
-#                 fieldset account/core_view, permission set core_read.
-# acme/leads names core_read in public_permission_sets on purpose.
+# base/core owns: collection user (field email, fieldset core_view),
+#                 permission set core_read; it also declares a tier field
+#                 on the name `account`.
+# acme/leads names base/core.core_read in public_permission_sets on purpose.
 #
-# Every assertion below on acme/leads would flip if direct_dependencies
-# walked the manifest graph transitively. acme/crm, which depends on
-# base/core directly, is the control: the same things are visible there.
+# A dependency's metadata is reached by its qualified name (percent-encoded
+# in a path segment). Every assertion below on acme/leads would flip if
+# direct_dependencies walked the manifest graph transitively. acme/crm, which
+# depends on base/core directly, is the control: the same qualified names
+# resolve there.
 
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
@@ -32,36 +35,40 @@ jsonpath "$.data[*].name" includes "lead"
 jsonpath "$.data[*].name" includes "account"
 jsonpath "$.data[*].name" not includes "user"
 
-# 2. Fields on a collection leads can see: acme/crm's company, not the tier
-#    base/core adds to account.
-GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/field/account/list
+# 2. Fields on a collection leads can see: acme/crm's company.
+GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/field/acme%2Fcrm.account/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "company"
 
-# Control: acme/crm depends on base/core directly and does see tier.
-GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/field/account/list
-Authorization: Bearer {{token}}
-HTTP 200
-[Asserts]
-jsonpath "$.data" count == 2
-jsonpath "$.data[*].name" includes "tier"
-
-# 3. Fields on base/core's own collection: none.
-GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/field/user/list
+# 3. Fields on base/core's own collection: none from leads, email from crm.
+GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/field/base%2Fcore.user/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 0
+
+GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/field/base%2Fcore.user/list
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data" count == 1
+jsonpath "$.data[0].name" == "email"
 
 # 4. Fieldsets and permission sets base/core owns are not listed.
-GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/fieldset/account/list
+GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/fieldset/base%2Fcore.user/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 0
+
+GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/fieldset/base%2Fcore.user/list
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data" count == 1
 
 GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/permission_set/list
 Authorization: Bearer {{token}}
@@ -70,38 +77,37 @@ HTTP 200
 jsonpath "$.data" count == 0
 
 # ---------------------------------------------------------------------------
-# Fall-through lookups by bare name (VersionSchema::collection / fieldset /
-# permission_set). They walk self then deps; the deps must stop at direct.
+# Lookups by qualified name. They reach a direct dep and stop there.
 # ---------------------------------------------------------------------------
 
-# 5. Bare lookups that reach a direct dep still work — the negatives below
+# 5. Qualified lookups that reach a direct dep work — the negatives below
 #    are not passing because the lookup is broken.
-GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/collection/account
+GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/collection/acme%2Fcrm.account
 Authorization: Bearer {{token}}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/collection/user
+GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/collection/base%2Fcore.user
 Authorization: Bearer {{token}}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/fieldset/account/core_view
+GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/fieldset/base%2Fcore.user/base%2Fcore.core_view
 Authorization: Bearer {{token}}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/permission_set/core_read
+GET http://127.0.0.1:{{port}}/schema/acme/crm/0-dev/permission_set/base%2Fcore.core_read
 Authorization: Bearer {{token}}
 HTTP 200
 
 # 6. The same names from acme/leads are 404.
-GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/collection/user
+GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/collection/base%2Fcore.user
 Authorization: Bearer {{token}}
 HTTP 404
 
-GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/fieldset/account/core_view
+GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/fieldset/base%2Fcore.user/base%2Fcore.core_view
 Authorization: Bearer {{token}}
 HTTP 404
 
-GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/permission_set/core_read
+GET http://127.0.0.1:{{port}}/schema/acme/leads/0-dev/permission_set/base%2Fcore.core_read
 Authorization: Bearer {{token}}
 HTTP 404
 
@@ -146,21 +152,19 @@ X-Project-Id: acme/crm
 X-Site-Id: crm-dev
 {
   "queries": {
-    "user": { "collection": "base/core.user" },
-    "tier": {
-      "collection": "account",
-      "where": { "field": "base/core.tier", "op": "eq", "value": "gold" }
+    "user": {
+      "collection": "base/core.user",
+      "where": { "field": "base/core.email", "op": "eq", "value": "x" }
     }
   }
 }
 HTTP 200
 [Asserts]
 jsonpath "$.data.user.records" count == 0
-jsonpath "$.data.tier.records" count == 0
 
 # ---------------------------------------------------------------------------
-# Public policy: acme/leads assigns core_read to public, but base/core owns
-# it, so it does not resolve and public gets nothing.
+# Public policy: acme/leads assigns base/core.core_read to public, but
+# base/core is transitive, so it does not resolve and public gets nothing.
 # ---------------------------------------------------------------------------
 
 # 8. Token-less read of acme/leads' own collection is refused.

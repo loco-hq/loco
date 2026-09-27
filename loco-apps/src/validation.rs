@@ -118,18 +118,17 @@ impl ValidationReport {
     }
 }
 
-/// Validate a record's fields against the schema for a collection.
-///
-/// `schema.fields(collection)` returns the union of fields targeting this
-/// collection across every installed dependency — extensions declared by
-/// other deps are picked up automatically.
+/// Validate a record's fields against the collection `collection` owned by
+/// `owner`: the fields its owner declares, plus any this version's own
+/// project adds to a dependency's collection ([`VersionSchema::fields_of`]).
 pub fn validate_record(
     schema: &VersionSchema,
+    owner: &str,
     collection: &str,
     fields: &HashMap<String, Value>,
     mode: ValidationMode,
 ) -> ValidationReport {
-    check_record(schema, collection, fields, mode, None)
+    check_record(schema, owner, collection, fields, mode, None)
 }
 
 /// [`validate_record`], where `projection` names the only fields the record
@@ -137,12 +136,14 @@ pub fn validate_record(
 /// is absent because it was not asked for, not because it is unset.
 fn check_record(
     schema: &VersionSchema,
+    owner: &str,
     collection: &str,
     fields: &HashMap<String, Value>,
     mode: ValidationMode,
     projection: Option<&[String]>,
 ) -> ValidationReport {
-    let field_defs = schema.fields(collection);
+    let field_defs = schema.fields_of(owner, collection);
+    let collection = schema.reference(owner, collection);
     let by_name: HashMap<&str, &Field> = field_defs.iter().map(|f| (f.name(), &**f)).collect();
 
     let make = |kind: &str, path: Option<String>, message: String| match mode {
@@ -279,6 +280,7 @@ fn value_type_name(value: &Value) -> &'static str {
 /// `projection` is as for [`check_record`]; `None` means whole records.
 pub fn validate_records<'a, I>(
     schema: &VersionSchema,
+    owner: &str,
     collection: &str,
     records: I,
     mode: ValidationMode,
@@ -289,7 +291,7 @@ where
 {
     let mut combined = ValidationReport::default();
     for (id, fields) in records {
-        let report = check_record(schema, collection, fields, mode, projection);
+        let report = check_record(schema, owner, collection, fields, mode, projection);
         if !report.is_empty() {
             combined.extend(report.prefix_paths(id));
         }

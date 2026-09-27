@@ -56,11 +56,12 @@ impl SiteScope {
     /// exists in a draft — and a permission set naming it made that an
     /// unauthenticated read. The scoped view sees only what the site pins.
     ///
-    /// Self-only on purpose: a bare name means this project (CLAUDE.md, "Name
-    /// resolution"). A dependency's collection needs qualified addressing,
-    /// which is #28.
+    /// `name` follows the rule in CLAUDE.md ("Name resolution"): bare is this
+    /// project's collection, `{account}/{project}.{name}` a direct
+    /// dependency's. A transitive or unknown project is a 404 like any other
+    /// missing collection.
     pub fn require_collection(&self, name: &str) -> Result<Arc<Collection>, Response> {
-        self.schema.own_collection(name).ok_or_else(|| {
+        self.schema.collection(name).ok_or_else(|| {
             error_response(
                 StatusCode::NOT_FOUND,
                 &format!("unknown collection: {name}"),
@@ -118,8 +119,8 @@ impl SiteScope {
     }
 
     /// Permission sets the pinned version's manifest assigns to `public`,
-    /// resolved against that version (self + direct deps). Unknown names are
-    /// skipped.
+    /// resolved against that version: a bare name is this project's own set,
+    /// a dependency's must be qualified. Unknown names are skipped.
     ///
     /// Policy is a property of the snapshot, not of the URL: two sites that
     /// pin the same version cannot disagree about what `public` may do.

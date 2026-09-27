@@ -35,6 +35,29 @@ test('site headers are sent only when given', async () => {
   assert.equal(fetch.calls[1].url, '/data/lot/list');
 });
 
+test('a dependency’s collection is one encoded path segment', async () => {
+  const ok = () => [200, { ok: true, data: {} }];
+  const fetch = fakeFetch(ok(), ok(), ok(), ok(), ok(), ok());
+  const contacts = createClient({ storage: memoryStorage(), fetch }).data('acme/crm.contacts');
+  await contacts.list();
+  await contacts.get('r/1');
+  await contacts.add({ email: 'a@example.com' });
+  await contacts.update('r1', { email: 'b@example.com' });
+  await contacts.remove('r1');
+  await contacts.fields();
+  assert.deepEqual(
+    fetch.calls.map((c) => c.url),
+    [
+      '/data/acme%2Fcrm.contacts/list',
+      '/data/acme%2Fcrm.contacts/get/r%2F1',
+      '/data/acme%2Fcrm.contacts/add',
+      '/data/acme%2Fcrm.contacts/update/r1',
+      '/data/acme%2Fcrm.contacts/delete/r1',
+      '/data/acme%2Fcrm.contacts/fields',
+    ],
+  );
+});
+
 test('login stores the token per origin and sends it as Bearer', async () => {
   const storage = memoryStorage();
   const fetch = fakeFetch([200, { ok: true, data: { token: 't1' } }], [200, { ok: true, data: {} }]);

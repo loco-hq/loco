@@ -1,4 +1,4 @@
 label: "Core view"
 fields:
-  - tier
+  - email
 auto_add: false
