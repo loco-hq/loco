@@ -328,16 +328,17 @@ encoding lives in `loco-apps`, not the lake.
 System fields are `FieldRef::System(SystemField::…)`, an enum, never keys in `fields`.
 
 The lake checks structure and treats a failure as a caller bug. `limit` 0, an empty `in`, an
-ordering op against null or a boolean, a field name the lake rejects, or an `after` of the wrong
+ordering op against null or a boolean, a field name containing NUL, or an `after` of the wrong
 length fail the whole call with `Error::InvalidQuery`, because `query` returns one `Result` for
 the batch. So `loco-apps` checks each of these per query first and reports it as that query's
 `invalid_query`. None of them reach the lake from `/data/query`, and one bad query never turns
 the request into a 400.
 
-**TODO (#70): field names.** Describe what #70 lands. If it escapes: a field name is a bound,
-quoted JSON path with `\\`, `\"`, and `\^@` escaped, so any name works. If it rejects: the
-lake rejects names containing `"`, `\`, or NUL. Until then `loco-apps` refuses all three
-(`lake_accepts_field_name` in `src/query.rs`); schema field names are slugs, so none has one.
+Field names reach sqlite as a bound, quoted JSON path (`$."name"`), with `\` written `\\` and
+`"` written `\"`, so `.`, `[`, `\`, `"`, and non-ASCII names all work. NUL is the exception:
+sqlite's path lookup stops there even when escaped, so both adapters reject a field name
+containing NUL with `Error::InvalidQuery`, and `loco-apps` reports it as the query's
+`invalid_query` first. Schema field names are slugs, so none has one.
 
 Memory evaluates the filter in process. Sqlite compiles it to `json_extract(fields, '$.name')`
 comparisons with bound parameters, each guarded by a `json_type` kind check (without it,

@@ -288,15 +288,14 @@ fn type_name(value: &Value) -> &'static str {
     }
 }
 
-/// Field names this module will not send to the lake. The lake rejects `"`
-/// with `Error::InvalidQuery`, which fails the whole batch, not one query.
-/// Until #70's path fix, sqlite also misreads `\` (silent miss) and NUL
-/// (`Error::Internal`). Schema field names are slugs and never contain any
-/// of these; the check makes sure none ever reaches the lake.
-// TODO(#70): match what #70 lands — drop `\` and NUL if it escapes them,
-// and `"` too if it stops rejecting it.
+/// Field names the lake would refuse. The lake escapes `\` and `"` in its
+/// sqlite JSON path, but rejects NUL with `Error::InvalidQuery` (sqlite
+/// cuts the key there, escaped or not), and that fails the whole batch, not
+/// one query. So a NUL is this query's `invalid_query` instead. Schema field
+/// names are slugs and never contain one; the check makes sure none reaches
+/// the lake.
 fn lake_accepts_field_name(name: &str) -> bool {
-    !name.contains(['"', '\\', '\0'])
+    !name.contains('\0')
 }
 
 const SYSTEM_FIELDS: [(&str, SystemField); 6] = [
@@ -358,7 +357,7 @@ impl Resolver<'_> {
                 self.error(
                     kind::INVALID_QUERY,
                     path,
-                    format!("field '{name}' has a name that cannot be queried"),
+                    format!("field name {name:?} contains NUL, which cannot be queried"),
                 );
                 None
             }
@@ -922,8 +921,8 @@ mod tests {
     #[test]
     fn field_names_the_lake_rejects_are_caught_here() {
         assert!(lake_accepts_field_name("qty"));
-        assert!(!lake_accepts_field_name("a\"b"));
-        assert!(!lake_accepts_field_name("a\\b"));
+        assert!(lake_accepts_field_name("a\"b"));
+        assert!(lake_accepts_field_name("a\\b"));
         assert!(!lake_accepts_field_name("a\0b"));
     }
 
