@@ -72,17 +72,18 @@ jsonpath "$.data.project" == "alice/lab"
 jsonpath "$.data.version" == "0-dev"
 jsonpath "$.data.dependencies" count == 0
 
-# 7. PUT manifest updates dependencies. Both targets are fixture projects:
-#    a dependency on a version that does not exist is refused.
+# 7. PUT manifest updates dependencies. Both targets are fixture projects of
+#    alice's: a dependency on a version that does not exist, or on a project
+#    she cannot read, is refused.
 PUT http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/manifest
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"dependencies": ["other/proj@v1", "more/proj@v2"]}
+{"dependencies": ["alice/other@v1", "alice/more@v2"]}
 HTTP 200
 [Asserts]
 jsonpath "$.data.dependencies" count == 2
-jsonpath "$.data.dependencies[0]" == "other/proj@v1"
-jsonpath "$.data.dependencies[1]" == "more/proj@v2"
+jsonpath "$.data.dependencies[0]" == "alice/other@v1"
+jsonpath "$.data.dependencies[1]" == "alice/more@v2"
 
 # 8. GET reflects updated deps
 GET http://127.0.0.1:{{port}}/schema/alice/lab/0-dev/manifest

@@ -1,0 +1,2 @@
+label: "alice/other"
+description: "Dependency target for manifest tests; must exist or the dependency is refused"

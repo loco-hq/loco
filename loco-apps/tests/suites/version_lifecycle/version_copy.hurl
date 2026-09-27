@@ -13,7 +13,8 @@
 # order hurl runs them in.
 #
 # Its manifest depends on other/proj@v1, a fixture too: a copy re-checks the
-# dependencies it carries and refuses one whose version does not exist.
+# dependencies it carries and refuses one whose version does not exist. alice
+# cannot read other/proj; a copy is a snapshot and carries it anyway (#86).
 
 # Login as alice (global). She is an implicit developer on alice/*.
 POST http://127.0.0.1:{{port}}/auth/login

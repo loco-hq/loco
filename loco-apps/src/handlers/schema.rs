@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -83,8 +83,23 @@ pub async fn get_manifest(scope: VersionReadScope) -> Response {
     }
 }
 
-pub async fn update_manifest(scope: VersionScope, Json(patch): Json<ManifestUpdate>) -> Response {
-    match scope.schema.update_manifest(patch) {
+/// A new dependency must be a project the caller can read — any role on it,
+/// org ownership included (#86). An auth error counts as no access: it can
+/// only turn a write into a refusal.
+pub async fn update_manifest(
+    State(state): State<Arc<AppState>>,
+    scope: VersionScope,
+    Json(patch): Json<ManifestUpdate>,
+) -> Response {
+    let may_read = |project: &str| {
+        matches!(
+            state
+                .auth_adapter
+                .project_access(&scope.user.username, project),
+            Ok(Some(_))
+        )
+    };
+    match scope.schema.update_manifest(patch, may_read) {
         Ok(m) => ApiResponse::success(m).into_response(),
         Err(e) => version_schema_error_to_response(e),
     }
