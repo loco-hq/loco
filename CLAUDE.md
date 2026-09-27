@@ -88,7 +88,7 @@ There is no `SchemaRegistry`. Generated `SchemaStore` owns one `InstanceStore<T>
 
 Instances are **not** scanned at build time. At server startup, `seed::seed_instances` first copies each committed project in `schemas/seed/` into `schemas/instances/` if the store lacks it, then `SchemaStore::load("schemas/instances")` walks the instances directory, matches each YAML file against its type's `pathTemplate`, and populates the stores.
 
-`YamlFsAdapter` writes each file atomically: temp sibling, fsync, `rename` over the target, fsync the directory. A crash leaves the old file, never a truncated one. Temp artefacts are named `.loco-*` and `load_all` skips them, so a leftover never blocks boot. A YAML file that does not parse still fails boot, on purpose — for a local server that is the honest answer.
+`YamlFsAdapter` writes each file atomically: temp sibling, fsync, `rename` over the target, fsync the directory. A crash leaves the old file, never a truncated one. If only the directory fsync fails, the new file is already in place: the write returns `Error::NotDurable` and the store still updates its cache, so cache and disk agree. Temp artefacts are named `.loco-*` and `load_all` skips them, so a leftover never blocks boot. A YAML file that does not parse still fails boot, on purpose — for a local server that is the honest answer.
 
 ### Namespace convention
 

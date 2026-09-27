@@ -101,10 +101,10 @@ impl<T: SchemaInstance> InstanceStore<T> {
         if self.has(&key) {
             return Err(Error::AlreadyExists(key));
         }
-        self.adapter.write(&key, &value)?;
+        let written = persisted(self.adapter.write(&key, &value))?;
         let arc = Arc::new(value);
         self.cache.write().unwrap().insert(key, arc.clone());
-        Ok(arc)
+        written.map(|()| arc)
     }
 
     pub fn update(&self, key: &str, patch: T::Update) -> Result<Arc<T>, Error> {
@@ -131,13 +131,13 @@ impl<T: SchemaInstance> InstanceStore<T> {
         };
         let mut updated: T = (*current).clone();
         updated.apply_update(&patch);
-        self.adapter.write(key, &updated)?;
+        let written = persisted(self.adapter.write(key, &updated))?;
         let arc = Arc::new(updated);
         self.cache
             .write()
             .unwrap()
             .insert(key.to_string(), arc.clone());
-        Ok(arc)
+        written.map(|()| arc)
     }
 
     pub fn delete(&self, key: &str) -> Result<(), Error> {
@@ -174,6 +174,18 @@ impl<T: SchemaInstance> InstanceStore<T> {
             Some(e) => Err(e),
             None => Ok(deleted),
         }
+    }
+}
+
+/// Sort an adapter write's result into "did not happen" (the outer `Err`: skip
+/// the cache update) and "happened" (the inner result: update the cache, then
+/// return it). [`Error::NotDurable`] is the one error that means the new
+/// contents are already what readers of the file see.
+fn persisted(result: Result<(), Error>) -> Result<Result<(), Error>, Error> {
+    match result {
+        Err(e @ Error::NotDurable(_)) => Ok(Err(e)),
+        Err(e) => Err(e),
+        Ok(()) => Ok(Ok(())),
     }
 }
 
@@ -425,6 +437,40 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    /// Every write lands but reports that the directory flush failed.
+    struct UnflushedWrites;
+
+    impl SchemaPersistence<TestItem> for UnflushedWrites {
+        fn load_all(&self) -> Result<Vec<(String, TestItem)>, Error> {
+            Ok(Vec::new())
+        }
+        fn write(&self, _key: &str, _value: &TestItem) -> Result<(), Error> {
+            Err(Error::NotDurable(std::io::Error::other("fsync failed")))
+        }
+        fn delete(&self, _key: &str) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn not_durable_write_still_updates_the_cache_and_reports() {
+        let store = InstanceStore::new(Arc::new(UnflushedWrites));
+        assert!(matches!(
+            store.create(sample("ben/crm", "a", "A")),
+            Err(Error::NotDurable(_))
+        ));
+        assert_eq!(store.get("ben/crm/items/a").unwrap().label, "A");
+
+        let res = store.update(
+            "ben/crm/items/a",
+            TestItemUpdate {
+                label: Some("A2".to_string()),
+            },
+        );
+        assert!(matches!(res, Err(Error::NotDurable(_))));
+        assert_eq!(store.get("ben/crm/items/a").unwrap().label, "A2");
     }
 
     #[test]

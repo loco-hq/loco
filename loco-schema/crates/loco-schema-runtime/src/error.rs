@@ -10,6 +10,11 @@ pub enum Error {
     /// A file-tree key or member path that is not a safe relative path
     /// (absolute, `..`, empty segment) or that traverses a symlink.
     InvalidPath(String),
+    /// The new contents were renamed into place, but flushing the directory
+    /// afterwards failed: readers see the new file now, but it may not
+    /// survive a crash. The store treats the write as done (its cache
+    /// follows the disk) and still returns this so the caller hears of it.
+    NotDurable(std::io::Error),
 }
 
 impl fmt::Display for Error {
@@ -21,6 +26,7 @@ impl fmt::Display for Error {
             Error::NotFound(name) => write!(f, "not found: {name}"),
             Error::MissingField(name) => write!(f, "missing required field: {name}"),
             Error::InvalidPath(path) => write!(f, "invalid path: {path}"),
+            Error::NotDurable(e) => write!(f, "written but not flushed to disk: {e}"),
         }
     }
 }

@@ -37,7 +37,9 @@ pub(crate) fn temp_sibling(parent: &Path, tag: &str) -> PathBuf {
 ///
 /// The bytes are written and fsynced to a temp sibling, renamed over `path`,
 /// and then the parent directory is fsynced so the rename itself is durable.
-/// On failure the temp file is removed and `path` is untouched.
+/// On failure the temp file is removed and `path` is untouched — except when
+/// only the directory fsync fails: the rename has happened, so that is
+/// [`Error::NotDurable`], not a failed write.
 pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let parent = path
         .parent()
@@ -48,8 +50,7 @@ pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> 
         let _ = std::fs::remove_file(&tmp);
         return Err(e.into());
     }
-    sync_dir(parent)?;
-    Ok(())
+    sync_dir(parent).map_err(Error::NotDurable)
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
