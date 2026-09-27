@@ -12,6 +12,9 @@
 //!   each other, so a value that drifted to another type does not match.
 //! - Sorting is by kind first — null, boolean, number, string — then value.
 //!   So nulls sort first ascending and last descending.
+//! - Strings sort bytewise, or by `natural_cmp` under `Collation::Natural`.
+//!   Collation is per order key and only ever changes how two strings
+//!   compare; filters always compare bytewise.
 //! - The effective order always ends with `id`; `after` holds one value per
 //!   effective order key and selects records strictly after it.
 
@@ -122,10 +125,21 @@ pub enum Direction {
     Desc,
 }
 
+/// How an order key compares two strings. Other kinds are unaffected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Collation {
+    /// Bytewise.
+    #[default]
+    Binary,
+    /// Digit runs compare by numeric value: see `natural_cmp`.
+    Natural,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OrderKey {
     pub field: FieldRef,
     pub dir: Direction,
+    pub collation: Collation,
 }
 
 impl OrderKey {
@@ -133,6 +147,7 @@ impl OrderKey {
         OrderKey {
             field,
             dir: Direction::Asc,
+            collation: Collation::Binary,
         }
     }
 
@@ -140,6 +155,15 @@ impl OrderKey {
         OrderKey {
             field,
             dir: Direction::Desc,
+            collation: Collation::Binary,
+        }
+    }
+
+    /// This key with `Collation::Natural`.
+    pub fn natural(self) -> Self {
+        OrderKey {
+            collation: Collation::Natural,
+            ..self
         }
     }
 }
@@ -309,11 +333,68 @@ fn int_float_cmp(i: i64, f: f64) -> Option<Ordering> {
     }))
 }
 
-/// Total sort order: kind, then value.
-pub(crate) fn sort_cmp(a: &Value, b: &Value) -> Ordering {
-    kind(a)
-        .cmp(&kind(b))
-        .then_with(|| compare_same_kind(a, b).unwrap_or(Ordering::Equal))
+/// Total sort order: kind, then value, with strings under `collation`.
+pub(crate) fn sort_cmp(a: &Value, b: &Value, collation: Collation) -> Ordering {
+    kind(a).cmp(&kind(b)).then_with(|| match (a, b, collation) {
+        (Value::String(x), Value::String(y), Collation::Natural) => natural_cmp(x, y),
+        _ => compare_same_kind(a, b).unwrap_or(Ordering::Equal),
+    })
+}
+
+/// Natural string order, total and consistent with equality: it returns
+/// `Equal` only for identical strings.
+///
+/// Walk both strings together. Where both are at an ASCII digit, take the
+/// whole digit run on each side and compare the runs by numeric value:
+/// leading zeros stripped, then the longer run is larger, then bytewise. Any
+/// length works; nothing is parsed into an integer. Everywhere else compare
+/// one byte at a time, so a digit run ranks against a non-digit byte as its
+/// first digit would. A string that runs out first is smaller.
+///
+/// Strings that differ only in leading zeros (`"007"`, `"07"`, `"7"`) are
+/// equal under that walk; bytewise order breaks the tie, so `"007"` <
+/// `"07"` < `"7"`.
+///
+/// So `"3001"` < `"3001pr0001"` < `"10247"`, and `"a2"` < `"a10"`.
+///
+/// `SqliteAdapter` registers this function as its `loco_natural` collation, so
+/// both adapters use the same code.
+pub fn natural_cmp(a: &str, b: &str) -> Ordering {
+    let (x, y) = (a.as_bytes(), b.as_bytes());
+    let (mut i, mut j) = (0, 0);
+    while i < x.len() && j < y.len() {
+        if x[i].is_ascii_digit() && y[j].is_ascii_digit() {
+            let (ri, rj) = (digit_run(x, i), digit_run(y, j));
+            let ord = numeric_cmp(&x[i..ri], &y[j..rj]);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+            (i, j) = (ri, rj);
+        } else {
+            let ord = x[i].cmp(&y[j]);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+            (i, j) = (i + 1, j + 1);
+        }
+    }
+    (x.len() - i).cmp(&(y.len() - j)).then_with(|| x.cmp(y))
+}
+
+/// End of the ASCII digit run starting at `start`.
+fn digit_run(s: &[u8], start: usize) -> usize {
+    start + s[start..].iter().take_while(|c| c.is_ascii_digit()).count()
+}
+
+/// Two runs of ASCII digits by value, without parsing them.
+fn numeric_cmp(a: &[u8], b: &[u8]) -> Ordering {
+    let (a, b) = (strip_zeros(a), strip_zeros(b));
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
+fn strip_zeros(digits: &[u8]) -> &[u8] {
+    let zeros = digits.iter().take_while(|&&c| c == b'0').count();
+    &digits[zeros..]
 }
 
 fn equals(stored: &Value, value: &Value) -> bool {
@@ -362,7 +443,7 @@ pub(crate) fn order_values(order: &[OrderKey], record: &Record) -> Vec<Value> {
 /// Compare two effective order-key tuples under `order`.
 pub(crate) fn compare_keys(order: &[OrderKey], a: &[Value], b: &[Value]) -> Ordering {
     for ((key, x), y) in order.iter().zip(a).zip(b) {
-        let ord = sort_cmp(x, y);
+        let ord = sort_cmp(x, y, key.collation);
         let ord = match key.dir {
             Direction::Asc => ord,
             Direction::Desc => ord.reverse(),
@@ -392,5 +473,76 @@ pub(crate) fn finish_page(query: &LakeQuery, order: &[OrderKey], mut rows: Vec<R
     Page {
         records: rows,
         next,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn natural_cmp_orders_digit_runs_by_value() {
+        let sorted = [
+            "",
+            "007",
+            "07",
+            "7",
+            "008",
+            "3001",
+            "3001pr0001",
+            "3001pr2",
+            "3001pr10",
+            "10247",
+            "a-",
+            "a1",
+            "a2",
+            "a10",
+            "a10b",
+            "a:",
+            "aa",
+            "z",
+            "é1",
+            "é02",
+        ];
+        for (i, a) in sorted.iter().enumerate() {
+            for (j, b) in sorted.iter().enumerate() {
+                assert_eq!(natural_cmp(a, b), i.cmp(&j), "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn natural_cmp_handles_digit_runs_longer_than_any_integer() {
+        let big = format!("1{}", "0".repeat(40));
+        let bigger = format!("1{}1", "0".repeat(39));
+        let nines = "9".repeat(40);
+        let padded = format!("{}2", "0".repeat(100));
+        assert_eq!(natural_cmp(&nines, &big), Ordering::Less);
+        assert_eq!(natural_cmp(&big, &bigger), Ordering::Less);
+        assert_eq!(natural_cmp(&padded, "3"), Ordering::Less);
+        assert_eq!(natural_cmp(&padded, "2"), Ordering::Less);
+        assert_eq!(natural_cmp("1", &padded), Ordering::Less);
+    }
+
+    /// A total order consistent with equality: antisymmetric, `Equal` only
+    /// for identical strings, and transitive over every triple.
+    #[test]
+    fn natural_cmp_is_a_total_order() {
+        let xs = [
+            "", "0", "00", "000", "1", "01", "001", "a", "a0", "a00", "a1", "a01", "a/", "a:",
+            "1a", "01a", "1a1", "1a01", "10", "9", "-1", " 1", "1 ", "\u{0}", "Z", "é",
+        ];
+        for a in xs {
+            for b in xs {
+                let ab = natural_cmp(a, b);
+                assert_eq!(ab, natural_cmp(b, a).reverse(), "{a:?} {b:?}");
+                assert_eq!(ab == Ordering::Equal, a == b, "{a:?} {b:?}");
+                for c in xs {
+                    if ab != Ordering::Greater && natural_cmp(b, c) != Ordering::Greater {
+                        assert_ne!(natural_cmp(a, c), Ordering::Greater, "{a:?} {b:?} {c:?}");
+                    }
+                }
+            }
+        }
     }
 }

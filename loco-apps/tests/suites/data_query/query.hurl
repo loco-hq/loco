@@ -383,3 +383,200 @@ X-Site-Id: www
 HTTP 200
 [Asserts]
 jsonpath "$.data" count == 6
+
+# --- collation: natural orders digit runs by value (docs/query.md §5). ---
+# Batch N's item numbers sort 10247 < 3001 < 3001pr0001 bytewise and
+# 3001 < 3001pr0001 < 10247 naturally.
+
+POST http://127.0.0.1:{{port}}/data/lot/add
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{"batch_id": "N", "item_no": "10247", "qty": 1}
+HTTP 201
+
+POST http://127.0.0.1:{{port}}/data/lot/add
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{"batch_id": "N", "item_no": "3001pr0001", "qty": 1}
+HTTP 201
+
+POST http://127.0.0.1:{{port}}/data/lot/add
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{"batch_id": "N", "item_no": "3001", "qty": 1}
+HTTP 201
+
+# Without collation, byte order is unchanged; "binary" is the same query.
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{
+  "queries": {
+    "bytes": {
+      "collection": "lot",
+      "where": { "field": "batch_id", "op": "eq", "value": "N" },
+      "order": [{ "field": "item_no" }]
+    },
+    "binary": {
+      "collection": "lot",
+      "where": { "field": "batch_id", "op": "eq", "value": "N" },
+      "order": [{ "field": "item_no", "collation": "binary" }],
+      "limit": 1
+    }
+  }
+}
+HTTP 200
+[Captures]
+binary_page2: jsonpath "$.data.binary.cursor"
+[Asserts]
+jsonpath "$.data.bytes.records" count == 3
+jsonpath "$.data.bytes.records[0].fields.item_no" == "10247"
+jsonpath "$.data.bytes.records[1].fields.item_no" == "3001"
+jsonpath "$.data.bytes.records[2].fields.item_no" == "3001pr0001"
+jsonpath "$.data.binary.records[0].fields.item_no" == "10247"
+
+# A binary cursor resumes a query that omits collation: the same query.
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{
+  "queries": {
+    "bytes": {
+      "collection": "lot",
+      "where": { "field": "batch_id", "op": "eq", "value": "N" },
+      "order": [{ "field": "item_no" }],
+      "cursor": "{{binary_page2}}"
+    }
+  }
+}
+HTTP 200
+[Asserts]
+jsonpath "$.data.bytes.records" count == 2
+jsonpath "$.data.bytes.records[0].fields.item_no" == "3001"
+jsonpath "$.data.bytes.records[1].fields.item_no" == "3001pr0001"
+
+# Natural, ascending, across a page boundary.
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{
+  "queries": {
+    "lots": {
+      "collection": "lot",
+      "where": { "field": "batch_id", "op": "eq", "value": "N" },
+      "order": [{ "field": "item_no", "collation": "natural" }],
+      "limit": 2
+    }
+  }
+}
+HTTP 200
+[Captures]
+natural_page2: jsonpath "$.data.lots.cursor"
+[Asserts]
+jsonpath "$.data.lots.records" count == 2
+jsonpath "$.data.lots.records[0].fields.item_no" == "3001"
+jsonpath "$.data.lots.records[1].fields.item_no" == "3001pr0001"
+jsonpath "$.data.lots.cursor" isString
+
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{
+  "queries": {
+    "lots": {
+      "collection": "lot",
+      "where": { "field": "batch_id", "op": "eq", "value": "N" },
+      "order": [{ "field": "item_no", "collation": "natural" }],
+      "limit": 2,
+      "cursor": "{{natural_page2}}"
+    }
+  }
+}
+HTTP 200
+[Asserts]
+jsonpath "$.data.lots.records" count == 1
+jsonpath "$.data.lots.records[0].fields.item_no" == "10247"
+jsonpath "$.data.lots.cursor" == null
+
+# Natural, descending, across a page boundary.
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{
+  "queries": {
+    "lots": {
+      "collection": "lot",
+      "where": { "field": "batch_id", "op": "eq", "value": "N" },
+      "order": [{ "field": "item_no", "dir": "desc", "collation": "natural" }],
+      "limit": 2
+    }
+  }
+}
+HTTP 200
+[Captures]
+natural_desc_page2: jsonpath "$.data.lots.cursor"
+[Asserts]
+jsonpath "$.data.lots.records" count == 2
+jsonpath "$.data.lots.records[0].fields.item_no" == "10247"
+jsonpath "$.data.lots.records[1].fields.item_no" == "3001pr0001"
+
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{
+  "queries": {
+    "lots": {
+      "collection": "lot",
+      "where": { "field": "batch_id", "op": "eq", "value": "N" },
+      "order": [{ "field": "item_no", "dir": "desc", "collation": "natural" }],
+      "limit": 2,
+      "cursor": "{{natural_desc_page2}}"
+    }
+  }
+}
+HTTP 200
+[Asserts]
+jsonpath "$.data.lots.records" count == 1
+jsonpath "$.data.lots.records[0].fields.item_no" == "3001"
+jsonpath "$.data.lots.cursor" == null
+
+# Collation is part of the order a cursor is bound to. A natural key on a
+# number field, or an unknown collation, is invalid_query.
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: testuser/testapp
+X-Site-Id: www
+{
+  "queries": {
+    "switched": {
+      "collection": "lot",
+      "where": { "field": "batch_id", "op": "eq", "value": "N" },
+      "order": [{ "field": "item_no" }],
+      "cursor": "{{natural_page2}}"
+    },
+    "on_number": {
+      "collection": "lot",
+      "order": [{ "field": "qty", "collation": "natural" }]
+    },
+    "unknown": {
+      "collection": "lot",
+      "order": [{ "field": "item_no", "collation": "numeric" }]
+    }
+  }
+}
+HTTP 200
+[Asserts]
+jsonpath "$.data.switched.diagnostics[0].kind" == "cursor_mismatch"
+jsonpath "$.data.on_number.diagnostics[0].kind" == "invalid_query"
+jsonpath "$.data.on_number.diagnostics[0].path" == "on_number/order/0/collation"
+jsonpath "$.data.unknown.diagnostics[0].kind" == "invalid_query"
+jsonpath "$.data.unknown.diagnostics[0].path" == "unknown/order/0/collation"
