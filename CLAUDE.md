@@ -179,7 +179,7 @@ that relies on the fall-through.
 
 ### Fieldsets
 
-A fieldset is an ordered named subset of a collection's fields. `auto_add: true` marks the set that new fields are appended to. `VersionSchema::fields(collection)` returns fields in auto-add fieldset order (then leftover fields alphabetically). Studio uses that order for the collection table; record create/edit forms currently render the same list as returned by `/schema/.../field/{collection}/list`.
+A fieldset is an ordered named subset of a collection's fields. `auto_add: true` marks the set that new fields are appended to. `VersionSchema::fields(collection)` returns fields in auto-add fieldset order (then leftover fields alphabetically). Studio uses that order for the collection table; record create/edit forms currently render the same list as returned by `/schema/.../field/{collection}/list`. The edit form sends only the fields the user changed, so a stored value the schema no longer accepts does not block saving another field.
 
 ## Naming Conventions
 
@@ -279,7 +279,7 @@ All frontend apps use the same stack:
 Field components for rendering schema metadata. Two layers:
 
 - **Primitives** — `TextField`, `NumberField`, `CheckboxField`, `ToggleField`, `SelectField`. Uniform shell props: `id`, `label`, `description`, `error`, `required`, `disabled`, `value`, `onChange`, plus type-specific props.
-- **Dispatcher** — `<Field field={meta} variant?="..." />` picks a primitive from a hardcoded `type → variant → component` registry. `variant` can come from field metadata or be overridden at the call site. A `string` field with non-empty `options` renders `SelectField` whatever its variant, with a blank `—` entry that Studio sends as `null`.
+- **Dispatcher** — `<Field field={meta} variant?="..." />` picks a primitive from a hardcoded `type → variant → component` registry. `variant` can come from field metadata or be overridden at the call site. A `string` field with non-empty `options` renders `SelectField` whatever its variant, with a blank `—` entry that Studio sends as `null`. A stored value that is not among the options is shown as an extra entry marked `(not an option)`, so the select never displays a different choice than the record holds.
 
 Styling is plain CSS via `.module.css` files co-located with each component. Shared design tokens (`--loco-*` CSS variables) live in `src/_shell/tokens.css` and must be imported once by the consumer (`import 'loco-ui/tokens.css'`).
 
