@@ -221,7 +221,7 @@ combinator  = { "and": [condition, …] } | { "or": [condition, …] } | { "not"
   either is `limit_exceeded`.
 - `{"and": []}` matches every record and `{"or": []}` none. A combinator must be the only key
   in its object.
-- A field of type `list` cannot be filtered or ordered by (`invalid_query`) until #18.
+- A field of type `list` cannot be filtered or ordered by (`invalid_query`) until #18. `/schema` no longer creates one (#13); only field YAML written before that has it.
 - No text search, no regex, no list ops in v1. List ops arrive with #18.
 
 ### `order`

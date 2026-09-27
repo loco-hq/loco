@@ -3,9 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { TextField, SelectField } from 'loco-ui';
 import { listFields, updateField } from '../api.js';
-
-const FIELD_TYPES = ['string', 'integer', 'float', 'boolean', 'list'];
-const TYPE_OPTIONS = FIELD_TYPES.map((t) => ({ value: t, label: t }));
+import { FIELD_TYPES, TYPE_OPTIONS } from '../fieldTypes.js';
 
 export default function EditField() {
   const { user, project, version, name: collection, fieldName } = useParams();
@@ -36,6 +34,12 @@ function EditFieldForm({ field }) {
 
   const [label, setLabel] = useState(field.label || '');
   const [type, setType] = useState(field.type);
+  // A field saved before the server checked types may have one it no longer
+  // accepts. Show it so the select is not blank, and send `type` only when
+  // it changes, so the label can still be edited.
+  const typeOptions = FIELD_TYPES.includes(field.type)
+    ? TYPE_OPTIONS
+    : [{ value: field.type, label: field.type }, ...TYPE_OPTIONS];
 
   const update = useMutation({
     mutationFn: (patch) => updateField(user, project, version, collection, fieldName, patch),
@@ -47,7 +51,7 @@ function EditFieldForm({ field }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    update.mutate({ type, label });
+    update.mutate(type === field.type ? { label } : { type, label });
   };
 
   return (
@@ -65,7 +69,7 @@ function EditFieldForm({ field }) {
         <SelectField
           label="Type"
           required
-          options={TYPE_OPTIONS}
+          options={typeOptions}
           value={type}
           onChange={setType}
         />

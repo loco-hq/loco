@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::http::authz::is_draft_version;
 use crate::http::project_config::lock_pins;
+use crate::validation::FIELD_TYPES;
 use crate::{
     Bundle, Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest,
     ManifestUpdate, PermissionSet, PermissionSetUpdate, SchemaStore,
@@ -41,13 +42,17 @@ pub enum VersionSchemaError {
     /// A manifest `dependencies` entry is malformed, names this project,
     /// repeats a project, or names a version that does not exist.
     InvalidDependency(String),
+    /// A field `type` outside [`crate::validation::FIELD_TYPES`].
+    InvalidFieldType(String),
     Schema(loco_schema_runtime::Error),
 }
 
 impl std::fmt::Display for VersionSchemaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotWritable(msg) | Self::InvalidDependency(msg) => write!(f, "{msg}"),
+            Self::NotWritable(msg) | Self::InvalidDependency(msg) | Self::InvalidFieldType(msg) => {
+                write!(f, "{msg}")
+            }
             Self::Schema(e) => write!(f, "{e}"),
         }
     }
@@ -490,6 +495,7 @@ impl VersionSchema {
 
     pub fn create_field(&self, mut input: Field) -> Result<Arc<Field>, VersionSchemaError> {
         self.require_writable()?;
+        check_field_type(&input.r#type)?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
         let collection = input.collection.clone();
@@ -506,6 +512,9 @@ impl VersionSchema {
         patch: FieldUpdate,
     ) -> Result<Arc<Field>, VersionSchemaError> {
         self.require_writable()?;
+        if let Some(ty) = &patch.r#type {
+            check_field_type(ty)?;
+        }
         let key = Field::to_path(&self.project_id, &self.version, collection, name);
         Ok(self.store.fields().update(&key, patch)?)
     }
@@ -674,6 +683,19 @@ pub(crate) fn parse_dependency(dep: &str) -> Option<(&str, &str)> {
     let (account, project) = project_id.split_once('/')?;
     let segment = |s: &str| !s.is_empty() && !s.contains(['/', '@']);
     (segment(account) && segment(project) && segment(version)).then_some((project_id, version))
+}
+
+/// A field may declare only a type the validator enforces and the lake can
+/// store. Checked on write only: a field loaded from disk with another type
+/// still boots.
+fn check_field_type(ty: &str) -> Result<(), VersionSchemaError> {
+    if FIELD_TYPES.contains(&ty) {
+        return Ok(());
+    }
+    Err(VersionSchemaError::InvalidFieldType(format!(
+        "unknown field type '{ty}': expected one of {}",
+        FIELD_TYPES.join(", ")
+    )))
 }
 
 /// Why `deps` may not be the dependency list of a version of `project_id`,

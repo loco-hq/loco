@@ -236,7 +236,7 @@ Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the
 
 ### Validation
 
-Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, scalar type mismatches (`string` / `integer` / `float` / `boolean`), and a `string` value outside the field's `options` when it declares any (`invalid_option`; exact match on `value`, so `""` is rejected too). `Null` is allowed for any type. Declared types the validator does not know (including `list`) pass. There is no `required` flag on `Field` yet.
+Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, scalar type mismatches (`string` / `integer` / `float` / `boolean`), and a `string` value outside the field's `options` when it declares any (`invalid_option`; exact match on `value`, so `""` is rejected too). `Null` is allowed for any type. A field's `type` must be one of those four scalars (`FIELD_TYPES`): `/schema` field create and update reject anything else with a 400. Boot does not check, so a field YAML written earlier with another type (`list`) still loads, and its values pass. There is no `required` flag on `Field` yet.
 
 ## Key Patterns
 
@@ -283,7 +283,7 @@ Field components for rendering schema metadata. Two layers:
 
 Styling is plain CSS via `.module.css` files co-located with each component. Shared design tokens (`--loco-*` CSS variables) live in `src/_shell/tokens.css` and must be imported once by the consumer (`import 'loco-ui/tokens.css'`).
 
-Collection field metadata (`field.yaml`) has `type`, `label`, and `options` (a list of `{ value, label }`; empty means any string). The dispatcher already reads `description`, `required`, and `variant` when present.
+Collection field metadata (`field.yaml`) has `type` (`string`, `integer`, `float`, or `boolean`), `label`, and `options` (a list of `{ value, label }`; empty means any string). The dispatcher already reads `description`, `required`, and `variant` when present.
 
 ## Rust Edition
 
