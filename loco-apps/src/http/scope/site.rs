@@ -5,7 +5,7 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::Response;
 
-use crate::auth::{AuthSession, AuthUser, AuthenticatedUser, ProjectRole, PUBLIC_USERNAME};
+use crate::auth::{session_or_public, AuthSession, AuthUser, ProjectRole, PUBLIC_USERNAME};
 use crate::http::authz::{forbidden, public_may, DataVerb};
 use crate::http::response::error_response;
 use crate::http::version_schema::VersionSchema;
@@ -19,7 +19,8 @@ pub struct SiteScope {
     pub project: ProjectScope,
     pub site: Arc<Site>,
     /// Always populated — synthesized as `AuthSession::public()` when no
-    /// token is provided. So every scope has a principal.
+    /// `Authorization` header is sent, so every scope has a principal. A
+    /// header that fails to authenticate is a 401, not `public`.
     pub auth: AuthSession,
     /// Read-only scoped schema view — bounded by this site's project+version
     /// plus its installed dependencies. Use this instead of `state.schema`
@@ -181,10 +182,7 @@ impl FromRequestParts<Arc<AppState>> for SiteScope {
                 )
             })?;
 
-        let auth = AuthenticatedUser::from_request_parts(parts, state)
-            .await
-            .map(|AuthenticatedUser(s)| s)
-            .unwrap_or_else(|_| AuthSession::public());
+        let auth = session_or_public(parts, state).await?;
 
         let version = site.version().to_string();
         let schema = VersionSchema::new_read_only(state.schema.clone(), &project_id, &version);

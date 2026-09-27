@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
 
-use crate::auth::{AuthSession, AuthUser, AuthenticatedUser, PUBLIC_USERNAME};
+use crate::auth::{session_or_public, AuthUser, AuthenticatedUser, PUBLIC_USERNAME};
 use crate::http::authz::{forbidden, require_developer};
 use crate::http::response::error_response;
 use crate::http::version_schema::VersionSchema;
@@ -98,10 +98,7 @@ impl FromRequestParts<Arc<AppState>> for VersionReadScope {
         } = read_path_params(parts, state).await?;
         let project_id = format!("{user}/{project}");
 
-        let auth = AuthenticatedUser::from_request_parts(parts, state)
-            .await
-            .map(|AuthenticatedUser(s)| s)
-            .unwrap_or_else(|_| AuthSession::public());
+        let auth = session_or_public(parts, state).await?;
         let is_public = auth.user.username == PUBLIC_USERNAME;
 
         if !is_public {

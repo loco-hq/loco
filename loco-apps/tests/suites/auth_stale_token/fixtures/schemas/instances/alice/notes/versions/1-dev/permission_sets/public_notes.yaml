@@ -1,0 +1,6 @@
+label: "Public notes"
+description: "Read and create on note"
+collections:
+  - collection: "note"
+    read: true
+    create: true
