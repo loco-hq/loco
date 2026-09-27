@@ -17,17 +17,24 @@
 //! create and update refuse a pin to a version or dataset that does not
 //! exist, and a dataset or version delete refuses while a site still pins
 //! it. See [`PINS`] for how the check and the write stay one step.
+//!
+//! A manifest's `dependencies` are references too, across projects. A
+//! version another project's manifest depends on cannot be deleted, nor can
+//! its project, and a version copy re-checks the dependencies it carries.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use loco_schema_runtime::{Error, SchemaInstance};
 
+use crate::http::version_schema::{check_dependencies, parse_dependency};
 use crate::{
     Bundle, Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate,
 };
 
-/// Serializes every change that can make or break a site's pin: site create
-/// and update, dataset and version delete, and project delete. Each checks
+/// Serializes every change that can make or break a site's pin or a
+/// manifest's dependency: site create and update, manifest update
+/// (`VersionSchema::update_manifest`), version copy, dataset and version
+/// delete, and project delete. Each checks
 /// one store (does the version exist? does a site pin it?) and writes
 /// another, and a store's own writer lock covers only that store — without
 /// this, a site create and a version delete could each pass its check and
@@ -39,7 +46,7 @@ use crate::{
 static PINS: Mutex<()> = Mutex::new(());
 
 /// Guards no data of its own, so poison is ignored (as `InstanceStore` does).
-fn lock_pins() -> MutexGuard<'static, ()> {
+pub(crate) fn lock_pins() -> MutexGuard<'static, ()> {
     PINS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -47,8 +54,11 @@ fn lock_pins() -> MutexGuard<'static, ()> {
 pub enum ConfigError {
     /// A site names a version or dataset this project does not have.
     InvalidPin(String),
-    /// A dataset or version cannot be deleted while a site pins it.
+    /// A dataset, version, or project cannot be deleted while a site pins it
+    /// or another project's manifest depends on it.
     Pinned(String),
+    /// A copied manifest's dependencies no longer hold.
+    InvalidDependency(String),
     /// Purging a dataset's records from the lake failed; nothing was deleted
     /// from the schema store.
     Purge(String),
@@ -58,7 +68,9 @@ pub enum ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidPin(msg) | Self::Pinned(msg) => write!(f, "{msg}"),
+            Self::InvalidPin(msg) | Self::Pinned(msg) | Self::InvalidDependency(msg) => {
+                write!(f, "{msg}")
+            }
             Self::Purge(msg) => write!(f, "failed to purge dataset records: {msg}"),
             Self::Schema(e) => write!(f, "{e}"),
         }
@@ -140,10 +152,20 @@ impl ProjectConfig {
     /// collections, fields, and fieldsets), every dataset, and every site under this
     /// project, then the project record itself. Returns the dataset names
     /// that were removed so callers can purge their records from the lake.
-    pub fn delete_project(&self) -> Result<Vec<String>, Error> {
+    /// Refused while another project's manifest depends on any of its
+    /// versions; this project's own sites are swept, not a reason to refuse.
+    pub fn delete_project(&self) -> Result<Vec<String>, ConfigError> {
         // Under `PINS` so a site create racing this delete either lands first
         // and is swept, or runs after and finds its version gone.
         let _pins = lock_pins();
+        let depended_on_by = self.dependents(|_| true);
+        if !depended_on_by.is_empty() {
+            return Err(ConfigError::Pinned(format!(
+                "project {} is a dependency of: {}",
+                self.project_id(),
+                depended_on_by.join(", ")
+            )));
+        }
         let prefix = format!("{}/", self.project_id());
         let versions_prefix = format!("{}/versions/", self.project_id());
 
@@ -334,6 +356,14 @@ impl ProjectConfig {
                 pinned_by.join(", ")
             )));
         }
+        let depended_on_by = self.dependents(|v| v == version);
+        if !depended_on_by.is_empty() {
+            return Err(ConfigError::Pinned(format!(
+                "version {}@{version} is a dependency of: {}",
+                self.project_id(),
+                depended_on_by.join(", ")
+            )));
+        }
         let fieldsets_prefix = format!("{}/versions/{version}/fieldsets/", self.project_id());
         let fields_prefix = format!("{}/versions/{version}/fields/", self.project_id());
         let collections_prefix = format!("{}/versions/{version}/collections/", self.project_id());
@@ -358,6 +388,29 @@ impl ProjectConfig {
             .bundles()
             .delete(&Bundle::to_path(&self.project_id(), version));
         Ok(self.store.manifests().delete(&manifest_path)?)
+    }
+
+    /// Other projects' versions, as `{project}@{version}`, whose manifest
+    /// depends on a version of this project for which `versions` holds.
+    /// Callers hold `PINS`.
+    ///
+    /// A dependency is refused at write when it names this project, so only
+    /// other projects are counted: an entry from before that check must not
+    /// make a project undeletable by itself.
+    fn dependents(&self, versions: impl Fn(&str) -> bool) -> Vec<String> {
+        let project_id = self.project_id();
+        self.store
+            .manifests()
+            .list_all()
+            .into_iter()
+            .filter(|(_, m)| m.project != project_id)
+            .filter(|(_, m)| {
+                m.dependencies().iter().any(|dep| {
+                    parse_dependency(dep).is_some_and(|(p, v)| p == project_id && versions(v))
+                })
+            })
+            .map(|(_, m)| format!("{}@{}", m.project, m.version))
+            .collect()
     }
 
     // --- Version copy (the publish primitive) ---
@@ -386,15 +439,27 @@ impl ProjectConfig {
     /// finished. A failure part-way rolls back the instances this call
     /// created instead of leaving half a version that would block the retry
     /// with `AlreadyExists`.
-    pub fn copy_version(&self, from: &str, to: &str) -> Result<Arc<Manifest>, Error> {
+    ///
+    /// The source's dependencies are checked again, under `PINS`. A written
+    /// manifest's always hold — its targets cannot be deleted while it names
+    /// them — but one loaded from disk was never checked, and copying it into
+    /// a published version would make a bad dependency permanent.
+    pub fn copy_version(&self, from: &str, to: &str) -> Result<Arc<Manifest>, ConfigError> {
+        let _pins = lock_pins();
         let source_manifest = self
             .manifest(from)
             .ok_or_else(|| Error::NotFound(Manifest::to_path(&self.project_id(), from)))?;
 
         let target_manifest = Manifest::to_path(&self.project_id(), to);
         if self.store.manifests().has(&target_manifest) {
-            return Err(Error::AlreadyExists(target_manifest));
+            return Err(Error::AlreadyExists(target_manifest).into());
         }
+        check_dependencies(
+            &self.store,
+            &self.project_id(),
+            source_manifest.dependencies(),
+        )
+        .map_err(ConfigError::InvalidDependency)?;
         // `FileTreePersistence::write_tree` is a whole-tree replace, so unlike
         // the YAML `create` calls below it would silently overwrite a tree
         // already at the target. Refuse up front instead.
@@ -405,7 +470,7 @@ impl ProjectConfig {
             .into_iter()
             .next()
         {
-            return Err(Error::AlreadyExists(existing));
+            return Err(Error::AlreadyExists(existing).into());
         }
 
         let mut copied = CopiedKeys::default();
@@ -413,7 +478,7 @@ impl ProjectConfig {
             Ok(manifest) => Ok(manifest),
             Err(e) => {
                 self.rollback_version_copy(&copied);
-                Err(e)
+                Err(e.into())
             }
         }
     }

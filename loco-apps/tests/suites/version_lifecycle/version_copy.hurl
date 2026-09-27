@@ -11,6 +11,9 @@
 # different project from alice/lab so this file and version_lifecycle.hurl
 # (which asserts alice/lab starts with no versions) do not depend on the
 # order hurl runs them in.
+#
+# Its manifest depends on other/proj@v1, a fixture too: a copy re-checks the
+# dependencies it carries and refuses one whose version does not exist.
 
 # Login as alice (global). She is an implicit developer on alice/*.
 POST http://127.0.0.1:{{port}}/auth/login

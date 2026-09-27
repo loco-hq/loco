@@ -22,6 +22,7 @@
 use std::sync::Arc;
 
 use crate::http::authz::is_draft_version;
+use crate::http::project_config::lock_pins;
 use crate::{
     Bundle, Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest,
     ManifestUpdate, PermissionSet, PermissionSetUpdate, SchemaStore,
@@ -37,13 +38,16 @@ pub enum VersionSchemaError {
     /// Writes refused because this schema was constructed read-only OR the
     /// version is published. The message distinguishes the two cases.
     NotWritable(String),
+    /// A manifest `dependencies` entry is malformed, names this project,
+    /// repeats a project, or names a version that does not exist.
+    InvalidDependency(String),
     Schema(loco_schema_runtime::Error),
 }
 
 impl std::fmt::Display for VersionSchemaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotWritable(msg) => write!(f, "{msg}"),
+            Self::NotWritable(msg) | Self::InvalidDependency(msg) => write!(f, "{msg}"),
             Self::Schema(e) => write!(f, "{e}"),
         }
     }
@@ -419,6 +423,14 @@ impl VersionSchema {
     ) -> Result<Arc<Manifest>, VersionSchemaError> {
         self.require_writable()?;
         let key = Manifest::to_path(&self.project_id, &self.version);
+        // Under `PINS`, like a site pin: the check reads other versions'
+        // manifests and a version delete checks this one, so without it a
+        // delete could slip between the check and the write.
+        let _pins = lock_pins();
+        if let Some(deps) = &patch.dependencies {
+            check_dependencies(&self.store, &self.project_id, deps)
+                .map_err(VersionSchemaError::InvalidDependency)?;
+        }
         Ok(self.store.manifests().update(&key, patch)?)
     }
 
@@ -654,9 +666,66 @@ impl VersionSchema {
     }
 }
 
+/// Split a manifest dependency, `{account}/{project}@{version}`, into
+/// `(project_id, version)`. `None` unless it has exactly that shape with no
+/// empty part.
+pub(crate) fn parse_dependency(dep: &str) -> Option<(&str, &str)> {
+    let (project_id, version) = dep.split_once('@')?;
+    let (account, project) = project_id.split_once('/')?;
+    let segment = |s: &str| !s.is_empty() && !s.contains(['/', '@']);
+    (segment(account) && segment(project) && segment(version)).then_some((project_id, version))
+}
+
+/// Why `deps` may not be the dependency list of a version of `project_id`,
+/// or `Ok` when it may. Every entry must parse, name another project, name a
+/// project no other entry names, and name a version whose manifest exists.
+///
+/// One version per project, because a qualified name
+/// (`{account}/{project}.{name}`) carries no version: two versions of one
+/// dependency could not both be addressed. Not this project, for the same
+/// reason — its own names already resolve to self.
+///
+/// Callers hold `PINS`, so a version this finds cannot be deleted before
+/// they write.
+pub(crate) fn check_dependencies(
+    store: &SchemaStore,
+    project_id: &str,
+    deps: &[String],
+) -> Result<(), String> {
+    let mut seen = Vec::new();
+    for dep in deps {
+        let Some((dep_project, dep_version)) = parse_dependency(dep) else {
+            return Err(format!(
+                "dependency {dep:?} is not of the form {{account}}/{{project}}@{{version}}"
+            ));
+        };
+        if dep_project == project_id {
+            return Err(format!(
+                "dependency {dep:?} names this project; a version cannot depend on its own project"
+            ));
+        }
+        if seen.contains(&dep_project) {
+            return Err(format!(
+                "dependency {dep:?} repeats project {dep_project}; depend on one version of it"
+            ));
+        }
+        seen.push(dep_project);
+        if !store
+            .manifests()
+            .has(&Manifest::to_path(dep_project, dep_version))
+        {
+            return Err(format!(
+                "dependency {dep:?} names version {dep_version} of {dep_project}, which does not exist"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Self entry plus direct deps from the manifest, as `(project_id, version)`
-/// pairs. Dep strings are `user/project@version`; malformed entries are
-/// skipped — they shouldn't reach the store once write-time validation lands.
+/// pairs. Writes are checked by [`check_dependencies`], but a manifest loaded
+/// from disk is not, so a malformed entry is skipped here rather than failing
+/// the read.
 fn direct_dependencies(
     project_id: &str,
     version: &str,
@@ -665,7 +734,7 @@ fn direct_dependencies(
     let mut deps = vec![(project_id.to_string(), version.to_string())];
     if let Some(manifest) = manifest {
         for child in manifest.dependencies() {
-            if let Some((namespace, v)) = child.split_once('@') {
+            if let Some((namespace, v)) = parse_dependency(child) {
                 deps.push((namespace.to_string(), v.to_string()));
             }
         }

@@ -93,7 +93,9 @@ pub fn schema_error_to_response(err: loco_schema_runtime::Error) -> Response {
 pub fn config_error_to_response(err: crate::http::project_config::ConfigError) -> Response {
     use crate::http::project_config::ConfigError;
     match err {
-        e @ ConfigError::InvalidPin(_) => error_response(StatusCode::BAD_REQUEST, &e.to_string()),
+        e @ (ConfigError::InvalidPin(_) | ConfigError::InvalidDependency(_)) => {
+            error_response(StatusCode::BAD_REQUEST, &e.to_string())
+        }
         e @ ConfigError::Pinned(_) => error_response(StatusCode::CONFLICT, &e.to_string()),
         e @ ConfigError::Purge(_) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
@@ -107,7 +109,7 @@ pub fn version_schema_error_to_response(
 ) -> Response {
     use crate::http::version_schema::VersionSchemaError;
     match err {
-        e @ VersionSchemaError::NotWritable(_) => {
+        e @ (VersionSchemaError::NotWritable(_) | VersionSchemaError::InvalidDependency(_)) => {
             error_response(StatusCode::BAD_REQUEST, &e.to_string())
         }
         VersionSchemaError::Schema(e) => schema_error_to_response(e),
