@@ -31,6 +31,17 @@ export function buildPayload(fields, draft) {
   return out;
 }
 
+// An update sends only the fields the user changed, so a stored value the
+// schema no longer accepts (a removed option, a type drift) does not fail a
+// save that never touched it.
+export function buildChanges(fields, original, draft) {
+  const out = {};
+  for (const f of fields) {
+    if (draft[f.name] !== original[f.name]) out[f.name] = coerce(f, draft[f.name]);
+  }
+  return out;
+}
+
 export function displayValue(field, value) {
   if (value === null || value === undefined) return '—';
   if (field.type === 'boolean') return value ? '✓' : '✗';

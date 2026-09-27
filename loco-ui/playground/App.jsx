@@ -182,6 +182,18 @@ export function App() {
         <Cell label="Disabled">
           <SelectField label="Locked" value="string" onChange={() => {}} options={FIELD_TYPES} disabled />
         </Cell>
+        <Cell label="Stored value not an option">
+          <SelectField
+            label="Condition"
+            value="stash"
+            onChange={() => {}}
+            placeholder="—"
+            options={[
+              { value: 'new', label: 'New' },
+              { value: 'used', label: 'Used' },
+            ]}
+          />
+        </Cell>
       </Section>
 
       <Section title="Field dispatcher (live)">

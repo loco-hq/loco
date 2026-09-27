@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRecord, updateRecord, listFields } from '../api.js';
 import { Field } from 'loco-ui';
-import { buildPayload } from './recordFields.jsx';
+import { buildChanges } from './recordFields.jsx';
 import RecordId from './RecordId.jsx';
 
 export default function EditRecord() {
@@ -29,16 +29,19 @@ export default function EditRecord() {
   });
 
   const [draft, setDraft] = useState(null);
+  // The values the draft started from: a save sends what differs from these.
+  const [original, setOriginal] = useState(null);
 
   useEffect(() => {
     if (record && draft === null) {
+      setOriginal(record.fields);
       setDraft({ ...record.fields });
     }
   }, [record, draft]);
 
   const update = useMutation({
     mutationFn: () =>
-      updateRecord(projectId, siteName, collection, recordId, buildPayload(fields, draft)),
+      updateRecord(projectId, siteName, collection, recordId, buildChanges(fields, original, draft)),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['record', projectId, siteName, collection, recordId] });
       qc.invalidateQueries({ queryKey: ['records', projectId, siteName, collection] });

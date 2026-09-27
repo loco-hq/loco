@@ -16,6 +16,12 @@ export function SelectField({
   ...rest
 }) {
   const id = useFieldId(providedId);
+  const normalized = options.map((opt) => (typeof opt === 'string' ? { value: opt, label: opt } : opt));
+  // A stored value that is not an option (it was removed, or the value
+  // predates it) is still shown, marked, so the select does not silently
+  // display another choice.
+  const current = value === null || value === undefined ? '' : String(value);
+  const drifted = current !== '' && !normalized.some((o) => String(o.value) === current);
   const isPlaceholder = (value ?? '') === '' && placeholder !== undefined;
   const classes = [styles.select];
   if (error) classes.push(styles.invalid);
@@ -33,7 +39,7 @@ export function SelectField({
         {...rest}
         id={id}
         className={classes.join(' ')}
-        value={value ?? ''}
+        value={current}
         onChange={(e) => onChange?.(e.target.value)}
         disabled={disabled}
         required={required}
@@ -42,14 +48,12 @@ export function SelectField({
         {placeholder !== undefined ? (
           <option value="" disabled={required}>{placeholder}</option>
         ) : null}
-        {options.map((opt) => {
-          const o = typeof opt === 'string' ? { value: opt, label: opt } : opt;
-          return (
-            <option key={o.value} value={o.value} disabled={o.disabled}>
-              {o.label ?? o.value}
-            </option>
-          );
-        })}
+        {drifted ? <option value={current}>{current} (not an option)</option> : null}
+        {normalized.map((o) => (
+          <option key={o.value} value={o.value} disabled={o.disabled}>
+            {o.label ?? o.value}
+          </option>
+        ))}
       </select>
     </FieldShell>
   );
