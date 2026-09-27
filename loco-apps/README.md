@@ -23,7 +23,7 @@ Listens on `http://localhost:3000`. Studio in dev (`:5174`) proxies `/auth` `/co
 
 1. `build.rs` generates Rust types from `schemas/types/` via `loco_gen_schema::build::generate`
 2. `lib.rs` includes `$OUT_DIR/loco_generated.rs`
-3. `server::build_app()` loads instances from `schemas/instances/` into `SchemaStore`
+3. `server::build_app()` seeds `schemas/instances/` from `schemas/seed/` (projects the store lacks only), then loads it into `SchemaStore`
 4. A lake adapter (`sqlite` / `memory`) and the local auth adapter (`auth/`) are constructed
 5. Routes are nested: `/data`, `/schema`, `/config`, `/auth`
 
@@ -72,14 +72,13 @@ Unversioned config: projects, datasets, sites, version create/list/delete. Creat
 ```
 schemas/
 ├── types/                 # Type definitions (rebuild to change)
-└── instances/
-    └── loco/              # Committed: core, studio, demo
-        ├── core/
-        ├── studio/
-        └── demo/          # public guestbook (`www`)
+├── seed/                  # Committed projects, read at boot, never written
+│   ├── loco/              # core, studio, demo (public guestbook, `www`)
+│   └── brickos/           # inventory
+└── instances/             # Live store, gitignored in full
 ```
 
-`schemas/instances/*` other than `loco/` is gitignored. Hurl fixtures live under `tests/suites/*/fixtures/`.
+A seed project is copied into `instances/` when the store has no `project.yaml` for it — on a fresh checkout, or after you delete it from the store. It is never re-synced over an existing project. All API writes go to `instances/`. Hurl fixtures live under `tests/suites/*/fixtures/`.
 
 ## Tests
 

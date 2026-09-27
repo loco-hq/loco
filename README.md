@@ -75,20 +75,21 @@ ben/pets
     └── fieldsets/pet/default.yaml
 ```
 
-Shipped projects (committed under `schemas/instances/loco/`):
+Shipped projects (committed under `schemas/seed/`, copied into the store on first boot):
 
 - `loco/core` — framework collections (`user`)
 - `loco/studio` — the editor site (`studio`)
 - `loco/demo` — public guestbook site (`www`) for the standalone frontend example
+- `brickos/inventory` — the BrickOS inventory schema ([`docs/brickos.md`](docs/brickos.md))
 
-User-scoped instances (`ben/…`) are gitignored scratch data. Test suites carry their own fixtures.
+`schemas/instances/` is the live store and is gitignored in full. A seed project is copied into it only when the store has no `project.yaml` for it; after that the seed is not read for that project again, and writes never touch `schemas/seed/`. Test suites carry their own fixtures.
 
 ## How schema loading works
 
 1. Type definitions in `loco-apps/schemas/types/*.yaml` are parsed at **build** time.
 2. Codegen writes `$OUT_DIR/loco_generated.rs` — one struct per type, plus `SchemaStore`.
 3. `main.rs` includes that file. Instances are **not** compiled in.
-4. On boot, `SchemaStore::load` walks `schemas/instances/`, matches each YAML file against the type's `pathTemplate`, and fills per-type `InstanceStore`s. Writes go back to disk via `YamlFsAdapter`.
+4. On boot, seed projects missing from `schemas/instances/` are copied in from `schemas/seed/`. Then `SchemaStore::load` walks `schemas/instances/`, matches each YAML file against the type's `pathTemplate`, and fills per-type `InstanceStore`s. Writes go back to disk via `YamlFsAdapter`.
 
 An instance's key **is** its path relative to `schemas/instances/` with `.yaml` stripped. That key must match the type's `pathTemplate` with variables filled in.
 
