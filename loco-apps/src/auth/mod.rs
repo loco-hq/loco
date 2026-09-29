@@ -210,6 +210,10 @@ pub trait AuthAdapter: Send + Sync {
     fn get_account(&self, handle: &str) -> Result<Option<Account>, AuthError>;
     fn create_org(&self, handle: &str, creator_handle: &str) -> Result<Account, AuthError>;
 
+    /// Membership role of `identity_handle` on the org `account`.
+    /// `None` when they have no membership on that org.
+    fn org_role(&self, identity_handle: &str, account: &str) -> Result<Option<OrgRole>, AuthError>;
+
     /// Effective role on `{account}/{project}`: org owner ∪ project role, plus
     /// implicit developer when the identity owns the person account.
     fn project_access(

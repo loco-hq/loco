@@ -280,6 +280,11 @@ fn suite_authorization() {
 }
 
 #[test]
+fn suite_org_role() {
+    run_suite(&suites_dir().join("org_role"));
+}
+
+#[test]
 fn suite_public_policy_on_manifest() {
     run_suite(&suites_dir().join("public_policy_on_manifest"));
 }

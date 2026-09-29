@@ -905,6 +905,15 @@ impl AuthAdapter for LocalAuthAdapter {
         Ok(Self::to_account(&account))
     }
 
+    fn org_role(&self, identity_handle: &str, account: &str) -> Result<Option<OrgRole>, AuthError> {
+        Ok(self
+            .org_members
+            .read()
+            .unwrap()
+            .get(&(account.to_string(), identity_handle.to_string()))
+            .map(|member| member.role))
+    }
+
     fn project_access(
         &self,
         identity_handle: &str,
@@ -914,13 +923,7 @@ impl AuthAdapter for LocalAuthAdapter {
             return Ok(None);
         };
 
-        if self
-            .org_members
-            .read()
-            .unwrap()
-            .get(&(account.to_string(), identity_handle.to_string()))
-            .is_some_and(|m| m.role == OrgRole::Owner)
-        {
+        if self.org_role(identity_handle, account)? == Some(OrgRole::Owner) {
             return Ok(Some(ProjectRole::Developer));
         }
 
@@ -1470,6 +1473,42 @@ mod tests {
             Some(ProjectRole::Developer)
         );
         assert_eq!(adapter.project_access("bob", "acme/crm").unwrap(), None);
+    }
+
+    /// A project named `_` is a real project. Membership on it is a project
+    /// role, and the org role is the org row alone.
+    #[test]
+    fn org_role_is_independent_of_a_project_named_underscore() {
+        let (_dir, adapter) = adapter();
+        adapter.create_org("acme", "alice").unwrap();
+        adapter
+            .add_org_member("acme", "bob", OrgRole::Member)
+            .unwrap();
+        adapter
+            .add_project_member("acme/_", "carol", ProjectRole::Developer)
+            .unwrap();
+
+        assert_eq!(
+            adapter.org_role("alice", "acme").unwrap(),
+            Some(OrgRole::Owner)
+        );
+        assert_eq!(
+            adapter.org_role("bob", "acme").unwrap(),
+            Some(OrgRole::Member)
+        );
+        assert_eq!(adapter.org_role("carol", "acme").unwrap(), None);
+        assert_eq!(adapter.org_role("alice", "missing").unwrap(), None);
+
+        assert_eq!(
+            adapter.project_access("carol", "acme/_").unwrap(),
+            Some(ProjectRole::Developer)
+        );
+        assert_eq!(adapter.project_access("carol", "acme/crm").unwrap(), None);
+        assert_eq!(
+            adapter.project_access("alice", "acme/_").unwrap(),
+            Some(ProjectRole::Developer)
+        );
+        assert_eq!(adapter.project_access("bob", "acme/_").unwrap(), None);
     }
 
     #[test]

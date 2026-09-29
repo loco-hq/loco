@@ -133,17 +133,7 @@ fn require_can_create_under(
     }
     match state.auth_adapter.get_account(account) {
         Ok(Some(acct)) if acct.account_type == crate::auth::AccountType::Org => {
-            match state
-                .auth_adapter
-                .project_access(scope.username(), &format!("{account}/_"))
-            {
-                Ok(Some(role)) if role.can_develop() => Ok(()),
-                Ok(_) => Err(error_response(
-                    StatusCode::FORBIDDEN,
-                    "you do not have access to this resource",
-                )),
-                Err(e) => Err(auth_error_to_response(e)),
-            }
+            require_org_owner(scope, state, account)
         }
         Ok(Some(_)) => Err(error_response(
             StatusCode::FORBIDDEN,
@@ -435,12 +425,11 @@ pub async fn remove_org_member(
     }
 }
 
+/// Org owner, from the org membership row. A project under the org — including
+/// one literally named `_` — does not grant this.
 fn require_org_owner(scope: &ConfigUserScope, state: &AppState, org: &str) -> Result<(), Response> {
-    match state
-        .auth_adapter
-        .project_access(scope.username(), &format!("{org}/_"))
-    {
-        Ok(Some(role)) if role.can_develop() => Ok(()),
+    match state.auth_adapter.org_role(scope.username(), org) {
+        Ok(Some(OrgRole::Owner)) => Ok(()),
         Ok(_) => Err(error_response(
             StatusCode::FORBIDDEN,
             "you do not have access to this resource",
