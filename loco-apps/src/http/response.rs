@@ -99,7 +99,7 @@ pub fn config_error_to_response(err: crate::http::project_config::ConfigError) -
             error_response(StatusCode::BAD_REQUEST, &e.to_string())
         }
         e @ ConfigError::Pinned(_) => error_response(StatusCode::CONFLICT, &e.to_string()),
-        e @ ConfigError::Purge(_) => {
+        e @ (ConfigError::Purge(_) | ConfigError::LeftBehind(_)) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
         }
         ConfigError::Schema(e) => schema_error_to_response(e),
@@ -118,6 +118,9 @@ pub fn version_schema_error_to_response(
         }
         e @ VersionSchemaError::UnknownVersion(_) => {
             error_response(StatusCode::NOT_FOUND, &e.to_string())
+        }
+        e @ VersionSchemaError::LeftBehind(_) => {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
         }
         VersionSchemaError::Schema(e) => schema_error_to_response(e),
     }
