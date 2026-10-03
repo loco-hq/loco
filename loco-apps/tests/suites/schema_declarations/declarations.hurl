@@ -339,6 +339,25 @@ jsonpath "$.data" count == 1
 jsonpath "$.data[0].project" == "alice/bricklink"
 jsonpath "$.data[0].version" == "1.0.0"
 
+# consumer_key is already gone from the draft. Declare another secret so one
+# is still there when the version is deleted: the empty list after recreate
+# is what shows the cascade removed it. The copy happened earlier, so 1.0.0
+# does not gain this one.
+POST http://127.0.0.1:{{port}}/schema/alice/bricklink/0.0.1-dev/secret
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"name": "webhook_secret", "label": "Webhook secret", "required": true}
+HTTP 201
+[Asserts]
+jsonpath "$.data.name" == "webhook_secret"
+jsonpath "$.data.project" == "alice/bricklink"
+jsonpath "$.data.version" == "0.0.1-dev"
+jsonpath "$.data.default" not exists
+
+GET http://127.0.0.1:{{port}}/schema/alice/bricklink/0.0.1-dev/secret/webhook_secret
+Authorization: Bearer {{token}}
+HTTP 200
+
 DELETE http://127.0.0.1:{{port}}/config/version/alice/bricklink/0.0.1-dev
 Authorization: Bearer {{token}}
 HTTP 200
