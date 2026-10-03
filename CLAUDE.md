@@ -29,6 +29,14 @@ cargo test -p loco-gen-schema # Schema/codegen crate only
 cargo clippy --workspace      # Lint everything
 cargo fmt --all               # Format (CI checks with --check)
 cargo run -p loco-apps        # API server on :3000
+                              # PORT overrides the port (default 3000).
+                              # LOCO_ROOT overrides the data directory
+                              # (default loco-apps/): schemas/ and auth/.
+                              # Unset, the SQLite file stays LOCO_DB_PATH
+                              # or ./loco.db in the working directory — the
+                              # repo-root dev database. Set, a relative
+                              # database path is resolved under that root.
+                              # An absolute LOCO_DB_PATH is used as given.
 npm run dev -w loco-studio    # Studio on :5174 (proxies /auth /config /schema /data /actions → :3000)
 npm run build -w loco-studio  # Static SPA in loco-studio/dist/ (no Node at runtime)
                               # to serve it, zip dist/ and PUT it to a draft's

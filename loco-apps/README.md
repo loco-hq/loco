@@ -8,22 +8,26 @@ Axum server that exposes generated schema types and a schemaless record lake ove
 cargo run -p loco-apps
 ```
 
-Listens on `http://localhost:3000`. Studio in dev (`:5174`) proxies `/auth` `/config` `/schema` `/data` here; a production build of Studio is a static SPA that calls these paths over CORS (or same-origin once Axum serves `dist/`). A static page on another origin (`examples/public-page/`, typically `:5176`) talks to this server directly; CORS is `*` origin, method, and header (no cookies).
+Listens on `http://0.0.0.0:3000`. `PORT` overrides the port. `LOCO_ROOT` overrides the data directory (default: this crate's directory). Studio in dev (`:5174`) proxies `/auth` `/config` `/schema` `/data` here; a production build of Studio is a static SPA that calls these paths over CORS (or same-origin once Axum serves `dist/`). A static page on another origin (`examples/public-page/`, typically `:5176`) talks to this server directly; CORS is `*` origin, method, and header (no cookies).
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `LOCO_ROOT` | this crate's directory | `schemas/` and `auth/` live here |
+| `PORT` | `3000` | TCP port (`0.0.0.0`) |
 | `LOCO_ADAPTER` | `sqlite` | `sqlite` or `memory` |
-| `LOCO_DB_PATH` | `loco.db` | SQLite file path |
+| `LOCO_DB_PATH` | `loco.db` | SQLite file. Relative to the working directory when `LOCO_ROOT` is unset; relative to `LOCO_ROOT` when that is set. An absolute path is used as given. |
 | `LOCO_AUTH_ADAPTER` | `local` | Only `local` exists |
 | `LOCO_AUTH_AUTO_CREATE` | unset | Login of an unknown handle creates a person (`1`/`true`; Hurl sets this) |
+
+With `LOCO_ROOT` unset, `cargo run -p loco-apps` from the repo root keeps opening `./loco.db` there. The schema root is still this crate. Set `LOCO_ROOT` to put `schemas/`, `auth/`, and a relative database path under one directory. Startup logs the absolute root and the absolute database path.
 
 ## How it boots
 
 1. `build.rs` generates Rust types from `schemas/types/` via `loco_gen_schema::build::generate`
 2. `lib.rs` includes `$OUT_DIR/loco_generated.rs`
-3. `server::build_app()` seeds `schemas/instances/` from `schemas/seed/` (projects the store lacks only), then loads it into `SchemaStore`
+3. `main` reads `LOCO_ROOT` (default: this crate's directory) and `PORT` (default `3000`), then `server::build_app_with_root` seeds `schemas/instances/` from `schemas/seed/` (projects the store lacks only) and loads it into `SchemaStore`
 4. A lake adapter (`sqlite` / `memory`) and the local auth adapter (`auth/`) are constructed
 5. Routes are nested: `/data`, `/schema`, `/config`, `/auth`
 
