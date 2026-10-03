@@ -10,12 +10,18 @@ use crate::auth::AuthAdapter;
 use crate::handlers;
 use crate::http::host;
 use crate::seed;
+use crate::values::{ConfigValueStore, KeyStatus};
 use crate::{Bundle, Project, SchemaStore, Site};
 
 pub struct AppState {
     pub data_adapter: Box<dyn DataAdapter>,
     pub auth_adapter: Box<dyn AuthAdapter>,
     pub schema: Arc<SchemaStore>,
+    /// Secret and variable values. A separate tree from `schema` so a schema
+    /// route cannot read them. See `crate::values`.
+    pub values: Arc<ConfigValueStore>,
+    /// `LOCO_SECRET_KEY`. Missing and malformed both boot; secret writes 503.
+    pub secret_key: KeyStatus,
     /// The site the apex serves at `/`, as `({account}/{project}, {site})`.
     /// `None` is the API-only process. A host that names a site of its own
     /// always wins over this.
@@ -88,6 +94,17 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         println!("Seeded {project} from schemas/seed");
     }
     let schema = Arc::new(SchemaStore::load(&instances_dir).expect("failed to load schema"));
+    let values = Arc::new(
+        ConfigValueStore::load(&root.join("schemas/values")).expect("failed to load config values"),
+    );
+    let secret_key = KeyStatus::from_env();
+    match &secret_key {
+        KeyStatus::Missing => {
+            eprintln!("LOCO_SECRET_KEY is not set; PUT /config/secret will return 503")
+        }
+        KeyStatus::Invalid(msg) => eprintln!("{msg}; PUT /config/secret will return 503"),
+        KeyStatus::Ready(_) => {}
+    }
 
     let data_adapter = build_data_adapter();
     let auth_adapter = build_auth_adapter(root, &options);
@@ -98,6 +115,8 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         data_adapter,
         auth_adapter,
         schema,
+        values,
+        secret_key,
         default_site,
     });
 

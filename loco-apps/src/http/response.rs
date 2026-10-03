@@ -90,6 +90,22 @@ pub fn schema_error_to_response(err: loco_schema_runtime::Error) -> Response {
     }
 }
 
+pub fn value_error_to_response(err: crate::http::config_values::ValueError) -> Response {
+    use crate::http::config_values::ValueError;
+    match err {
+        e @ (ValueError::InvalidName(_) | ValueError::Undeclared(_)) => {
+            error_response(StatusCode::BAD_REQUEST, &e.to_string())
+        }
+        e @ (ValueError::UnknownDataset(_) | ValueError::NotFound(_)) => {
+            error_response(StatusCode::NOT_FOUND, &e.to_string())
+        }
+        e @ ValueError::Unavailable(_) => {
+            error_response(StatusCode::SERVICE_UNAVAILABLE, &e.to_string())
+        }
+        ValueError::Schema(e) => schema_error_to_response(e),
+    }
+}
+
 pub fn config_error_to_response(err: crate::http::project_config::ConfigError) -> Response {
     use crate::http::project_config::ConfigError;
     match err {

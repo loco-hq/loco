@@ -13,10 +13,12 @@
 //!   `public` (and authenticated non-members) can read a site's pinned
 //!   version when that site assigns at least one permission set to
 //!   `public` (`X-Project-Id` + `X-Site-Id` required).
-//! - [`ConfigProjectScope`] / [`ConfigUserScope`]: `/config` routes.
-//!   The first targets an existing `{user}/{project}` (developer required).
-//!   The second is authenticated-only for routes with no project in the
-//!   URL (project create, org create, project list).
+//! - [`ConfigProjectScope`] / [`ConfigMemberScope`] / [`ConfigUserScope`]:
+//!   `/config` routes. `ConfigProjectScope` targets an existing
+//!   `{user}/{project}` and requires a developer. `ConfigMemberScope` is
+//!   the same project with any role, for config-value reads.
+//!   `ConfigUserScope` is authenticated-only for routes with no project in
+//!   the URL (project create, org create, project list).
 //! - [`CollectionScope`] / [`RecordScope`] layer on top of `SiteScope` for
 //!   data routes that need a specific collection or record. Public CRUD
 //!   follows the verbs on permission sets the site assigns to `public`.
@@ -30,7 +32,7 @@ mod site;
 mod version;
 
 pub use collection::CollectionScope;
-pub use config::{ConfigProjectScope, ConfigUserScope};
+pub use config::{ConfigMemberScope, ConfigProjectScope, ConfigUserScope};
 pub use project::ProjectScope;
 pub use record::RecordScope;
 pub use site::SiteScope;

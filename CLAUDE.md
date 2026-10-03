@@ -64,7 +64,7 @@ loco/
 ├── loco-schema/crates/loco-schema-runtime/    # InstanceStore + YamlFsAdapter, FileTreeStore + FileTreeFsAdapter
 ├── loco-lake/crates/loco-lake/                # DataAdapter + InMemoryAdapter + SqliteAdapter
 ├── loco-apps/                                 # Axum server consuming generated types
-│   └── schemas/{types,seed,instances}/        # type defs, committed seed projects, live store (gitignored)
+│   └── schemas/{types,seed,instances,values}/ # type defs, seed, live schema store, value store (both stores gitignored)
 ├── loco-studio/                               # Schema + record editor
 ├── loco-ui/                                   # Field component library (npm workspace)
 ├── loco-client/                               # Plain-JS API client (npm workspace)
@@ -99,7 +99,7 @@ An instance's namespace IS its path relative to `schemas/instances/` with `.yaml
 - `schemas/instances/ben/crm/datasets/acme.yaml` → `ben/crm/datasets/acme`
 - `schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
 
-`schemas/instances/` is the live store and is wholly gitignored — every `/schema` and `/config` write, bundle deploys included, lands there and never in a tracked file. Committed projects live in `schemas/seed/` with the same layout: `seed/loco/` (core, studio, demo) and `seed/brickos/` (inventory, [`docs/brickos.md`](docs/brickos.md)). At boot (`loco-apps/src/seed.rs`) a seed project is copied whole into the store only when the store has no `{account}/{project}/project.yaml` for it — decided by that file, not the directory, so leftovers such as an old `bundle/` do not block it. Files already in the store are never overwritten, and a seed is never re-synced: to pick up a changed seed, delete the project from `schemas/instances/` and restart. The server never writes to `schemas/seed/`; change it by editing the YAML and committing. Scratch projects (`ben/…`) live only in the store.
+`schemas/instances/` is the live schema store and is wholly gitignored — every `/schema` write and every `/config` write of a project, dataset, site, or version, bundle deploys included, lands there and never in a tracked file. Dataset secret and variable values are the exception: they live in `schemas/values/` (also gitignored), which `SchemaStore::load` does not walk. Committed projects live in `schemas/seed/` with the same layout: `seed/loco/` (core, studio, demo) and `seed/brickos/` (inventory, [`docs/brickos.md`](docs/brickos.md)). At boot (`loco-apps/src/seed.rs`) a seed project is copied whole into the store only when the store has no `{account}/{project}/project.yaml` for it — decided by that file, not the directory, so leftovers such as an old `bundle/` do not block it. Files already in the store are never overwritten, and a seed is never re-synced: to pick up a changed seed, delete the project from `schemas/instances/` and restart. The server never writes to `schemas/seed/`; change it by editing the YAML and committing. Scratch projects (`ben/…`) live only in the store.
 
 A project whose account does not exist loads anyway and logs one warning at boot. The `brickos` org account is not created at boot: create it with `POST /config/org` and its creator owns it. Hurl suites use their own fixtures under `loco-apps/tests/suites/*/fixtures/`, and a root with no `schemas/seed/` seeds nothing; `run_suite_over_seed` in `tests/hurl_runner.rs` copies named seed accounts in for suites that need them.
 
@@ -136,7 +136,18 @@ Persistence is `FileTreeFsAdapter` (`loco-schema-runtime`). Writes are whole-tre
 
 `${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `secrets`, `variables`, `versions`).
 
-`secret` and `variable` declare named configuration a version needs (`label`, `description`, `required`). A variable may also set `default` (a string; empty means none). A secret has no `default` and no `value` — a body carrying either is a 400, because the declaration never holds the value. A secret and a variable may not share a name in one version. Values are not stored here.
+`secret` and `variable` declare named configuration a version needs (`label`, `description`, `required`). A variable may also set `default` (a string; empty means none). A secret has no `default` and no `value` — a body carrying either is a 400, because the declaration never holds the value. A secret and a variable may not share a name in one version. The declaration never holds the value.
+
+Dataset values live in `schemas/values/`, one YAML file per value, not a schema type, so `/schema` and `/data` have no route that returns them:
+
+```text
+{account}/{project}/datasets/{dataset}/secrets/{segment}.yaml
+{account}/{project}/datasets/{dataset}/variables/{segment}.yaml
+```
+
+`{segment}` is the declaration reference with `%` encoded as `%25` and `/` as `%2F` (`.` stays). `alice/bricklink.consumer_key` is one path segment, and a bare name that already contains those characters cannot collide with it. A secret file is AES-256-GCM ciphertext: a random 12-byte nonce per write, additional data bound to the project, dataset, and name. `LOCO_SECRET_KEY` is standard base64 of exactly 32 bytes (`openssl rand -base64 32`); surrounding whitespace is ignored. Unset or malformed, the process still boots and `PUT`/`DELETE /config/secret` return 503 naming `LOCO_SECRET_KEY`. Variable files are plaintext and do not need the key. Crypto for values is `loco-apps/src/values/`, not `auth/secret.rs` (that one hashes passwords and API keys).
+
+`PUT` and `DELETE /config/secret/{account}/{project}/{dataset}/{name}` — and the same paths under `/variable` — take `{"value":"…"}`. `name` is that reference, percent-encoded as one segment (`alice%2Fbricklink.consumer_key`). Writes require developer or org owner, and the name must be declared by some version of the project, itself or a direct dependency. `GET .../list` is any project role, editor included. A secret row is `{name, project, set, updated_at}` and never the value, so the list uses the same gate as a variable read. A variable row adds `value` and, when one applies, `source` of `value` or `default` (the declaration's default when nothing is set). The list is the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing, even if a value was stored for it. Deleting a dataset deletes its values. Deleting a project does too, and a value file that cannot be removed is reported left behind and keeps the project record.
 
 An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalCases it into the generated struct name.
 
@@ -150,7 +161,7 @@ An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalC
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
-`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, secrets, variables, and manifest into the new id — the publish primitive. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. The version's file trees (its `bundle`) are copied too — metadata is a version directory, not only its YAML. Datasets, sites, and records are never copied.
+`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, secrets, variables, and manifest into the new id — the publish primitive. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. The version's file trees (its `bundle`) are copied too — metadata is a version directory, not only its YAML. Datasets, sites, records, and secret and variable values are never copied.
 
 ### Manifests and dependency visibility
 
@@ -226,7 +237,7 @@ Mounted in `server.rs`:
 |--------|------|
 | `/data` | Record CRUD on `/data/{collection}/…` — bare for the site's own collection, a dependency's qualified and percent-encoded (`acme%2Fcrm.contacts`) — plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version — and `POST /data/query`, named batched reads with filters and cursors ([`docs/query.md`](docs/query.md)). Site-scoped via headers. Strict validation on write; diagnostics on read. |
 | `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, permission sets, secrets, variables, bundle). |
-| `/config` | Unversioned project / dataset / site / version lifecycle. |
+| `/config` | Unversioned project / dataset / site / version lifecycle, plus per-dataset secret and variable values (`/config/secret`, `/config/variable`). |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
 | *(fallback)* | Files from the request's site's **pinned version** bundle. `handlers/hosting.rs`. |
 
@@ -248,7 +259,7 @@ Handlers sit on request extractors in `http/scope/`:
 - `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_developer`, `require_can_write_data`. Access is membership, not the site.
 - `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema` writes.
 - `VersionReadScope` — read-only `VersionSchema` for GET `/schema`. Developer/editor on the path project (any version, no site headers). `public` (and authenticated non-members) on a site whose pinned version assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required).
-- `ConfigProjectScope` / `ConfigUserScope` — `/config` routes. Project-targeted routes require developer; list/create/org do not need site headers.
+- `ConfigProjectScope` / `ConfigMemberScope` / `ConfigUserScope` — `/config` routes. Project-targeted writes require developer. Secret and variable value reads (`ConfigMemberScope`) allow any project role. Project list/create/org do not need site headers.
 - `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the pinned version's manifest assigns to `public` grants that verb on that collection. `GET /data/{collection}/fields` follows the read rule. It is how a hosted frontend reads field metadata (labels, `options`) without knowing its version: same list, order, and shape as `/schema/.../field/{collection}/list`, but the version comes from the site pin, so re-pinning the site changes the answer.
 - `POST /data/query` takes a bare `SiteScope` and authorizes each query on its own with `SiteScope::may_read_collection` (the same read rule); a denied or invalid query is an error result inside a 200, not a failed request. Parsing, strict name resolution, and cursors are in `src/query.rs`.
 
@@ -265,7 +276,7 @@ Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, 
 - **Rust keyword escaping**: Codegen emits `r#type` (etc.) for property names that are Rust keywords. See `rust_ident()` in `codegen.rs`.
 - **Error types**: Each crate has its own error enum — `loco_gen_schema::Error`, `loco_schema_runtime::Error`, `loco_lake::Error`.
 - **Tests**: Unit tests are co-located (`#[cfg(test)] mod tests`). Filesystem tests use `tempfile`. API tests are Hurl suites under `loco-apps/tests/suites/`, driven by `tests/hurl_runner.rs`.
-- **Thread safety**: `InstanceStore` uses `RwLock<BTreeMap<...>>` for reads, and every mutation holds a per-store writer mutex across check, persist, and cache update (`FileTreeStore` too). Read-modify-write goes through `InstanceStore::update_with`, never `get` then `update`. No store locks another, so nothing nests: a caller touching several stores takes them one after another. `InMemoryAdapter` uses `RwLock<HashMap<...>>`. `SqliteAdapter` uses `Mutex<Connection>`.
+- **Thread safety**: `InstanceStore` uses `RwLock<BTreeMap<...>>` for reads, and every mutation holds a per-store writer mutex across check, persist, and cache update (`FileTreeStore` too). Read-modify-write goes through `InstanceStore::update_with`, never `get` then `update`. No store locks another, so nothing nests: a caller touching several stores takes them one after another. `ConfigValueStore` (`values/store.rs`) is the same shape for dataset secret and variable values: one writer mutex covers both maps, taken after `PINS` and never while holding a schema store's lock. `InMemoryAdapter` uses `RwLock<HashMap<...>>`. `SqliteAdapter` uses `Mutex<Connection>`.
 
 ## Frontend Apps
 

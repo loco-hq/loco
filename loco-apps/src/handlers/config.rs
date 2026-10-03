@@ -58,6 +58,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/version/{user}/{project}/{version}",
             delete(delete_version),
         )
+        .merge(super::values::router())
 }
 
 // --- project ---

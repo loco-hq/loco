@@ -11,6 +11,7 @@ pub mod query;
 pub mod seed;
 pub mod server;
 pub mod validation;
+pub mod values;
 
 #[cfg(test)]
 mod generated_tests {

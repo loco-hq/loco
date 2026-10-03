@@ -1115,7 +1115,10 @@ mod tests {
         let (dir, store) = draft_schema();
         let schema = VersionSchema::new(store.clone(), PROJECT, VERSION);
         assert!(schema.exists());
-        crate::http::project_config::ProjectConfig::new(store.clone(), "ben", "crm")
+        let values = std::sync::Arc::new(
+            crate::values::ConfigValueStore::load(&dir.path().join("values")).unwrap(),
+        );
+        crate::http::project_config::ProjectConfig::new(store.clone(), values, "ben", "crm")
             .delete_version(VERSION)
             .unwrap();
 

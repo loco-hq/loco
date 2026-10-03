@@ -7,7 +7,7 @@ use axum::response::Response;
 use serde::Deserialize;
 
 use crate::auth::{AuthUser, AuthenticatedUser};
-use crate::http::authz::require_developer;
+use crate::http::authz::{require_developer, require_member};
 use crate::http::project_config::ProjectConfig;
 use crate::http::response::error_response;
 use crate::server::AppState;
@@ -60,19 +60,59 @@ impl FromRequestParts<Arc<AppState>> for ConfigProjectScope {
 
         require_developer(state, &session.user.username, &format!("{user}/{project}"))?;
 
-        let config = ProjectConfig::new(state.schema.clone(), user, project);
-        if !config.exists() {
-            return Err(error_response(
-                StatusCode::NOT_FOUND,
-                &format!("unknown project: {}", config.project_id()),
-            ));
-        }
-
+        let config = open_project(state, user, project)?;
         Ok(ConfigProjectScope {
             auth: session.user,
             config,
         })
     }
+}
+
+/// Authenticated identity plus a `ProjectConfig` for config-value reads.
+///
+/// Any project role: editor or developer, including an org owner. Writes
+/// stay on [`ConfigProjectScope`]. A secret list uses this same gate as a
+/// variable read because the list has no value.
+pub struct ConfigMemberScope {
+    pub auth: AuthUser,
+    pub config: ProjectConfig,
+}
+
+impl FromRequestParts<Arc<AppState>> for ConfigMemberScope {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let AuthenticatedUser(session) =
+            AuthenticatedUser::from_request_parts(parts, state).await?;
+
+        let ConfigProjectPathParams { user, project } = read_path_params(parts, state).await?;
+
+        require_member(state, &session.user.username, &format!("{user}/{project}"))?;
+
+        let config = open_project(state, user, project)?;
+        Ok(ConfigMemberScope {
+            auth: session.user,
+            config,
+        })
+    }
+}
+
+fn open_project(
+    state: &AppState,
+    user: String,
+    project: String,
+) -> Result<ProjectConfig, Response> {
+    let config = ProjectConfig::new(state.schema.clone(), state.values.clone(), user, project);
+    if !config.exists() {
+        return Err(error_response(
+            StatusCode::NOT_FOUND,
+            &format!("unknown project: {}", config.project_id()),
+        ));
+    }
+    Ok(config)
 }
 
 /// Authenticated identity for `/config` routes that don't point at an
@@ -113,7 +153,12 @@ impl ConfigUserScope {
     /// responsible for any existence semantics (e.g. `create_project`
     /// expects no entry; `update`/`delete` expect one).
     pub fn project_config(&self, account: &str, project: &str) -> ProjectConfig {
-        ProjectConfig::new(self.store.clone(), account.to_string(), project.to_string())
+        ProjectConfig::new(
+            self.store.clone(),
+            self.state.values.clone(),
+            account.to_string(),
+            project.to_string(),
+        )
     }
 }
 
