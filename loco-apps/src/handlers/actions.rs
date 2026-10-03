@@ -16,7 +16,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Map;
 
-use crate::actions::{dispatch, ActionFailure, Dispatch};
+use crate::actions::{dispatch, ActionFailure, Dispatch, HandlerDeps};
 use crate::http::authz::forbidden;
 use crate::http::response::{
     error_response, error_response_with_diagnostics, validation_error_response, ApiResponse,
@@ -82,15 +82,22 @@ async fn run_action(
     if let Err(resp) = scope.require_can_write_data() {
         return resp;
     }
+    let dataset_id = scope.dataset_id();
     match dispatch(
         &scope.schema,
         &state.actions,
-        &scope.dataset_id(),
-        state.data_adapter.as_ref(),
+        &dataset_id,
+        HandlerDeps {
+            data: state.data_adapter.clone(),
+            secrets: state.secrets.clone(),
+            http: state.http.clone(),
+        },
         scope.user(),
         &name,
         &body.input,
-    ) {
+    )
+    .await
+    {
         Dispatch::NotFound => {
             error_response(StatusCode::NOT_FOUND, &format!("action not found: {name}"))
         }
@@ -99,18 +106,42 @@ async fn run_action(
             StatusCode::NOT_IMPLEMENTED,
             &format!("no handler for action {project}.{name}"),
         ),
+        Dispatch::MissingConfig(diagnostics) => error_response_with_diagnostics(
+            StatusCode::BAD_REQUEST,
+            "required configuration is not set",
+            diagnostics,
+        ),
         Dispatch::Done(value) => ApiResponse::success(value).into_response(),
         Dispatch::Failed(failure) => failure_response(failure),
     }
 }
 
 fn failure_response(failure: ActionFailure) -> Response {
-    let status = match &failure {
-        ActionFailure::BadInput { .. } => StatusCode::BAD_REQUEST,
-        ActionFailure::Conflict { .. } => StatusCode::CONFLICT,
-        ActionFailure::Failed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    error_response_with_diagnostics(status, failure.message(), failure.diagnostics().to_vec())
+    match failure {
+        ActionFailure::BadInput {
+            message,
+            diagnostics,
+        } => error_response_with_diagnostics(StatusCode::BAD_REQUEST, &message, diagnostics),
+        ActionFailure::Conflict {
+            message,
+            diagnostics,
+        } => error_response_with_diagnostics(StatusCode::CONFLICT, &message, diagnostics),
+        ActionFailure::Failed {
+            message,
+            diagnostics,
+        } => error_response_with_diagnostics(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &message,
+            diagnostics,
+        ),
+        ActionFailure::Upstream { status, message } => error_response(
+            StatusCode::BAD_GATEWAY,
+            &format!("upstream {status}: {message}"),
+        ),
+        ActionFailure::Unavailable { message } => {
+            error_response(StatusCode::SERVICE_UNAVAILABLE, &message)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -118,7 +149,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn handler_failures_map_to_400_409_500() {
+    fn handler_failures_map_to_status() {
         let cases = [
             (
                 ActionFailure::BadInput {
@@ -140,6 +171,19 @@ mod tests {
                     diagnostics: Vec::new(),
                 },
                 StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                ActionFailure::Upstream {
+                    status: 503,
+                    message: "upstream is down".into(),
+                },
+                StatusCode::BAD_GATEWAY,
+            ),
+            (
+                ActionFailure::Unavailable {
+                    message: "LOCO_SECRET_KEY is not set".into(),
+                },
+                StatusCode::SERVICE_UNAVAILABLE,
             ),
         ];
         for (failure, status) in cases {

@@ -87,7 +87,8 @@ impl From<LakeError> for SecretError {
 
 /// Plaintext in, plaintext out. Encryption is the impl's concern.
 /// `dataset_id` is `{account}/{project}/{dataset}`, the lake's dataset id.
-/// `get` is for a later handler (#102); no route calls it.
+/// `get` has no route. Action handlers call it for their own package's
+/// declarations, on the request's dataset.
 pub trait SecretStore: Send + Sync {
     fn put(&self, dataset_id: &str, name: &str, plaintext: &str)
         -> Result<SecretMeta, SecretError>;
