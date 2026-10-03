@@ -68,6 +68,11 @@ pub enum ConfigError {
     /// Purging a dataset's records from the lake failed; nothing was deleted
     /// from the schema store.
     Purge(String),
+    /// A project or version cascade attempted every store it could. These
+    /// keys are still present. The project record or the version manifest
+    /// was left in place, so the delete can be retried and a recreate cannot
+    /// inherit what remains.
+    LeftBehind(Vec<String>),
     Schema(Error),
 }
 
@@ -81,6 +86,7 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "{msg}")
             }
             Self::Purge(msg) => write!(f, "failed to purge dataset records: {msg}"),
+            Self::LeftBehind(keys) => write!(f, "delete left behind: {}", keys.join(", ")),
             Self::Schema(e) => write!(f, "{e}"),
         }
     }
@@ -91,6 +97,42 @@ impl std::error::Error for ConfigError {}
 impl From<Error> for ConfigError {
     fn from(e: Error) -> Self {
         Self::Schema(e)
+    }
+}
+
+/// Record keys `delete_by_prefix` could not remove. An `Ok` means the prefix
+/// is empty; on `Err` the store kept exactly the keys still on disk.
+fn note_prefix(
+    left: &mut Vec<String>,
+    result: Result<Vec<String>, Error>,
+    remaining: impl FnOnce() -> Vec<String>,
+) {
+    if result.is_err() {
+        left.extend(remaining());
+    }
+}
+
+/// Record `key` when its delete failed for a reason other than it already
+/// being gone. A missing bundle, for example, is not something left behind.
+fn note_key(left: &mut Vec<String>, result: Result<(), Error>, key: &str) {
+    if let Err(err) = result {
+        if !matches!(err, Error::NotFound(_)) {
+            left.push(key.to_string());
+        }
+    }
+}
+
+fn keys_of<T>(entries: Vec<(String, T)>) -> Vec<String> {
+    entries.into_iter().map(|(key, _)| key).collect()
+}
+
+fn cascade_result(mut left: Vec<String>) -> Result<(), ConfigError> {
+    if left.is_empty() {
+        Ok(())
+    } else {
+        left.sort();
+        left.dedup();
+        Err(ConfigError::LeftBehind(left))
     }
 }
 
@@ -158,13 +200,26 @@ impl ProjectConfig {
             .update(&Project::to_path(&self.project_id()), patch)
     }
 
-    /// Schema-level cascade: removes every version (manifest + its
-    /// collections, fields, and fieldsets), every dataset, and every site under this
-    /// project, then the project record itself. Returns the dataset names
-    /// that were removed so callers can purge their records from the lake.
-    /// Refused while another project's manifest depends on any of its
-    /// versions; this project's own sites are swept, not a reason to refuse.
-    pub fn delete_project(&self) -> Result<Vec<String>, ConfigError> {
+    /// Removes everything under this project: each version's collections,
+    /// fields, fieldsets, permission sets, bundle, and manifest; every
+    /// dataset and its records; every site; then the project record.
+    ///
+    /// `purge` deletes one dataset's records and is called with that
+    /// dataset's name before its schema row is removed. A purge failure
+    /// leaves the row in place.
+    ///
+    /// Every store is attempted even when an earlier one fails, and the
+    /// error names every key that could not be removed. A leftover fieldset
+    /// is the worst of those: a later project or version at the same path
+    /// would inherit its field ordering. The project record, and a version's
+    /// manifest, are therefore removed only once nothing they own remains, so
+    /// the failure can be retried and a recreate cannot inherit the leftover.
+    /// Refused while another project's manifest depends on any version; this
+    /// project's own sites are swept, not a reason to refuse.
+    pub fn delete_project(
+        &self,
+        mut purge: impl FnMut(&str) -> Result<(), String>,
+    ) -> Result<(), ConfigError> {
         // Under `PINS` so a site create racing this delete either lands first
         // and is swept, or runs after and finds its version gone.
         let _pins = lock_pins();
@@ -176,42 +231,70 @@ impl ProjectConfig {
                 depended_on_by.join(", ")
             )));
         }
-        let prefix = format!("{}/", self.project_id());
         let versions_prefix = format!("{}/versions/", self.project_id());
+        let mut left = Vec::new();
 
-        // Cascade versioned metadata for every version. Fieldsets first, and
-        // fatal: an orphan would hand a same-named project stale ordering.
-        self.store.fieldsets().delete_by_prefix(&versions_prefix)?;
-        let _ = self.store.fields().delete_by_prefix(&versions_prefix);
-        let _ = self.store.collections().delete_by_prefix(&versions_prefix);
-        let _ = self
-            .store
-            .permission_sets()
-            .delete_by_prefix(&versions_prefix);
-        let _ = self.store.manifests().delete_by_prefix(&versions_prefix);
-        // File trees cascade too, or a deleted project leaves its frontends on
-        // disk for a same-named project to inherit.
-        let _ = self.store.bundles().delete_by_prefix(&versions_prefix);
+        note_prefix(
+            &mut left,
+            self.store.fieldsets().delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.fieldsets().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store.fields().delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.fields().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store.collections().delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.collections().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .permission_sets()
+                .delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.permission_sets().list(&versions_prefix)),
+        );
+        // File trees too, or a deleted project leaves its frontends on disk
+        // for a same-named project to inherit.
+        note_prefix(
+            &mut left,
+            self.store.bundles().delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.bundles().list(&versions_prefix)),
+        );
 
-        let mut dataset_names = Vec::new();
-        for (ds_id, ds) in self.store.datasets().list_all() {
-            if ds_id.starts_with(&prefix) {
-                dataset_names.push(ds.name().to_string());
-                let _ = self.store.datasets().delete(&ds_id);
+        for (ds_id, ds) in self.datasets() {
+            if purge(ds.name()).is_err() {
+                left.push(ds_id);
+                continue;
             }
+            note_key(&mut left, self.store.datasets().delete(&ds_id), &ds_id);
+        }
+        for (site_id, _) in self.sites() {
+            note_key(&mut left, self.store.sites().delete(&site_id), &site_id);
         }
 
-        for (site_id, _) in self.store.sites().list_all() {
-            if site_id.starts_with(&prefix) {
-                let _ = self.store.sites().delete(&site_id);
+        // A version whose fieldset (or anything else under it) is still here
+        // keeps its manifest. Deleting the manifest is what would let a
+        // recreated version inherit that fieldset's ordering.
+        let manifests = self.store.manifests().list(&versions_prefix);
+        for (key, manifest) in manifests {
+            if self.version_has_remaining(&manifest.version) {
+                continue;
             }
+            note_key(&mut left, self.store.manifests().delete(&key), &key);
         }
 
-        self.store
-            .projects()
-            .delete(&Project::to_path(&self.project_id()))?;
-
-        Ok(dataset_names)
+        if left.is_empty() {
+            let project_key = Project::to_path(&self.project_id());
+            note_key(
+                &mut left,
+                self.store.projects().delete(&project_key),
+                &project_key,
+            );
+        }
+        cascade_result(left)
     }
 
     // --- Dataset ---
@@ -352,9 +435,15 @@ impl ProjectConfig {
         Ok(self.store.manifests().create(manifest)?)
     }
 
-    /// Delete a version: cascade-removes the manifest plus all collections,
-    /// fields, fieldsets, permission sets, and the bundle scoped to that
-    /// version. Refused while a site pins it.
+    /// Delete a version: cascade-removes its collections, fields, fieldsets,
+    /// permission sets, bundle, and manifest. Refused while a site pins it
+    /// or another project's manifest depends on it.
+    ///
+    /// Every store is attempted even when an earlier one fails, and the error
+    /// names every key that could not be removed. A leftover fieldset is the
+    /// worst of those: a recreated version would inherit its field ordering,
+    /// so the manifest stays until the rest are gone. The delete can then be
+    /// retried, and a recreate cannot inherit the leftover.
     pub fn delete_version(&self, version: &str) -> Result<(), ConfigError> {
         let _pins = lock_pins();
         let manifest_path = Manifest::to_path(&self.project_id(), version);
@@ -382,25 +471,60 @@ impl ProjectConfig {
         let collections_prefix = format!("{}/versions/{version}/collections/", self.project_id());
         let permission_sets_prefix =
             format!("{}/versions/{version}/permission_sets/", self.project_id());
-        // Fatal, unlike the rest: an orphaned fieldset would hand a
-        // recreated version the deleted one's field ordering.
-        self.store.fieldsets().delete_by_prefix(&fieldsets_prefix)?;
-        let _ = self.store.fields().delete_by_prefix(&fields_prefix);
-        let _ = self
-            .store
-            .collections()
-            .delete_by_prefix(&collections_prefix);
-        let _ = self
-            .store
-            .permission_sets()
-            .delete_by_prefix(&permission_sets_prefix);
+        let mut left = Vec::new();
+        note_prefix(
+            &mut left,
+            self.store.fieldsets().delete_by_prefix(&fieldsets_prefix),
+            || keys_of(self.store.fieldsets().list(&fieldsets_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store.fields().delete_by_prefix(&fields_prefix),
+            || keys_of(self.store.fields().list(&fields_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .collections()
+                .delete_by_prefix(&collections_prefix),
+            || keys_of(self.store.collections().list(&collections_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .permission_sets()
+                .delete_by_prefix(&permission_sets_prefix),
+            || keys_of(self.store.permission_sets().list(&permission_sets_prefix)),
+        );
         // The version's bundle goes with it; a recreated version must not
         // inherit the frontend of the one that was deleted.
-        let _ = self
-            .store
-            .bundles()
-            .delete(&Bundle::to_path(&self.project_id(), version));
-        Ok(self.store.manifests().delete(&manifest_path)?)
+        let bundle_key = Bundle::to_path(&self.project_id(), version);
+        note_key(
+            &mut left,
+            self.store.bundles().delete(&bundle_key),
+            &bundle_key,
+        );
+
+        if !self.version_has_remaining(version) {
+            note_key(
+                &mut left,
+                self.store.manifests().delete(&manifest_path),
+                &manifest_path,
+            );
+        }
+        cascade_result(left)
+    }
+
+    /// Anything under this version still in a store the cascade deletes.
+    /// The manifest is not one of these: it is the anchor that stays while
+    /// any of them do. Callers hold `PINS`.
+    fn version_has_remaining(&self, version: &str) -> bool {
+        let prefix = format!("{}/versions/{version}/", self.project_id());
+        !self.store.fieldsets().list(&prefix).is_empty()
+            || !self.store.fields().list(&prefix).is_empty()
+            || !self.store.collections().list(&prefix).is_empty()
+            || !self.store.permission_sets().list(&prefix).is_empty()
+            || !self.store.bundles().list(&prefix).is_empty()
     }
 
     /// Other projects' versions, as `{project}@{version}`, whose manifest
@@ -619,4 +743,305 @@ struct CopiedKeys {
     /// File-tree keys (the version's `bundle`), which are whole trees rather
     /// than documents but undo the same way.
     bundles: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    use loco_schema_runtime::FileTree;
+
+    use super::*;
+    use crate::{Collection, Field, Fieldset, PermissionSet};
+
+    const PROJECT: &str = "ben/crm";
+    const VERSION: &str = "0.0.1-dev";
+
+    /// `chmod` a directory so the real `YamlFsAdapter` cannot unlink the files
+    /// in it. Same failure `FailingDeletes` stands in for on `InstanceStore`:
+    /// the adapter returns `Error::Io`, and the store keeps those keys.
+    struct Unlock(PathBuf);
+
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    fn freeze(dir: &Path) -> Unlock {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = dir.join(".loco-probe");
+        if std::fs::write(&probe, b"x").is_ok() {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::remove_file(&probe);
+            panic!("directory mode did not block writes; this test needs a non-root user");
+        }
+        Unlock(dir.to_path_buf())
+    }
+
+    fn yaml_dir(root: &Path, key: &str) -> PathBuf {
+        root.join(format!("{key}.yaml"))
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
+
+    struct World {
+        dir: tempfile::TempDir,
+        store: Arc<SchemaStore>,
+        config: ProjectConfig,
+    }
+
+    fn world(with_site: bool) -> World {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SchemaStore::load(dir.path()).unwrap());
+        let config = ProjectConfig::new(store.clone(), "ben", "crm");
+        config.create_project("CRM", "").unwrap();
+        config.create_version(VERSION.to_string()).unwrap();
+        config
+            .create_dataset(Dataset::new(
+                String::new(),
+                "dev".into(),
+                "Dev".into(),
+                String::new(),
+            ))
+            .unwrap();
+        if with_site {
+            config
+                .create_site(Site::new(
+                    String::new(),
+                    "dev".into(),
+                    "Dev".into(),
+                    VERSION.into(),
+                    "dev".into(),
+                ))
+                .unwrap();
+        }
+        for name in ["task", "note"] {
+            store
+                .collections()
+                .create(Collection::new(
+                    PROJECT.into(),
+                    VERSION.into(),
+                    name.into(),
+                    String::new(),
+                    String::new(),
+                ))
+                .unwrap();
+        }
+        for (collection, name) in [("task", "title"), ("note", "body")] {
+            store
+                .fields()
+                .create(Field {
+                    project: PROJECT.into(),
+                    version: VERSION.into(),
+                    collection: collection.into(),
+                    name: name.into(),
+                    r#type: "string".into(),
+                    ..Field::default()
+                })
+                .unwrap();
+        }
+        store
+            .fieldsets()
+            .create(Fieldset {
+                project: PROJECT.into(),
+                version: VERSION.into(),
+                collection: "task".into(),
+                name: "default".into(),
+                label: String::new(),
+                fields: vec!["title".into()],
+                auto_add: true,
+            })
+            .unwrap();
+        store
+            .permission_sets()
+            .create(PermissionSet::new(
+                PROJECT.into(),
+                VERSION.into(),
+                "public_read".into(),
+                "Public".into(),
+                String::new(),
+                Vec::new(),
+            ))
+            .unwrap();
+        let mut tree = FileTree::new();
+        tree.insert("index.html", b"<p>hi</p>".to_vec()).unwrap();
+        store
+            .bundles()
+            .put(&Bundle::to_path(PROJECT, VERSION), &tree)
+            .unwrap();
+        World { dir, store, config }
+    }
+
+    fn fieldset_key() -> String {
+        Fieldset::to_path(PROJECT, VERSION, "task", "default")
+    }
+
+    fn task_field_key() -> String {
+        Field::to_path(PROJECT, VERSION, "task", "title")
+    }
+
+    fn note_field_key() -> String {
+        Field::to_path(PROJECT, VERSION, "note", "body")
+    }
+
+    fn assert_version_children_cleared(store: &SchemaStore, except_fields: &[&str]) {
+        let prefix = format!("{PROJECT}/versions/{VERSION}/");
+        assert!(store.collections().list(&prefix).is_empty());
+        assert!(store.permission_sets().list(&prefix).is_empty());
+        assert!(store.bundles().list(&prefix).is_empty());
+        let fields = super::keys_of(store.fields().list(&prefix));
+        let expected: Vec<String> = except_fields.iter().map(|key| (*key).to_string()).collect();
+        assert_eq!(fields, expected);
+    }
+
+    #[test]
+    fn left_behind_answers_500() {
+        let response =
+            crate::http::response::config_error_to_response(ConfigError::LeftBehind(vec![
+                fieldset_key(),
+            ]));
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn project_delete_reports_every_failed_store_and_empties_the_rest() {
+        let world = world(true);
+        let fieldset = fieldset_key();
+        let task_field = task_field_key();
+        let _fieldset_dir = freeze(&yaml_dir(world.dir.path(), &fieldset));
+        let _field_dir = freeze(&yaml_dir(world.dir.path(), &task_field));
+
+        let mut purged = Vec::new();
+        let err = world
+            .config
+            .delete_project(|name| {
+                purged.push(name.to_string());
+                Ok(())
+            })
+            .unwrap_err();
+        // Fieldsets fail first. Later stores still run: the other field, the
+        // collections, the bundle, the dataset's records, and the site.
+        assert_eq!(purged, vec!["dev".to_string()]);
+        assert_eq!(
+            err.to_string(),
+            format!("delete left behind: {task_field}, {fieldset}")
+        );
+        let ConfigError::LeftBehind(keys) = err else {
+            panic!("expected leftovers");
+        };
+        assert_eq!(keys, vec![task_field.clone(), fieldset.clone()]);
+
+        assert!(world.store.fieldsets().has(&fieldset));
+        assert!(world.store.fields().has(&task_field));
+        assert!(!world.store.fields().has(&note_field_key()));
+        assert_version_children_cleared(&world.store, &[task_field.as_str()]);
+        assert!(world
+            .store
+            .datasets()
+            .list(&format!("{PROJECT}/"))
+            .is_empty());
+        assert!(world.store.sites().list(&format!("{PROJECT}/")).is_empty());
+        // Manifest and project stay, so a retry can finish and a recreate
+        // cannot inherit the fieldset.
+        assert!(world
+            .store
+            .manifests()
+            .has(&Manifest::to_path(PROJECT, VERSION)));
+        assert!(world.store.projects().has(&Project::to_path(PROJECT)));
+
+        drop(_fieldset_dir);
+        drop(_field_dir);
+        world.config.delete_project(|_| Ok(())).unwrap();
+        assert!(!world.store.projects().has(&Project::to_path(PROJECT)));
+        assert!(world
+            .store
+            .fieldsets()
+            .list(&format!("{PROJECT}/"))
+            .is_empty());
+        assert!(world.store.fields().list(&format!("{PROJECT}/")).is_empty());
+        assert!(world
+            .store
+            .manifests()
+            .list(&format!("{PROJECT}/"))
+            .is_empty());
+    }
+
+    #[test]
+    fn project_delete_keeps_a_dataset_whose_records_fail_to_purge() {
+        let world = world(true);
+        world
+            .config
+            .create_dataset(Dataset::new(
+                String::new(),
+                "prod".into(),
+                "Prod".into(),
+                String::new(),
+            ))
+            .unwrap();
+        let mut purged = Vec::new();
+        let err = world
+            .config
+            .delete_project(|name| {
+                purged.push(name.to_string());
+                Err("disk says no".into())
+            })
+            .unwrap_err();
+        assert_eq!(purged, vec!["dev".to_string(), "prod".to_string()]);
+        let dev = Dataset::to_path(PROJECT, "dev");
+        let prod = Dataset::to_path(PROJECT, "prod");
+        assert_eq!(
+            err.to_string(),
+            format!("delete left behind: {dev}, {prod}")
+        );
+        assert!(world.store.datasets().has(&dev));
+        assert!(world.store.datasets().has(&prod));
+        assert_version_children_cleared(&world.store, &[]);
+        assert!(!world
+            .store
+            .manifests()
+            .has(&Manifest::to_path(PROJECT, VERSION)));
+        assert!(world.store.sites().list(&format!("{PROJECT}/")).is_empty());
+        assert!(world.store.projects().has(&Project::to_path(PROJECT)));
+    }
+
+    #[test]
+    fn version_delete_reports_a_failed_fieldset_and_clears_the_other_stores() {
+        let world = world(false);
+        let fieldset = fieldset_key();
+        let _hold = freeze(&yaml_dir(world.dir.path(), &fieldset));
+
+        let err = world.config.delete_version(VERSION).unwrap_err();
+        assert_eq!(err.to_string(), format!("delete left behind: {fieldset}"));
+        assert!(world.store.fieldsets().has(&fieldset));
+        assert_version_children_cleared(&world.store, &[]);
+        assert!(world
+            .store
+            .manifests()
+            .has(&Manifest::to_path(PROJECT, VERSION)));
+        assert!(world
+            .store
+            .datasets()
+            .has(&Dataset::to_path(PROJECT, "dev")));
+        assert!(world.store.projects().has(&Project::to_path(PROJECT)));
+
+        drop(_hold);
+        world.config.delete_version(VERSION).unwrap();
+        assert!(!world
+            .store
+            .manifests()
+            .has(&Manifest::to_path(PROJECT, VERSION)));
+        assert!(world
+            .store
+            .fieldsets()
+            .list(&format!("{PROJECT}/"))
+            .is_empty());
+        assert!(world.store.projects().has(&Project::to_path(PROJECT)));
+    }
 }

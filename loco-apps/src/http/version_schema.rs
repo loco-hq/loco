@@ -52,6 +52,10 @@ pub enum VersionSchemaError {
     /// The version has no manifest: it was never created through `/config`,
     /// or it has since been deleted.
     UnknownVersion(String),
+    /// `delete_collection` attempted both prefixes. These keys are still
+    /// present. The collection record was left in place, so a recreate cannot
+    /// inherit a leftover fieldset and the delete can be retried.
+    LeftBehind(Vec<String>),
     Schema(loco_schema_runtime::Error),
 }
 
@@ -62,6 +66,7 @@ impl std::fmt::Display for VersionSchemaError {
             | Self::InvalidDependency(msg)
             | Self::InvalidFieldType(msg)
             | Self::UnknownVersion(msg) => write!(f, "{msg}"),
+            Self::LeftBehind(keys) => write!(f, "delete left behind: {}", keys.join(", ")),
             Self::Schema(e) => write!(f, "{e}"),
         }
     }
@@ -543,23 +548,63 @@ impl VersionSchema {
         Ok(self.store.collections().update(&key, patch)?)
     }
 
-    /// Deletes the collection AND every field + fieldset belonging to it
-    /// (in this version). Field cascade matches the prior handler behavior;
-    /// fieldset cascade prevents orphaned ordering metadata.
+    /// Deletes the collection and every field and fieldset belonging to it
+    /// in this version.
+    ///
+    /// Both prefixes are attempted even when the first fails, and the error
+    /// names every key that could not be removed. A leftover fieldset is the
+    /// worst of those: it is the ordering a collection recreated at this name
+    /// would inherit, because creating the collection again ignores a default
+    /// fieldset that is already there. The collection record stays until both
+    /// prefixes are gone, so that cannot happen and the delete can be retried.
     pub fn delete_collection(&self, name: &str) -> Result<(), VersionSchemaError> {
         let _pins = self.write_guard()?;
         let field_prefix = format!(
             "{}/versions/{}/fields/{}/",
             self.project_id, self.version, name
         );
-        let _ = self.store.fields().delete_by_prefix(&field_prefix);
         let fieldset_prefix = format!(
             "{}/versions/{}/fieldsets/{}/",
             self.project_id, self.version, name
         );
-        let _ = self.store.fieldsets().delete_by_prefix(&fieldset_prefix);
+        let mut left = Vec::new();
+        if self.store.fields().delete_by_prefix(&field_prefix).is_err() {
+            left.extend(
+                self.store
+                    .fields()
+                    .list(&field_prefix)
+                    .into_iter()
+                    .map(|(key, _)| key),
+            );
+        }
+        if self
+            .store
+            .fieldsets()
+            .delete_by_prefix(&fieldset_prefix)
+            .is_err()
+        {
+            left.extend(
+                self.store
+                    .fieldsets()
+                    .list(&fieldset_prefix)
+                    .into_iter()
+                    .map(|(key, _)| key),
+            );
+        }
         let key = Collection::to_path(&self.project_id, &self.version, name);
-        Ok(self.store.collections().delete(&key)?)
+        if left.is_empty() {
+            match self.store.collections().delete(&key) {
+                Ok(()) | Err(loco_schema_runtime::Error::NotFound(_)) => {}
+                Err(_) => left.push(key),
+            }
+        }
+        if left.is_empty() {
+            Ok(())
+        } else {
+            left.sort();
+            left.dedup();
+            Err(VersionSchemaError::LeftBehind(left))
+        }
     }
 
     pub fn create_field(&self, mut input: Field) -> Result<Arc<Field>, VersionSchemaError> {
@@ -1006,5 +1051,78 @@ mod tests {
             let collection = format!("c{round}");
             assert_all_present(&race_field_creates(&store, &collection, N), N);
         }
+    }
+
+    /// Directory mode is what stops `YamlFsAdapter` unlinking a key. Root
+    /// ignores it, so the test refuses to pass vacuously there.
+    struct Unlock(std::path::PathBuf);
+
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    fn freeze(dir: &std::path::Path) -> Unlock {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = dir.join(".loco-probe");
+        if std::fs::write(&probe, b"x").is_ok() {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::remove_file(&probe);
+            panic!("directory mode did not block writes; this test needs a non-root user");
+        }
+        Unlock(dir.to_path_buf())
+    }
+
+    #[test]
+    fn left_behind_answers_500() {
+        let response = crate::http::response::version_schema_error_to_response(
+            VersionSchemaError::LeftBehind(vec![
+                "ben/crm/versions/0.0.1-dev/fieldsets/task/default".into(),
+            ]),
+        );
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn delete_collection_reports_a_failed_fieldset_and_clears_fields() {
+        let (dir, store) = draft_schema();
+        let schema = VersionSchema::new(store.clone(), PROJECT, VERSION);
+        schema.create_collection(collection("task")).unwrap();
+        schema.create_field(field("task", "title")).unwrap();
+
+        let fieldset_key = Fieldset::to_path(PROJECT, VERSION, "task", "default");
+        let field_key = Field::to_path(PROJECT, VERSION, "task", "title");
+        let collection_key = Collection::to_path(PROJECT, VERSION, "task");
+        let frozen = dir
+            .path()
+            .join(format!("{fieldset_key}.yaml"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let _hold = freeze(&frozen);
+
+        let err = schema.delete_collection("task").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("delete left behind: {fieldset_key}")
+        );
+        match err {
+            VersionSchemaError::LeftBehind(keys) => assert_eq!(keys, vec![fieldset_key.clone()]),
+            other => panic!("expected leftovers, got {other}"),
+        }
+        assert!(store.fieldsets().has(&fieldset_key));
+        assert!(!store.fields().has(&field_key));
+        assert!(store.collections().has(&collection_key));
+
+        drop(_hold);
+        schema.delete_collection("task").unwrap();
+        assert!(!store.fieldsets().has(&fieldset_key));
+        assert!(!store.collections().has(&collection_key));
     }
 }

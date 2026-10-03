@@ -185,18 +185,16 @@ pub async fn delete_project(
     scope: ConfigProjectScope,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    // Schema-level cascade lives in `delete_project`; it returns the dataset
-    // names so we can purge their records from the lake here. Lake errors
-    // during cascade are swallowed — the metadata is what's authoritative.
+    // Records are purged inside the cascade, before each dataset row goes, so
+    // a lake failure leaves that dataset in place and the 500 names it.
     let project_id = scope.project_id();
-    match scope.config.delete_project() {
-        Ok(dataset_names) => {
-            for name in dataset_names {
-                let qualified = format!("{project_id}/{name}");
-                let _ = state.data_adapter.delete_dataset(&qualified);
-            }
-            ApiResponse::success("deleted").into_response()
-        }
+    match scope.config.delete_project(|name| {
+        state
+            .data_adapter
+            .delete_dataset(&format!("{project_id}/{name}"))
+            .map_err(|e| e.to_string())
+    }) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => config_error_to_response(e),
     }
 }
