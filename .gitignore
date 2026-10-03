@@ -34,6 +34,6 @@ NOTES.md
 .playwright-mcp/
 
 # The live schema store. Committed projects are seeded into it from
-# schemas/seed/ at boot; every /schema and /config write lands here, never in
-# a tracked file. Test suites have their own fixtures under tests/suites/.
+# schemas/seed/ at boot. Test suites have their own fixtures under tests/suites/.
+# Secret and variable values are lake records, not files under schemas/.
 /loco-apps/schemas/instances/

@@ -10,12 +10,17 @@ use crate::auth::AuthAdapter;
 use crate::handlers;
 use crate::http::host;
 use crate::seed;
+use crate::values::{KeyStatus, LakeSecretStore, SecretStore};
 use crate::{Bundle, Project, SchemaStore, Site};
 
 pub struct AppState {
-    pub data_adapter: Box<dyn DataAdapter>,
+    /// Shared with [`crate::values::LakeSecretStore`]. Secret and variable
+    /// rows live in this lake, under `$secrets` and `$variables`.
+    pub data_adapter: Arc<dyn DataAdapter>,
     pub auth_adapter: Box<dyn AuthAdapter>,
     pub schema: Arc<SchemaStore>,
+    /// Plaintext trait. The lake impl encrypts. See `crate::values`.
+    pub secrets: Box<dyn SecretStore>,
     /// The site the apex serves at `/`, as `({account}/{project}, {site})`.
     /// `None` is the API-only process. A host that names a site of its own
     /// always wins over this.
@@ -88,8 +93,18 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         println!("Seeded {project} from schemas/seed");
     }
     let schema = Arc::new(SchemaStore::load(&instances_dir).expect("failed to load schema"));
+    let secret_key = KeyStatus::from_env();
+    match &secret_key {
+        KeyStatus::Missing => {
+            eprintln!("LOCO_SECRET_KEY is not set; PUT /config/secret will return 503")
+        }
+        KeyStatus::Invalid(msg) => eprintln!("{msg}; PUT /config/secret will return 503"),
+        KeyStatus::Ready(_) => {}
+    }
 
-    let data_adapter = build_data_adapter();
+    let data_adapter: Arc<dyn DataAdapter> = Arc::from(build_data_adapter());
+    let secrets: Box<dyn SecretStore> =
+        Box::new(LakeSecretStore::new(data_adapter.clone(), secret_key));
     let auth_adapter = build_auth_adapter(root, &options);
     warn_projects_without_account(&schema, auth_adapter.as_ref());
     let default_site = resolve_default_site(&schema, &options);
@@ -98,6 +113,7 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         data_adapter,
         auth_adapter,
         schema,
+        secrets,
         default_site,
     });
 

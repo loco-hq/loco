@@ -31,6 +31,25 @@ pub fn require_developer(
     }
 }
 
+/// Any project role on `{account}/{project}`: editor or developer, and an
+/// org owner (they come back as developer from `project_access`). Used by
+/// config-value reads. A secret list carries no value, so it uses the same
+/// gate as a variable read.
+pub fn require_member(
+    state: &AppState,
+    identity_handle: &str,
+    project_id: &str,
+) -> Result<(), Response> {
+    match state
+        .auth_adapter
+        .project_access(identity_handle, project_id)
+    {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(forbidden()),
+        Err(e) => Err(auth_error_to_response(e)),
+    }
+}
+
 /// The caller's identity id must match the path id. Person accounts are
 /// personal — org owners manage membership, not the identity record.
 pub fn require_self(caller_id: &str, target_id: &str) -> Result<(), Response> {

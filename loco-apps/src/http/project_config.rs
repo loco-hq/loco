@@ -137,7 +137,9 @@ fn cascade_result(mut left: Vec<String>) -> Result<(), ConfigError> {
 }
 
 pub struct ProjectConfig {
-    store: Arc<SchemaStore>,
+    /// Schema instances. `pub(crate)` so config-value reads can build a
+    /// `VersionSchema` without a second handle.
+    pub(crate) store: Arc<SchemaStore>,
     user: String,
     project: String,
 }
@@ -205,9 +207,10 @@ impl ProjectConfig {
     /// manifest; every dataset and its records; every site; then the project
     /// record.
     ///
-    /// `purge` deletes one dataset's records and is called with that
-    /// dataset's name before its schema row is removed. A purge failure
-    /// leaves the row in place.
+    /// `purge` is called with that dataset's name before its schema row is
+    /// removed. The handler's purge deletes the dataset's secrets
+    /// (`SecretStore::delete_dataset`) and then its lake records. A purge
+    /// failure leaves the row in place.
     ///
     /// Every store is attempted even when an earlier one fails, and the
     /// error names every key that could not be removed. A leftover fieldset
@@ -333,9 +336,12 @@ impl ProjectConfig {
             .update(&Dataset::to_path(&self.project_id(), name), patch)
     }
 
-    /// Delete a dataset, refusing while a site pins it. `purge` removes its
-    /// records from the lake; it runs after the pin check and before the
-    /// dataset itself goes, so a failed purge leaves the dataset in place.
+    /// Delete a dataset, refusing while a site pins it. `purge` deletes its
+    /// secrets and then its lake records, including `$variables`. It runs
+    /// after the pin check and before the dataset itself goes, so a failed
+    /// purge leaves the dataset in place. A value write holds `PINS` too, so
+    /// it either lands first and is swept or runs after and finds the
+    /// dataset gone.
     pub fn delete_dataset(
         &self,
         name: &str,
@@ -447,7 +453,8 @@ impl ProjectConfig {
     }
 
     /// Delete a version: cascade-removes its collections, fields, fieldsets,
-    /// permission sets, secrets, variables, bundle, and manifest. Refused
+    /// permission sets, secrets, variables, bundle, and manifest. Secret and
+    /// variable *values* are per dataset, not per version, and stay. Refused
     /// while a site pins it or another project's manifest depends on it.
     ///
     /// Every store is attempted even when an earlier one fails, and the error
@@ -587,9 +594,10 @@ impl ProjectConfig {
     /// rolling back by re-pinning the previous version would serve the wrong
     /// HTML.
     ///
-    /// Datasets, sites, and lake records have no version dimension and are
-    /// deliberately untouched. Publishing a snapshot neither forks the data
-    /// nor moves a URL — pointing a site at `to` is a separate, explicit act.
+    /// Datasets, sites, lake records, and secret and variable values have no
+    /// version dimension and are deliberately untouched. Publishing a
+    /// snapshot neither forks the data nor moves a URL — pointing a site at
+    /// `to` is a separate, explicit act.
     ///
     /// This lives on `/config` rather than `/schema` precisely because the
     /// target is normally *published*: `0.0.1-dev` → `0.0.1` is how a
@@ -798,6 +806,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
+    use loco_lake::DataAdapter;
     use loco_schema_runtime::FileTree;
 
     use super::*;
@@ -838,12 +847,16 @@ mod tests {
     struct World {
         dir: tempfile::TempDir,
         store: Arc<SchemaStore>,
+        data: Arc<dyn DataAdapter>,
+        secrets: crate::values::LakeSecretStore,
         config: ProjectConfig,
     }
 
     fn world(with_site: bool) -> World {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SchemaStore::load(dir.path()).unwrap());
+        let data: Arc<dyn DataAdapter> = Arc::new(loco_lake::InMemoryAdapter::new());
+        let secrets = crate::values::LakeSecretStore::new(data.clone(), ready_key());
         let config = ProjectConfig::new(store.clone(), "ben", "crm");
         config.create_project("CRM", "").unwrap();
         config.create_version(VERSION.to_string()).unwrap();
@@ -943,7 +956,13 @@ mod tests {
             .bundles()
             .put(&Bundle::to_path(PROJECT, VERSION), &tree)
             .unwrap();
-        World { dir, store, config }
+        World {
+            dir,
+            store,
+            data,
+            secrets,
+            config,
+        }
     }
 
     fn fieldset_key() -> String {
@@ -1162,5 +1181,468 @@ mod tests {
             .list(&format!("{PROJECT}/"))
             .is_empty());
         assert!(world.store.projects().has(&Project::to_path(PROJECT)));
+    }
+
+    const VALUE_KEY: [u8; 32] = [4u8; 32];
+
+    fn ready_key() -> crate::values::KeyStatus {
+        crate::values::KeyStatus::Ready(VALUE_KEY)
+    }
+
+    fn dev_dataset() -> String {
+        format!("{PROJECT}/dev")
+    }
+
+    fn purge_all(data: &dyn DataAdapter, name: &str) -> Result<(), String> {
+        data.delete_dataset(&format!("{PROJECT}/{name}"))
+            .map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn project_delete_removes_secret_and_variable_values() {
+        use crate::values::{put_variable, SecretStore, SECRETS, VARIABLES};
+
+        let world = world(false);
+        world
+            .secrets
+            .put(&dev_dataset(), "consumer_key", "s3cret")
+            .unwrap();
+        put_variable(
+            world.data.as_ref(),
+            &dev_dataset(),
+            "api_base",
+            "https://set.example",
+        )
+        .unwrap();
+        // A user row in the same dataset goes with the same purge.
+        world
+            .data
+            .insert(
+                &dev_dataset(),
+                "ben/crm.task",
+                loco_lake::InsertRequest {
+                    user: "ben".into(),
+                    fields: std::collections::HashMap::new(),
+                },
+            )
+            .unwrap();
+
+        let data = world.data.clone();
+        world
+            .config
+            .delete_project(|name| purge_all(data.as_ref(), name))
+            .unwrap();
+
+        assert!(world.data.list(&dev_dataset(), SECRETS).unwrap().is_empty());
+        assert!(world
+            .data
+            .list(&dev_dataset(), VARIABLES)
+            .unwrap()
+            .is_empty());
+        assert!(world
+            .data
+            .list(&dev_dataset(), "ben/crm.task")
+            .unwrap()
+            .is_empty());
+        assert!(!world.store.projects().has(&Project::to_path(PROJECT)));
+    }
+
+    /// A purge that fails leaves the dataset row, so the secret and the
+    /// variable stay with it. One lake delete covers every collection; there
+    /// is no separate value path that could remove one and keep the other.
+    #[test]
+    fn project_delete_keeps_values_when_the_purge_fails() {
+        use crate::values::{get_variable, SecretStore};
+
+        let world = world(false);
+        world
+            .secrets
+            .put(&dev_dataset(), "consumer_key", "s3cret")
+            .unwrap();
+        crate::values::put_variable(
+            world.data.as_ref(),
+            &dev_dataset(),
+            "api_base",
+            "https://set.example",
+        )
+        .unwrap();
+
+        let err = world
+            .config
+            .delete_project(|_| Err("disk says no".into()))
+            .unwrap_err();
+        let dev = Dataset::to_path(PROJECT, "dev");
+        assert_eq!(err.to_string(), format!("delete left behind: {dev}"));
+        assert!(world.store.projects().has(&Project::to_path(PROJECT)));
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("s3cret")
+        );
+        assert_eq!(
+            get_variable(world.data.as_ref(), &dev_dataset(), "api_base")
+                .unwrap()
+                .as_deref(),
+            Some("https://set.example")
+        );
+
+        let data = world.data.clone();
+        world
+            .config
+            .delete_project(|name| purge_all(data.as_ref(), name))
+            .unwrap();
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), "consumer_key")
+            .unwrap()
+            .is_none());
+        assert!(!world.store.projects().has(&Project::to_path(PROJECT)));
+    }
+
+    #[test]
+    fn dataset_delete_removes_only_that_datasets_values() {
+        use crate::values::{get_variable, put_variable, SecretStore};
+
+        let world = world(false);
+        world
+            .config
+            .create_dataset(Dataset::new(
+                String::new(),
+                "other".into(),
+                "Other".into(),
+                String::new(),
+            ))
+            .unwrap();
+        world
+            .secrets
+            .put(&dev_dataset(), "consumer_key", "s3cret")
+            .unwrap();
+        let other = format!("{PROJECT}/other");
+        put_variable(world.data.as_ref(), &other, "api_base", "keep").unwrap();
+
+        let data = world.data.clone();
+        world
+            .config
+            .delete_dataset("dev", || purge_all(data.as_ref(), "dev"))
+            .unwrap();
+
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), "consumer_key")
+            .unwrap()
+            .is_none());
+        assert!(world.config.dataset("dev").is_none());
+        assert_eq!(
+            get_variable(world.data.as_ref(), &other, "api_base")
+                .unwrap()
+                .as_deref(),
+            Some("keep")
+        );
+        assert!(world.config.dataset("other").is_some());
+    }
+
+    #[test]
+    fn version_delete_leaves_dataset_values() {
+        use crate::values::{get_variable, put_variable, SecretStore};
+
+        let world = world(false);
+        world
+            .secrets
+            .put(&dev_dataset(), "consumer_key", "s3cret")
+            .unwrap();
+        put_variable(
+            world.data.as_ref(),
+            &dev_dataset(),
+            "api_base",
+            "https://set.example",
+        )
+        .unwrap();
+
+        world.config.delete_version(VERSION).unwrap();
+
+        assert!(world
+            .store
+            .secrets()
+            .list(&format!("{PROJECT}/versions/{VERSION}/"))
+            .is_empty());
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("s3cret")
+        );
+        assert_eq!(
+            get_variable(world.data.as_ref(), &dev_dataset(), "api_base")
+                .unwrap()
+                .as_deref(),
+            Some("https://set.example")
+        );
+    }
+
+    #[test]
+    fn list_follows_pins_and_put_follows_any_version() {
+        use crate::http::config_values::ValueError;
+        use crate::values::SecretStore;
+
+        let world = world(false);
+        let missing = crate::values::LakeSecretStore::new(
+            world.data.clone(),
+            crate::values::KeyStatus::Missing,
+        );
+        // No site pins `dev`, so the list is empty even though the version
+        // declares both names.
+        assert!(world
+            .config
+            .list_secret_values(&world.secrets, "dev")
+            .unwrap()
+            .is_empty());
+        assert!(world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap()
+            .is_empty());
+
+        let err = world
+            .config
+            .set_secret_value(&missing, "dev", "consumer_key", "s3cret")
+            .unwrap_err();
+        assert!(matches!(err, ValueError::Unavailable(_)));
+        assert!(err.to_string().contains("LOCO_SECRET_KEY"), "{err}");
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), "consumer_key")
+            .unwrap()
+            .is_none());
+
+        let err = world
+            .config
+            .set_variable_value(world.data.as_ref(), "dev", "consumer_key", "nope")
+            .unwrap_err();
+        assert!(matches!(err, ValueError::Undeclared(_)));
+        let err = world
+            .config
+            .set_secret_value(&world.secrets, "dev", "api_base", "nope")
+            .unwrap_err();
+        assert!(matches!(err, ValueError::Undeclared(_)));
+        let err = world
+            .config
+            .list_secret_values(&world.secrets, "missing")
+            .unwrap_err();
+        assert!(matches!(err, ValueError::UnknownDataset(_)));
+
+        // A write is allowed before any site pins the declaring version.
+        let set = world
+            .config
+            .set_variable_value(world.data.as_ref(), "dev", "api_base", "")
+            .unwrap();
+        assert!(set.set);
+        assert_eq!(set.value.as_deref(), Some(""));
+        assert_eq!(set.source, Some("value"));
+        assert!(world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap()
+            .is_empty());
+
+        world
+            .config
+            .create_site(Site::new(
+                String::new(),
+                "dev".into(),
+                "Dev".into(),
+                VERSION.into(),
+                "dev".into(),
+            ))
+            .unwrap();
+        let rows = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "api_base");
+        assert_eq!(rows[0].project, PROJECT);
+        assert!(rows[0].set);
+        assert_eq!(rows[0].value.as_deref(), Some(""));
+        assert_eq!(rows[0].source, Some("value"));
+
+        world
+            .config
+            .delete_variable_value(world.data.as_ref(), "dev", "api_base")
+            .unwrap();
+        let rows = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert!(!rows[0].set);
+        assert_eq!(rows[0].source, Some("default"));
+        assert_eq!(rows[0].value.as_deref(), Some("https://example.test"));
+        assert!(rows[0].updated_at.is_none());
+
+        let secret = world
+            .config
+            .set_secret_value(&world.secrets, "dev", "consumer_key", "s3cret")
+            .unwrap();
+        assert!(secret.set);
+        assert!(secret.updated_at.is_some());
+        let listed = world
+            .config
+            .list_secret_values(&world.secrets, "dev")
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].set);
+        assert_eq!(listed[0].name, "consumer_key");
+    }
+
+    /// `alice/shop.label_prefix` and `label_prefix` are one row. The secret
+    /// read is the bare name, which is also the additional data the
+    /// ciphertext was sealed under.
+    #[test]
+    fn qualified_self_name_stores_the_bare_row() {
+        use crate::values::SecretStore;
+
+        let world = world(true);
+        let qualified = format!("{PROJECT}.consumer_key");
+        let set = world
+            .config
+            .set_secret_value(&world.secrets, "dev", &qualified, "s3cret")
+            .unwrap();
+        assert_eq!(set.name, "consumer_key");
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("s3cret")
+        );
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), &qualified)
+            .unwrap()
+            .is_none());
+        assert!(
+            world
+                .config
+                .list_secret_values(&world.secrets, "dev")
+                .unwrap()[0]
+                .set
+        );
+        world
+            .config
+            .delete_secret_value(&world.secrets, "dev", "consumer_key")
+            .unwrap();
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), "consumer_key")
+            .unwrap()
+            .is_none());
+
+        let qualified_var = format!("{PROJECT}.api_base");
+        world
+            .config
+            .set_variable_value(
+                world.data.as_ref(),
+                "dev",
+                &qualified_var,
+                "https://set.example",
+            )
+            .unwrap();
+        let rows = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert!(rows[0].set);
+        assert_eq!(rows[0].value.as_deref(), Some("https://set.example"));
+        world
+            .config
+            .delete_variable_value(world.data.as_ref(), "dev", &qualified_var)
+            .unwrap();
+        let rows = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert!(!rows[0].set);
+        assert_eq!(rows[0].source, Some("default"));
+    }
+
+    /// Two sites pin two versions that declare the same variable with
+    /// different defaults. The row's default is the first non-empty one in
+    /// version-name order, and a stored value replaces it.
+    #[test]
+    fn variable_default_comes_from_the_earliest_pinned_version() {
+        let world = world(true);
+        world.config.create_version("0.0.0-dev".into()).unwrap();
+        world.config.create_version("9.9.9-dev".into()).unwrap();
+        world
+            .store
+            .variables()
+            .create(Variable::new(
+                PROJECT.into(),
+                "0.0.0-dev".into(),
+                "api_base".into(),
+                "API base".into(),
+                String::new(),
+                false,
+                String::new(),
+            ))
+            .unwrap();
+        world
+            .store
+            .variables()
+            .create(Variable::new(
+                PROJECT.into(),
+                "9.9.9-dev".into(),
+                "api_base".into(),
+                "API base".into(),
+                String::new(),
+                false,
+                "https://later.example".into(),
+            ))
+            .unwrap();
+        for (site, version) in [("early", "0.0.0-dev"), ("later", "9.9.9-dev")] {
+            world
+                .config
+                .create_site(Site::new(
+                    String::new(),
+                    site.into(),
+                    site.into(),
+                    version.into(),
+                    "dev".into(),
+                ))
+                .unwrap();
+        }
+
+        let rows = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].set);
+        assert_eq!(rows[0].source, Some("default"));
+        // `0.0.0-dev` sorts first and its default is empty, so the row takes
+        // `0.0.1-dev`'s default rather than `9.9.9-dev`'s.
+        assert_eq!(rows[0].value.as_deref(), Some("https://example.test"));
+
+        world
+            .config
+            .set_variable_value(
+                world.data.as_ref(),
+                "dev",
+                "api_base",
+                "https://set.example",
+            )
+            .unwrap();
+        let rows = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert!(rows[0].set);
+        assert_eq!(rows[0].source, Some("value"));
+        assert_eq!(rows[0].value.as_deref(), Some("https://set.example"));
     }
 }

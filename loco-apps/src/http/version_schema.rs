@@ -53,6 +53,9 @@ pub enum VersionSchemaError {
     /// A secret or variable declaration the version cannot store: a secret
     /// body carrying a value, or a secret and a variable sharing a name.
     InvalidDeclaration(String),
+    /// A collection name outside the slug charset. `$` is reserved for the
+    /// lake collections that hold secret and variable values.
+    InvalidName(String),
     /// The version has no manifest: it was never created through `/config`,
     /// or it has since been deleted.
     UnknownVersion(String),
@@ -70,6 +73,7 @@ impl std::fmt::Display for VersionSchemaError {
             | Self::InvalidDependency(msg)
             | Self::InvalidFieldType(msg)
             | Self::InvalidDeclaration(msg)
+            | Self::InvalidName(msg)
             | Self::UnknownVersion(msg) => write!(f, "{msg}"),
             Self::LeftBehind(keys) => write!(f, "delete left behind: {}", keys.join(", ")),
             Self::Schema(e) => write!(f, "{e}"),
@@ -251,6 +255,12 @@ impl VersionSchema {
     /// The collection `name` owned by `project`, when `project` is self or a
     /// direct dependency.
     pub fn collection_in(&self, project: &str, name: &str) -> Option<Arc<Collection>> {
+        // `$secrets` and `$variables` are lake collections, not schema. A
+        // bare name containing `$` does not resolve, even if a file was
+        // written under it. `/data` and `/data/query` both come through here.
+        if name.contains('$') {
+            return None;
+        }
         let version = self.visible_version(project)?;
         self.store
             .collections()
@@ -522,6 +532,13 @@ impl VersionSchema {
         &self,
         mut input: Collection,
     ) -> Result<Arc<Collection>, VersionSchemaError> {
+        if !collection_name_ok(&input.name) {
+            return Err(VersionSchemaError::InvalidName(format!(
+                "collection name {:?} must be 1 or more of a-z, 0-9, '_', '.', and '-'; \
+                 '$' is reserved",
+                input.name
+            )));
+        }
         let _pins = self.write_guard()?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
@@ -923,6 +940,15 @@ impl VersionSchema {
     }
 }
 
+/// Collection names are the slug charset (`[a-z0-9_.-]+`). `$` is outside
+/// it, which is what keeps `$secrets` and `$variables` from being declared.
+fn collection_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
+}
+
 /// The message for a `/schema` request to a version that does not exist.
 pub fn unknown_version(project_id: &str, version: &str) -> String {
     format!("unknown version: {project_id}@{version}")
@@ -1277,6 +1303,29 @@ mod tests {
         );
         assert!(schema.secret("consumer_key").is_some());
         assert!(schema.variable("api_base").is_some());
+    }
+
+    #[test]
+    fn dollar_is_not_a_collection_name() {
+        let (_dir, store) = draft_schema();
+        let schema = VersionSchema::new(store.clone(), PROJECT, VERSION);
+        let err = schema
+            .create_collection(collection("$secrets"))
+            .unwrap_err();
+        assert!(matches!(err, VersionSchemaError::InvalidName(_)), "{err}");
+        assert!(err.to_string().contains('$'), "{err}");
+        assert_eq!(
+            crate::http::response::version_schema_error_to_response(err).status(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+
+        // A file planted under that name still does not resolve. `/data` and
+        // `/data/query` both go through `collection`.
+        store.collections().create(collection("$secrets")).unwrap();
+        assert!(schema.collection("$secrets").is_none());
+        assert!(schema.collection("alice/other.$variables").is_none());
+        schema.create_collection(collection("orders")).unwrap();
+        assert!(schema.collection("orders").is_some());
     }
 
     #[test]

@@ -90,6 +90,22 @@ pub fn schema_error_to_response(err: loco_schema_runtime::Error) -> Response {
     }
 }
 
+pub fn value_error_to_response(err: crate::http::config_values::ValueError) -> Response {
+    use crate::http::config_values::ValueError;
+    match err {
+        e @ (ValueError::InvalidName(_) | ValueError::Undeclared(_)) => {
+            error_response(StatusCode::BAD_REQUEST, &e.to_string())
+        }
+        e @ (ValueError::UnknownDataset(_) | ValueError::NotFound(_)) => {
+            error_response(StatusCode::NOT_FOUND, &e.to_string())
+        }
+        e @ ValueError::Unavailable(_) => {
+            error_response(StatusCode::SERVICE_UNAVAILABLE, &e.to_string())
+        }
+        ValueError::Lake(e) => lake_error_to_response(e),
+    }
+}
+
 pub fn config_error_to_response(err: crate::http::project_config::ConfigError) -> Response {
     use crate::http::project_config::ConfigError;
     match err {
@@ -114,7 +130,8 @@ pub fn version_schema_error_to_response(
         e @ (VersionSchemaError::NotWritable(_)
         | VersionSchemaError::InvalidDependency(_)
         | VersionSchemaError::InvalidFieldType(_)
-        | VersionSchemaError::InvalidDeclaration(_)) => {
+        | VersionSchemaError::InvalidDeclaration(_)
+        | VersionSchemaError::InvalidName(_)) => {
             error_response(StatusCode::BAD_REQUEST, &e.to_string())
         }
         e @ VersionSchemaError::UnknownVersion(_) => {
@@ -124,5 +141,18 @@ pub fn version_schema_error_to_response(
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
         }
         VersionSchemaError::Schema(e) => schema_error_to_response(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::config_values::ValueError;
+
+    #[test]
+    fn unavailable_maps_to_503() {
+        let response =
+            value_error_to_response(ValueError::Unavailable("LOCO_SECRET_KEY is not set".into()));
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

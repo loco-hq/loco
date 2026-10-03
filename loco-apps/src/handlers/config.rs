@@ -58,6 +58,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/version/{user}/{project}/{version}",
             delete(delete_version),
         )
+        .merge(super::values::router())
 }
 
 // --- project ---
@@ -176,14 +177,12 @@ pub async fn delete_project(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     // Records are purged inside the cascade, before each dataset row goes, so
-    // a lake failure leaves that dataset in place and the 500 names it.
+    // a failure leaves that dataset in place and the 500 names it.
     let project_id = scope.project_id();
-    match scope.config.delete_project(|name| {
-        state
-            .data_adapter
-            .delete_dataset(&format!("{project_id}/{name}"))
-            .map_err(|e| e.to_string())
-    }) {
+    match scope
+        .config
+        .delete_project(|name| purge_dataset(state.as_ref(), &format!("{project_id}/{name}")))
+    {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => config_error_to_response(e),
     }
@@ -232,16 +231,26 @@ pub async fn delete_dataset(
     Path((_, _, name)): Path<(String, String, String)>,
 ) -> Response {
     let qualified = format!("{}/{name}", scope.project_id());
-    let purge = || {
-        state
-            .data_adapter
-            .delete_dataset(&qualified)
-            .map_err(|e| e.to_string())
-    };
+    let purge = || purge_dataset(state.as_ref(), &qualified);
     match scope.config.delete_dataset(&name, purge) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => config_error_to_response(e),
     }
+}
+
+/// Secrets first, then the lake. The secret-store error is the same purge
+/// string a lake error becomes, and a failure there leaves the lake rows in
+/// place. `SecretStore::delete_dataset` is what a non-lake store cleans up;
+/// the lake impl only removes `$secrets` rows the purge deletes anyway.
+fn purge_dataset(state: &AppState, dataset_id: &str) -> Result<(), String> {
+    state
+        .secrets
+        .delete_dataset(dataset_id)
+        .map_err(|err| err.to_string())?;
+    state
+        .data_adapter
+        .delete_dataset(dataset_id)
+        .map_err(|err| err.to_string())
 }
 
 // --- site ---

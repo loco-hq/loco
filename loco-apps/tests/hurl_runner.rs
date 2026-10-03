@@ -91,6 +91,13 @@ fn run_suite_in(
     ADAPTER_ENV_ONCE.call_once(|| unsafe {
         std::env::set_var("LOCO_ADAPTER", "memory");
         std::env::set_var("LOCO_AUTH_AUTO_CREATE", "1");
+        // Tests only: standard base64 of 32 zero bytes. Secret writes are
+        // 503 without LOCO_SECRET_KEY. Unit tests parse keys themselves and
+        // do not read this variable.
+        std::env::set_var(
+            "LOCO_SECRET_KEY",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        );
     });
 
     // 3. Build the app rooted at the tempdir
@@ -338,6 +345,11 @@ fn suite_data_validation_reads() {
 #[test]
 fn suite_config_names() {
     run_suite(&suites_dir().join("config_names"));
+}
+
+#[test]
+fn suite_config_values() {
+    run_suite(&suites_dir().join("config_values"));
 }
 
 #[test]
