@@ -1,0 +1,23 @@
+description: "A named non-secret setting a version needs. The declaration only — a default is not a store's value."
+pathTemplate: "${project}/versions/${version}/variables/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+  description:
+    type: string
+  # The version cannot run until this variable is set, unless `default` is.
+  required:
+    type: boolean
+  # Used when a store does not set the variable. Empty means none.
+  default:
+    type: string

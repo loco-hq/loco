@@ -31,7 +31,8 @@ use crate::http::project_config::lock_pins;
 use crate::validation::FIELD_TYPES;
 use crate::{
     Bundle, Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest,
-    ManifestUpdate, PermissionSet, PermissionSetUpdate, SchemaStore,
+    ManifestUpdate, PermissionSet, PermissionSetUpdate, SchemaStore, Secret, SecretUpdate,
+    Variable, VariableUpdate,
 };
 
 /// Name of the fieldset auto-created when a collection is created. The boolean
@@ -49,6 +50,9 @@ pub enum VersionSchemaError {
     InvalidDependency(String),
     /// A field `type` outside [`crate::validation::FIELD_TYPES`].
     InvalidFieldType(String),
+    /// A secret or variable declaration the version cannot store: a secret
+    /// body carrying a value, or a secret and a variable sharing a name.
+    InvalidDeclaration(String),
     /// The version has no manifest: it was never created through `/config`,
     /// or it has since been deleted.
     UnknownVersion(String),
@@ -65,6 +69,7 @@ impl std::fmt::Display for VersionSchemaError {
             Self::NotWritable(msg)
             | Self::InvalidDependency(msg)
             | Self::InvalidFieldType(msg)
+            | Self::InvalidDeclaration(msg)
             | Self::UnknownVersion(msg) => write!(f, "{msg}"),
             Self::LeftBehind(keys) => write!(f, "delete left behind: {}", keys.join(", ")),
             Self::Schema(e) => write!(f, "{e}"),
@@ -697,6 +702,134 @@ impl VersionSchema {
         Ok(self.store.permission_sets().delete(&key)?)
     }
 
+    /// Every secret declaration visible to this version, across self + direct
+    /// deps. Each carries its `project`, like [`Self::collections`].
+    pub fn secrets(&self) -> Vec<Arc<Secret>> {
+        self.dependencies
+            .iter()
+            .flat_map(|(project_id, version)| {
+                let prefix = format!("{project_id}/versions/{version}/secrets/");
+                self.store
+                    .secrets()
+                    .list(&prefix)
+                    .into_iter()
+                    .map(|(_, secret)| secret)
+            })
+            .collect()
+    }
+
+    /// The secret `name` names: this project's for a bare name, a direct
+    /// dependency's for `{account}/{project}.{name}`.
+    pub fn secret(&self, name: &str) -> Option<Arc<Secret>> {
+        let (project, version, bare) = self.resolve(name)?;
+        self.store
+            .secrets()
+            .get(&Secret::to_path(project, version, bare))
+    }
+
+    pub fn create_secret(&self, mut input: Secret) -> Result<Arc<Secret>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        self.reject_shared_declaration_name(&input.name, true)?;
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.secrets().create(input)?)
+    }
+
+    pub fn update_secret(
+        &self,
+        name: &str,
+        patch: SecretUpdate,
+    ) -> Result<Arc<Secret>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = Secret::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.secrets().update(&key, patch)?)
+    }
+
+    pub fn delete_secret(&self, name: &str) -> Result<(), VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = Secret::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.secrets().delete(&key)?)
+    }
+
+    /// Every variable declaration visible to this version, across self +
+    /// direct deps. Each carries its `project`, like [`Self::collections`].
+    pub fn variables(&self) -> Vec<Arc<Variable>> {
+        self.dependencies
+            .iter()
+            .flat_map(|(project_id, version)| {
+                let prefix = format!("{project_id}/versions/{version}/variables/");
+                self.store
+                    .variables()
+                    .list(&prefix)
+                    .into_iter()
+                    .map(|(_, variable)| variable)
+            })
+            .collect()
+    }
+
+    /// The variable `name` names: this project's for a bare name, a direct
+    /// dependency's for `{account}/{project}.{name}`.
+    pub fn variable(&self, name: &str) -> Option<Arc<Variable>> {
+        let (project, version, bare) = self.resolve(name)?;
+        self.store
+            .variables()
+            .get(&Variable::to_path(project, version, bare))
+    }
+
+    pub fn create_variable(
+        &self,
+        mut input: Variable,
+    ) -> Result<Arc<Variable>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        self.reject_shared_declaration_name(&input.name, false)?;
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.variables().create(input)?)
+    }
+
+    pub fn update_variable(
+        &self,
+        name: &str,
+        patch: VariableUpdate,
+    ) -> Result<Arc<Variable>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = Variable::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.variables().update(&key, patch)?)
+    }
+
+    pub fn delete_variable(&self, name: &str) -> Result<(), VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = Variable::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.variables().delete(&key)?)
+    }
+
+    /// A secret and a variable of one bare name in this version would make a
+    /// later lookup ambiguous. The other store is only read, and that read
+    /// lock drops before this store's `create` takes its writer. `PINS`,
+    /// already held by `write_guard`, is what makes the check and the create
+    /// one step — the two stores do not lock each other.
+    fn reject_shared_declaration_name(
+        &self,
+        name: &str,
+        creating_secret: bool,
+    ) -> Result<(), VersionSchemaError> {
+        let taken = if creating_secret {
+            self.store
+                .variables()
+                .has(&Variable::to_path(&self.project_id, &self.version, name))
+        } else {
+            self.store
+                .secrets()
+                .has(&Secret::to_path(&self.project_id, &self.version, name))
+        };
+        if taken {
+            return Err(VersionSchemaError::InvalidDeclaration(format!(
+                "secret and variable share the name '{name}'"
+            )));
+        }
+        Ok(())
+    }
+
     /// Append `field_name` to every `auto_add` fieldset in this project+version
     /// for the given collection. If none exists, lazy-create the default,
     /// seeded with every existing field in this project+version so collections
@@ -828,6 +961,31 @@ pub(crate) fn parse_dependency(dep: &str) -> Option<(&str, &str)> {
     let (account, project) = project_id.split_once('/')?;
     let segment = |s: &str| !s.is_empty() && !s.contains(['/', '@']);
     (segment(account) && segment(project) && segment(version)).then_some((project_id, version))
+}
+
+/// A secret body is a declaration. `default` and `value` are a store's
+/// setting of it, and a package must not ship either. Presence of the key is
+/// enough — `null` counts. A body that is not an object is left for the
+/// deserializer.
+pub fn reject_secret_value(body: &serde_json::Value) -> Result<(), VersionSchemaError> {
+    let Some(obj) = body.as_object() else {
+        return Ok(());
+    };
+    let present: Vec<&str> = ["default", "value"]
+        .into_iter()
+        .filter(|key| obj.contains_key(*key))
+        .collect();
+    if present.is_empty() {
+        return Ok(());
+    }
+    let listed = present
+        .iter()
+        .map(|key| format!("'{key}'"))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    Err(VersionSchemaError::InvalidDeclaration(format!(
+        "a secret declares a name, not a value: remove {listed}"
+    )))
 }
 
 /// A field may declare only a type the validator enforces and the lake can
@@ -1074,6 +1232,75 @@ mod tests {
             panic!("directory mode did not block writes; this test needs a non-root user");
         }
         Unlock(dir.to_path_buf())
+    }
+
+    fn secret(name: &str) -> Secret {
+        Secret::new(
+            PROJECT.to_string(),
+            VERSION.to_string(),
+            name.to_string(),
+            String::new(),
+            String::new(),
+            false,
+        )
+    }
+
+    fn variable(name: &str) -> Variable {
+        Variable::new(
+            PROJECT.to_string(),
+            VERSION.to_string(),
+            name.to_string(),
+            String::new(),
+            String::new(),
+            false,
+            String::new(),
+        )
+    }
+
+    #[test]
+    fn secret_and_variable_cannot_share_a_name() {
+        let (_dir, store) = draft_schema();
+        let schema = VersionSchema::new(store, PROJECT, VERSION);
+        schema.create_secret(secret("consumer_key")).unwrap();
+        let err = schema
+            .create_variable(variable("consumer_key"))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "secret and variable share the name 'consumer_key'"
+        );
+        schema.create_variable(variable("api_base")).unwrap();
+        let err = schema.create_secret(secret("api_base")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "secret and variable share the name 'api_base'"
+        );
+        assert!(schema.secret("consumer_key").is_some());
+        assert!(schema.variable("api_base").is_some());
+    }
+
+    #[test]
+    fn secret_body_rejects_default_and_value() {
+        let err =
+            reject_secret_value(&serde_json::json!({"name": "k", "default": "x"})).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "a secret declares a name, not a value: remove 'default'"
+        );
+        assert_eq!(
+            crate::http::response::version_schema_error_to_response(err).status(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        let err = reject_secret_value(&serde_json::json!({"value": serde_json::Value::Null}))
+            .unwrap_err();
+        assert!(err.to_string().contains("'value'"));
+        let err =
+            reject_secret_value(&serde_json::json!({"default": "x", "value": "y"})).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "a secret declares a name, not a value: remove 'default' and 'value'"
+        );
+        assert!(reject_secret_value(&serde_json::json!({"name": "k", "label": "K"})).is_ok());
     }
 
     #[test]

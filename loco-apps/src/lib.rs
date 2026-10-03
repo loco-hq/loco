@@ -67,6 +67,41 @@ mod generated_tests {
     }
 
     #[test]
+    fn secret_and_variable_path_roundtrip() {
+        let secret = Secret::to_path("ben/crm", "0.0.1-dev", "consumer_key");
+        assert_eq!(secret, "ben/crm/versions/0.0.1-dev/secrets/consumer_key");
+        let vars = Secret::from_path(&secret).unwrap();
+        assert_eq!(vars.get("name").unwrap(), "consumer_key");
+
+        let variable = Variable::to_path("ben/crm", "0.0.1-dev", "api_base");
+        assert_eq!(variable, "ben/crm/versions/0.0.1-dev/variables/api_base");
+        let vars = Variable::from_path(&variable).unwrap();
+        assert_eq!(vars.get("project").unwrap(), "ben/crm");
+        assert_eq!(vars.get("name").unwrap(), "api_base");
+    }
+
+    #[test]
+    fn variable_yaml_default() {
+        let vars = std::collections::HashMap::from([
+            ("project".into(), "alice/bricklink".into()),
+            ("version".into(), "0.0.1-dev".into()),
+            ("name".into(), "api_base".into()),
+        ]);
+        let variable = Variable::from_yaml(
+            "label: API base\ndescription: BrickLink endpoint\nrequired: true\ndefault: https://example.test\n",
+            &vars,
+        )
+        .unwrap();
+        assert_eq!(variable.label(), "API base");
+        assert!(variable.required());
+        assert_eq!(variable.default(), "https://example.test");
+
+        let omitted = Variable::from_yaml("label: API base\n", &vars).unwrap();
+        assert_eq!(omitted.default(), "");
+        assert!(!omitted.required());
+    }
+
+    #[test]
     fn permission_set_path_roundtrip() {
         let path = PermissionSet::to_path("ben/crm", "0.0.1-dev", "public_contacts");
         assert_eq!(

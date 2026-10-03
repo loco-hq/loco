@@ -131,8 +131,12 @@ Persistence is `FileTreeFsAdapter` (`loco-schema-runtime`). Writes are whole-tre
 | field | `${project}/versions/${version}/fields/${collection}/${name}` |
 | fieldset | `${project}/versions/${version}/fieldsets/${collection}/${name}` |
 | permission_set | `${project}/versions/${version}/permission_sets/${name}` |
+| secret | `${project}/versions/${version}/secrets/${name}` |
+| variable | `${project}/versions/${version}/variables/${name}` |
 
-`${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `versions`).
+`${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `secrets`, `variables`, `versions`).
+
+`secret` and `variable` declare named configuration a version needs (`label`, `description`, `required`). A variable may also set `default` (a string; empty means none). A secret has no `default` and no `value` — a body carrying either is a 400, because the declaration never holds the value. A secret and a variable may not share a name in one version. Values are not stored here.
 
 An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalCases it into the generated struct name.
 
@@ -146,7 +150,7 @@ An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalC
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
-`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, and manifest into the new id — the publish primitive. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. The version's file trees (its `bundle`) are copied too — metadata is a version directory, not only its YAML. Datasets, sites, and records are never copied.
+`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, secrets, variables, and manifest into the new id — the publish primitive. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. The version's file trees (its `bundle`) are copied too — metadata is a version directory, not only its YAML. Datasets, sites, and records are never copied.
 
 ### Manifests and dependency visibility
 
@@ -161,8 +165,8 @@ Dependency grammar and the scoped view live in `loco-apps/src/http/version_schem
 #### Name resolution
 
 **Rule: an unqualified name always means _self_ — the project that owns the running
-version. A dependency's collection, field, fieldset, or permission set must be named
-fully qualified (`{user}/{project}.{name}`) to be reachable.**
+version. A dependency's collection, field, fieldset, permission set, secret, or
+variable must be named fully qualified (`{user}/{project}.{name}`) to be reachable.**
 
 The point is that installing a dependency can never silently change what an existing
 bare name resolves to. Resolution is a property of the name, not of manifest order.
@@ -190,8 +194,10 @@ dependency list for a match, so two deps that share a name are both addressable.
   (`collection_grant_matches`, `http/authz.rs`): a bare grant `contacts` in the
   consumer's set opens only the consumer's `contacts`, and in a set a dependency ships
   only the dependency's. A qualified grant names its owner exactly.
-- **Listings** (`collection/list`, `permission_set/list`) span self + direct deps and
-  return each item's `project`, from which a client builds the qualified name.
+- **Listings** (`collection/list`, `permission_set/list`, `secret/list`,
+  `variable/list`) span self + direct deps and return each item's `project`,
+  from which a client builds the qualified name. A bare secret or variable
+  name is this version's own; a dependency's is `loco/bricklink.consumer_key`.
 
 ### Fieldsets
 
@@ -219,7 +225,7 @@ Mounted in `server.rs`:
 | Prefix | Role |
 |--------|------|
 | `/data` | Record CRUD on `/data/{collection}/…` — bare for the site's own collection, a dependency's qualified and percent-encoded (`acme%2Fcrm.contacts`) — plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version — and `POST /data/query`, named batched reads with filters and cursors ([`docs/query.md`](docs/query.md)). Site-scoped via headers. Strict validation on write; diagnostics on read. |
-| `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, bundle). |
+| `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, permission sets, secrets, variables, bundle). |
 | `/config` | Unversioned project / dataset / site / version lifecycle. |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
 | *(fallback)* | Files from the request's site's **pinned version** bundle. `handlers/hosting.rs`. |

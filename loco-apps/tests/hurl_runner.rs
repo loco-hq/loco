@@ -159,6 +159,11 @@ fn suite_schema_crud() {
 }
 
 #[test]
+fn suite_schema_declarations() {
+    run_suite(&suites_dir().join("schema_declarations"));
+}
+
+#[test]
 fn suite_bundle() {
     let tmp = run_suite(&suites_dir().join("bundle"));
     // `missing_version.hurl`: every refused write left nothing behind.

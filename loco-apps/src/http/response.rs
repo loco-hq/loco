@@ -113,7 +113,8 @@ pub fn version_schema_error_to_response(
     match err {
         e @ (VersionSchemaError::NotWritable(_)
         | VersionSchemaError::InvalidDependency(_)
-        | VersionSchemaError::InvalidFieldType(_)) => {
+        | VersionSchemaError::InvalidFieldType(_)
+        | VersionSchemaError::InvalidDeclaration(_)) => {
             error_response(StatusCode::BAD_REQUEST, &e.to_string())
         }
         e @ VersionSchemaError::UnknownVersion(_) => {
