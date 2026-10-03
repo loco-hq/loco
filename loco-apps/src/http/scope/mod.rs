@@ -4,7 +4,7 @@
 //! - [`SiteScope`]: pinned to a site (X-Project-Id + X-Site-Id headers).
 //!   The single home for request-time authz (`require_authenticated`,
 //!   `require_developer`, `require_can_write_data`) and the read-only
-//!   schema view used by data routes. Access is membership, not the site.
+//!   schema view used by `/data` and `/actions`. Access is membership, not the site.
 //! - [`VersionScope`]: writable `VersionSchema` for the path
 //!   `{user}/{project}/{version}`. Developer (or org owner) required.
 //!   Used by `/schema` writes. Site headers are not required.

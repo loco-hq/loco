@@ -171,6 +171,28 @@ fn suite_schema_declarations() {
 }
 
 #[test]
+fn suite_actions() {
+    // The echo handler is registered here, not in the library and not in the
+    // server binary. `build_app` keeps an empty registry.
+    let mut actions = loco_apps::actions::HandlerRegistry::default();
+    actions.register("alice/fixture", "echo", |ctx| {
+        Ok(serde_json::json!({
+            "ran": true,
+            "dataset_id": ctx.dataset_id,
+            "caller": ctx.caller.username,
+            "input": ctx.input,
+        }))
+    });
+    run_suite_with(
+        &suites_dir().join("actions"),
+        AppOptions {
+            actions,
+            ..AppOptions::default()
+        },
+    );
+}
+
+#[test]
 fn suite_bundle() {
     let tmp = run_suite(&suites_dir().join("bundle"));
     // `missing_version.hurl`: every refused write left nothing behind.

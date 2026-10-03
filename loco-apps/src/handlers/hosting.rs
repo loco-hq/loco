@@ -8,9 +8,9 @@
 //! Rules, in order:
 //!
 //! 1. **Reserved prefixes always win.** `/data` `/schema` `/config` `/auth`
-//!    answer JSON here, never HTML, so a mistyped API path stays a JSON 404
-//!    instead of quietly returning an SPA shell that a client then tries to
-//!    parse.
+//!    `/actions` answer JSON here, never HTML, so a mistyped API path stays
+//!    a JSON 404 instead of quietly returning an SPA shell that a client
+//!    then tries to parse.
 //! 2. **No site, no files.** Without a [`RequestSite`] (the apex with no
 //!    `LOCO_DEFAULT_SITE`) this is the API-only process it has always been.
 //! 3. **SPA fallback** to the tree's `index.html` when the miss looks like a
@@ -38,7 +38,7 @@ use crate::server::AppState;
 use crate::{Bundle, Site};
 
 /// Paths the API owns. A request under one of these never sees the bundle.
-const RESERVED_PREFIXES: [&str; 4] = ["/data", "/schema", "/config", "/auth"];
+const RESERVED_PREFIXES: [&str; 5] = ["/data", "/schema", "/config", "/auth", "/actions"];
 
 pub async fn serve_site_files(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let path = req.uri().path().to_string();
@@ -211,6 +211,8 @@ mod tests {
             "/schema/a/b/c",
             "/config",
             "/auth/me",
+            "/actions",
+            "/actions/echo",
         ] {
             assert!(is_reserved(reserved), "{reserved} should be reserved");
         }
@@ -220,6 +222,8 @@ mod tests {
             "/authors/1",
             "/assets/data.js",
             "/schemas",
+            "/action",
+            "/actionable",
         ] {
             assert!(!is_reserved(served), "{served} should be servable");
         }
