@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
@@ -36,7 +37,7 @@ pub struct AppState {
     pub actions: HandlerRegistry,
 }
 
-fn build_data_adapter() -> Box<dyn DataAdapter> {
+fn build_data_adapter(sqlite_path: Option<&Path>) -> Box<dyn DataAdapter> {
     let adapter_type = std::env::var("LOCO_ADAPTER").unwrap_or_else(|_| "sqlite".to_string());
     match adapter_type.as_str() {
         "memory" => {
@@ -44,12 +45,14 @@ fn build_data_adapter() -> Box<dyn DataAdapter> {
             Box::new(InMemoryAdapter::new())
         }
         "sqlite" => {
-            let path = std::env::var("LOCO_DB_PATH").unwrap_or_else(|_| "loco.db".to_string());
-            println!("Using SQLite adapter ({path})");
-            Box::new(
-                SqliteAdapter::new(std::path::Path::new(&path))
-                    .expect("failed to open SQLite database"),
-            )
+            // No root here. Callers that resolved against `LOCO_ROOT` pass
+            // the path in. Everyone else, including tests, keeps the env
+            // string relative to the working directory.
+            let path = sqlite_path.map(Path::to_path_buf).unwrap_or_else(|| {
+                resolve_sqlite_path(None, std::env::var("LOCO_DB_PATH").ok().as_deref())
+            });
+            println!("Using SQLite adapter ({})", path.display());
+            Box::new(SqliteAdapter::new(&path).expect("failed to open SQLite database"))
         }
         other => panic!("unknown LOCO_ADAPTER: {other} (expected \"sqlite\" or \"memory\")"),
     }
@@ -71,6 +74,80 @@ pub struct AppOptions {
     /// what [`build_app`] ships. The Hurl fixture handler is registered by
     /// the test runner, so it is not in the server binary.
     pub actions: HandlerRegistry,
+    /// SQLite file to open when the adapter is `sqlite`.
+    ///
+    /// `None` reads `LOCO_DB_PATH` (default `loco.db`) and opens that path
+    /// as given, so a relative path stays relative to the working directory.
+    /// [`build_app`] leaves this unset. `main` sets it after
+    /// [`resolve_sqlite_path`]: joined onto `LOCO_ROOT` only when that
+    /// variable is set, and left relative when it is not.
+    pub sqlite_path: Option<PathBuf>,
+}
+
+/// Default SQLite file name. A relative path. See [`resolve_sqlite_path`].
+const DEFAULT_SQLITE_FILE: &str = "loco.db";
+
+/// Crate directory (`loco-apps/`). The schema and auth root when `LOCO_ROOT`
+/// is unset.
+pub fn default_data_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// `LOCO_ROOT` when it names a directory. Blank is unset: the process keeps
+/// [`default_data_root`] and does not move the SQLite file.
+pub fn parse_loco_root(value: Option<&str>) -> Option<PathBuf> {
+    let value = value?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+/// SQLite path the process opens.
+///
+/// `root` is `Some` only when `LOCO_ROOT` is set. The default file
+/// (`loco.db`) and a relative `LOCO_DB_PATH` are then joined onto that
+/// root. When `root` is `None`, the path is `LOCO_DB_PATH` or `loco.db`
+/// and a relative path stays relative to the working directory.
+///
+/// `cargo run -p loco-apps` from the repo root, with `LOCO_ROOT` unset,
+/// opens `./loco.db` there. The schema root in that case is still
+/// `loco-apps/`. Joining the database onto that directory would open a
+/// different file.
+///
+/// An absolute `LOCO_DB_PATH` is used as given in both cases. An empty
+/// string is a relative path, the same as an empty `LOCO_DB_PATH` was
+/// before `LOCO_ROOT` existed.
+pub fn resolve_sqlite_path(root: Option<&Path>, db_path: Option<&str>) -> PathBuf {
+    let raw = db_path.unwrap_or(DEFAULT_SQLITE_FILE);
+    let path = Path::new(raw);
+    match root {
+        Some(root) if path.is_relative() => root.join(path),
+        _ => PathBuf::from(raw),
+    }
+}
+
+/// Absolute form of `path` for the startup log. The file does not have to
+/// exist, and symlinks are left as written. This does not change the path
+/// [`resolve_sqlite_path`] returns: with `LOCO_ROOT` unset that path stays
+/// relative so the open follows the working directory.
+pub fn absolute_path(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// `PORT`, or 3000 when the variable is unset. Blank and non-numeric values
+/// are errors. `0` and `65535` are in range.
+pub fn resolve_port(value: Option<&str>) -> Result<u16, String> {
+    let Some(raw) = value else {
+        return Ok(3000);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("PORT is empty; set a number from 0 to 65535".to_string());
+    }
+    raw.parse::<u16>()
+        .map_err(|_| format!("PORT must be a number from 0 to 65535, got {raw}"))
 }
 
 fn build_auth_adapter(root: &std::path::Path, options: &AppOptions) -> Box<dyn AuthAdapter> {
@@ -89,7 +166,7 @@ fn build_auth_adapter(root: &std::path::Path, options: &AppOptions) -> Box<dyn A
 }
 
 pub fn build_app() -> Router {
-    build_app_with_root(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
+    build_app_with_root(default_data_root())
 }
 
 pub fn build_app_with_root(root: &std::path::Path) -> Router {
@@ -115,7 +192,8 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         KeyStatus::Ready(_) => {}
     }
 
-    let data_adapter: Arc<dyn DataAdapter> = Arc::from(build_data_adapter());
+    let data_adapter: Arc<dyn DataAdapter> =
+        Arc::from(build_data_adapter(options.sqlite_path.as_deref()));
     let secrets: Arc<dyn SecretStore> =
         Arc::new(LakeSecretStore::new(data_adapter.clone(), secret_key));
     let http = crate::actions::http_client();
@@ -228,4 +306,96 @@ fn cors_layer() -> CorsLayer {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_path_stays_cwd_relative_when_root_is_unset() {
+        let path = resolve_sqlite_path(None, None);
+        assert_eq!(path, Path::new("loco.db"));
+        assert!(path.is_relative());
+        // The schema root is the crate directory. The database is not under it.
+        assert!(default_data_root().join("loco.db").is_absolute());
+        assert_ne!(path, default_data_root().join("loco.db"));
+    }
+
+    #[test]
+    fn sqlite_path_keeps_a_relative_override_when_root_is_unset() {
+        assert_eq!(
+            resolve_sqlite_path(None, Some("data/app.db")),
+            Path::new("data/app.db")
+        );
+        assert_eq!(resolve_sqlite_path(None, Some("")), Path::new(""));
+    }
+
+    #[test]
+    fn sqlite_path_joins_relative_paths_when_root_is_set() {
+        let root = Path::new("/tmp/x");
+        assert_eq!(
+            resolve_sqlite_path(Some(root), None),
+            Path::new("/tmp/x/loco.db")
+        );
+        assert_eq!(
+            resolve_sqlite_path(Some(root), Some("data/app.db")),
+            Path::new("/tmp/x/data/app.db")
+        );
+        assert_eq!(resolve_sqlite_path(Some(root), Some("")), root);
+    }
+
+    #[test]
+    fn sqlite_path_keeps_an_absolute_override() {
+        let absolute = "/var/loco/app.db";
+        assert_eq!(
+            resolve_sqlite_path(None, Some(absolute)),
+            Path::new(absolute)
+        );
+        assert_eq!(
+            resolve_sqlite_path(Some(Path::new("/tmp/x")), Some(absolute)),
+            Path::new(absolute)
+        );
+    }
+
+    #[test]
+    fn blank_loco_root_is_unset() {
+        assert!(parse_loco_root(None).is_none());
+        assert!(parse_loco_root(Some("")).is_none());
+        assert!(parse_loco_root(Some("   ")).is_none());
+        assert_eq!(
+            parse_loco_root(Some(" /tmp/x ")).as_deref(),
+            Some(Path::new("/tmp/x"))
+        );
+    }
+
+    #[test]
+    fn absolute_path_logs_a_relative_database_under_the_working_directory() {
+        let logged = absolute_path(Path::new("loco.db"));
+        assert!(logged.is_absolute());
+        assert_eq!(logged.file_name().unwrap(), "loco.db");
+        assert_eq!(logged, std::env::current_dir().unwrap().join("loco.db"));
+        assert_eq!(
+            absolute_path(Path::new("/tmp/x/loco.db")),
+            Path::new("/tmp/x/loco.db")
+        );
+    }
+
+    #[test]
+    fn port_defaults_and_parses() {
+        assert_eq!(resolve_port(None).unwrap(), 3000);
+        assert_eq!(resolve_port(Some("3100")).unwrap(), 3100);
+        assert_eq!(resolve_port(Some(" 3100 ")).unwrap(), 3100);
+        assert_eq!(resolve_port(Some("0")).unwrap(), 0);
+        assert_eq!(resolve_port(Some("65535")).unwrap(), 65535);
+    }
+
+    #[test]
+    fn port_rejects_blank_and_non_numeric() {
+        assert!(resolve_port(Some("")).is_err());
+        assert!(resolve_port(Some("   ")).is_err());
+        assert!(resolve_port(Some("http")).is_err());
+        assert!(resolve_port(Some("65536")).is_err());
+        assert!(resolve_port(Some("-1")).is_err());
+    }
 }

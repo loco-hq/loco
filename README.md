@@ -181,11 +181,19 @@ curl -X POST 'http://localhost:3000/data/pet/add' \
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `LOCO_ROOT` | crate directory (`loco-apps/`) | Directory for `schemas/` and `auth/`. See below for the database. |
+| `PORT` | `3000` | TCP port. The server binds `0.0.0.0`. |
 | `LOCO_ADAPTER` | `sqlite` | Data adapter: `sqlite` or `memory` |
-| `LOCO_DB_PATH` | `loco.db` | SQLite file (created next to the process cwd) |
+| `LOCO_DB_PATH` | `loco.db` | SQLite file. Relative to the working directory when `LOCO_ROOT` is unset; relative to `LOCO_ROOT` when that is set. An absolute path is used as given. |
 | `LOCO_AUTH_ADAPTER` | `local` | Auth adapter. Only `local` exists. |
 | `LOCO_AUTH_AUTO_CREATE` | unset | If `1`/`true`, login of an unknown handle creates a person account (Hurl sets this). |
 | `LOCO_DEFAULT_SITE` | unset | `{account}/{project}/{site}`. Which site the apex serves at `/`. Unset is an API-only process. |
+
+With neither `LOCO_ROOT` nor `PORT` set, the server listens on `0.0.0.0:3000` and opens the SQLite file in the working directory (`./loco.db`, or `LOCO_DB_PATH` as written). `cargo run -p loco-apps` from the repo root keeps that repo-root database. `LOCO_ROOT` runs an isolated server: `schemas/`, `auth/`, and a relative database path are all under that directory. Startup logs the absolute root and the absolute database path.
+
+```bash
+LOCO_ROOT=/tmp/x PORT=3100 cargo run -p loco-apps
+```
 
 ## Frontends
 
