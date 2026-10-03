@@ -20,8 +20,12 @@ pub struct AppState {
     pub data_adapter: Arc<dyn DataAdapter>,
     pub auth_adapter: Box<dyn AuthAdapter>,
     pub schema: Arc<SchemaStore>,
-    /// Plaintext trait. The lake impl encrypts. See `crate::values`.
-    pub secrets: Box<dyn SecretStore>,
+    /// Plaintext trait. The lake impl encrypts. Handlers clone this `Arc`.
+    /// See `crate::values`.
+    pub secrets: Arc<dyn SecretStore>,
+    /// Shared by action handlers. No proxy. A redirect that changes scheme,
+    /// host, or port is not followed. See [`crate::actions::http_client`].
+    pub http: reqwest::Client,
     /// The site the apex serves at `/`, as `({account}/{project}, {site})`.
     /// `None` is the API-only process. A host that names a site of its own
     /// always wins over this.
@@ -112,8 +116,9 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
     }
 
     let data_adapter: Arc<dyn DataAdapter> = Arc::from(build_data_adapter());
-    let secrets: Box<dyn SecretStore> =
-        Box::new(LakeSecretStore::new(data_adapter.clone(), secret_key));
+    let secrets: Arc<dyn SecretStore> =
+        Arc::new(LakeSecretStore::new(data_adapter.clone(), secret_key));
+    let http = crate::actions::http_client();
     let auth_adapter = build_auth_adapter(root, &options);
     warn_projects_without_account(&schema, auth_adapter.as_ref());
     let default_site = resolve_default_site(&schema, &options);
@@ -123,6 +128,7 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         auth_adapter,
         schema,
         secrets,
+        http,
         default_site,
         actions: options.actions,
     });

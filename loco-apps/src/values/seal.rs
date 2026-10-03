@@ -1,7 +1,7 @@
 //! AES-256-GCM for dataset secret values.
 //!
 //! This is not `crate::auth::secret`, which hashes passwords and API keys.
-//! A secret value is reversible: a later handler (#102) has to read it back.
+//! A secret value is reversible: an action handler reads it back.
 //! The key never goes on disk. Each write draws a fresh 12-byte nonce, and
 //! the ciphertext is bound to the dataset id and the declaration name, so a
 //! row copied onto another name or dataset does not open.

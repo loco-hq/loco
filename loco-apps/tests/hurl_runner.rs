@@ -47,20 +47,21 @@ fn run_suite(suite_dir: &Path) -> tempfile::TempDir {
 /// environment. Returns the server root so a caller can assert on what the
 /// suite did (or did not) write to disk.
 fn run_suite_with(suite_dir: &Path, options: AppOptions) -> tempfile::TempDir {
-    run_suite_in(suite_dir, options, &[])
+    run_suite_in(suite_dir, options, &[], &[])
 }
 
 /// As `run_suite`, with the named accounts' committed seed trees
 /// (`schemas/seed/{account}/`) copied into the root's `schemas/seed/`, so the
 /// server seeds its store from them on boot exactly as it does for real.
 fn run_suite_over_seed(suite_dir: &Path, accounts: &[&str]) -> tempfile::TempDir {
-    run_suite_in(suite_dir, AppOptions::default(), accounts)
+    run_suite_in(suite_dir, AppOptions::default(), accounts, &[])
 }
 
 fn run_suite_in(
     suite_dir: &Path,
     options: AppOptions,
     seed_accounts: &[&str],
+    variables: &[(&str, &str)],
 ) -> tempfile::TempDir {
     // 1. Build server root in a tempdir
     let tmp = tempfile::TempDir::new().unwrap();
@@ -132,12 +133,17 @@ fn run_suite_in(
     // 6. Run hurl
     // `--jobs 1`: hurl 5+ parallelizes by default in test mode, but our suites
     // share one in-memory server, so parallel files race on schema state.
-    let output = Command::new("hurl")
+    let mut command = Command::new("hurl");
+    command
         .arg("--test")
         .arg("--jobs")
         .arg("1")
         .arg("--variable")
-        .arg(format!("port={port}"))
+        .arg(format!("port={port}"));
+    for (key, value) in variables {
+        command.arg("--variable").arg(format!("{key}={value}"));
+    }
+    let output = command
         .args(&hurl_files)
         .output()
         .expect("failed to run hurl — is it installed? (brew install hurl)");
@@ -172,10 +178,14 @@ fn suite_schema_declarations() {
 
 #[test]
 fn suite_actions() {
-    // The echo handler is registered here, not in the library and not in the
-    // server binary. `build_app` keeps an empty registry.
+    // Fixture handlers are registered here, not in the library and not in
+    // the server binary. `build_app` keeps an empty registry. `pull`'s
+    // upstream URL arrives as a variable the store sets; the default in the
+    // declaration points nowhere.
+    let upstream_port = start_upstream();
+    let upstream = format!("http://127.0.0.1:{upstream_port}");
     let mut actions = loco_apps::actions::HandlerRegistry::default();
-    actions.register("alice/fixture", "echo", |ctx| {
+    actions.register("alice/fixture", "echo", |ctx| async move {
         Ok(serde_json::json!({
             "ran": true,
             "dataset_id": ctx.dataset_id,
@@ -183,13 +193,118 @@ fn suite_actions() {
             "input": ctx.input,
         }))
     });
-    run_suite_with(
+    actions.register("alice/pkg", "pull", |ctx| async move { pull(ctx).await });
+    run_suite_in(
         &suites_dir().join("actions"),
         AppOptions {
             actions,
             ..AppOptions::default()
         },
+        &[],
+        &[("upstream", upstream.as_str())],
     );
+}
+
+/// `GET /ok` is 200 `upstream ok`. `GET /fail` is 503 `upstream is down`.
+fn start_upstream() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let _ = answer_upstream(stream);
+        }
+    });
+    port
+}
+
+fn answer_upstream(mut stream: std::net::TcpStream) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 1024];
+    loop {
+        match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 8192 {
+                    break;
+                }
+            }
+            Err(err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                break;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    let req = String::from_utf8_lossy(&buf);
+    let path = req.split_whitespace().nth(1).unwrap_or("/");
+    let (status, reason, body) = match path {
+        "/ok" => (200, "OK", "upstream ok"),
+        "/fail" => (503, "Service Unavailable", "upstream is down"),
+        _ => (404, "Not Found", "no"),
+    };
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes())?;
+    stream.flush()
+}
+
+async fn pull(
+    ctx: loco_apps::actions::ActionContext,
+) -> Result<serde_json::Value, loco_apps::actions::ActionFailure> {
+    use loco_apps::actions::{ActionFailure, ConfigReadError};
+    use loco_lake::Value;
+
+    fn read_config(
+        result: Result<Option<String>, ConfigReadError>,
+    ) -> Result<serde_json::Value, ActionFailure> {
+        match result {
+            Ok(value) => Ok(serde_json::json!(value)),
+            Err(ConfigReadError::Undeclared { kind, name }) => Ok(serde_json::json!({
+                "error": format!("{kind} '{name}' is not declared by this package")
+            })),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    let mut body = serde_json::json!({
+        "ran": true,
+        "dataset_id": ctx.dataset_id,
+        "token": read_config(ctx.secret("token"))?,
+        "store_only": read_config(ctx.secret("store_only"))?,
+        "upstream": read_config(ctx.variable("upstream"))?,
+        "label": read_config(ctx.variable("label"))?,
+        "region": read_config(ctx.variable("region"))?,
+    });
+    let call = matches!(ctx.input.get("call"), Some(Value::Boolean(true)));
+    if call {
+        let base = ctx
+            .variable("upstream")?
+            .ok_or_else(|| ActionFailure::BadInput {
+                message: "variable 'upstream' is not set".into(),
+                diagnostics: Vec::new(),
+            })?;
+        let path = match ctx.input.get("path") {
+            Some(Value::String(path)) => path.clone(),
+            _ => "/ok".to_string(),
+        };
+        let response = ctx.http().get(format!("{base}{path}")).send().await?;
+        let status = response.status().as_u16();
+        let message = response.text().await.unwrap_or_default().trim().to_string();
+        // This fixture's failure body is a fixed string. A handler must not
+        // forward an upstream body that echoes the request.
+        if !(200..300).contains(&status) {
+            return Err(ActionFailure::Upstream { status, message });
+        }
+        body["http_body"] = serde_json::json!(message);
+    }
+    Ok(body)
 }
 
 #[test]

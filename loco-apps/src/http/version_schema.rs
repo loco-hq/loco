@@ -91,6 +91,7 @@ impl From<loco_schema_runtime::Error> for VersionSchemaError {
     }
 }
 
+#[derive(Clone)]
 pub struct VersionSchema {
     store: Arc<SchemaStore>,
     project_id: String,
@@ -746,6 +747,36 @@ impl VersionSchema {
             .get(&Secret::to_path(project, version, bare))
     }
 
+    /// Secrets `owner` declares on the version this view sees.
+    ///
+    /// `owner` is a project id (`alice/pkg`). An owner that is not self or a
+    /// direct dependency yields an empty list. This does not go through
+    /// [`Self::split`]: the running project's secret of the same bare name is
+    /// absent unless `owner` is that project.
+    pub fn secrets_of(&self, owner: &str) -> Vec<Arc<Secret>> {
+        let Some(version) = self.visible_version(owner) else {
+            return Vec::new();
+        };
+        let prefix = format!("{owner}/versions/{version}/secrets/");
+        self.store
+            .secrets()
+            .list(&prefix)
+            .into_iter()
+            .map(|(_, secret)| secret)
+            .collect()
+    }
+
+    /// The secret `name` that `owner` declares on the version this view sees.
+    ///
+    /// `name` is bare. A qualified string does not match, and [`Self::split`]
+    /// is not used, so the running project's own `name` is a different secret.
+    pub fn secret_of(&self, owner: &str, name: &str) -> Option<Arc<Secret>> {
+        let version = self.visible_version(owner)?;
+        self.store
+            .secrets()
+            .get(&Secret::to_path(owner, version, name))
+    }
+
     pub fn create_secret(&self, mut input: Secret) -> Result<Arc<Secret>, VersionSchemaError> {
         let _pins = self.write_guard()?;
         self.reject_shared_declaration_name(&input.name, true)?;
@@ -793,6 +824,32 @@ impl VersionSchema {
         self.store
             .variables()
             .get(&Variable::to_path(project, version, bare))
+    }
+
+    /// Variables `owner` declares on the version this view sees.
+    ///
+    /// Same owner rule as [`Self::secrets_of`].
+    pub fn variables_of(&self, owner: &str) -> Vec<Arc<Variable>> {
+        let Some(version) = self.visible_version(owner) else {
+            return Vec::new();
+        };
+        let prefix = format!("{owner}/versions/{version}/variables/");
+        self.store
+            .variables()
+            .list(&prefix)
+            .into_iter()
+            .map(|(_, variable)| variable)
+            .collect()
+    }
+
+    /// The variable `name` that `owner` declares on the version this view sees.
+    ///
+    /// Same bare-name rule as [`Self::secret_of`].
+    pub fn variable_of(&self, owner: &str, name: &str) -> Option<Arc<Variable>> {
+        let version = self.visible_version(owner)?;
+        self.store
+            .variables()
+            .get(&Variable::to_path(owner, version, name))
     }
 
     pub fn create_variable(
