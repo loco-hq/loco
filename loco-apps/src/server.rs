@@ -5,6 +5,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter};
 
+use crate::actions::HandlerRegistry;
 use crate::auth::local::LocalAuthAdapter;
 use crate::auth::AuthAdapter;
 use crate::handlers;
@@ -25,6 +26,10 @@ pub struct AppState {
     /// `None` is the API-only process. A host that names a site of its own
     /// always wins over this.
     pub default_site: Option<(String, String)>,
+    /// Declared-action handlers, keyed by owning project and bare name.
+    /// Empty unless a caller of [`build_app_with_options`] registers some.
+    /// The server binary does not.
+    pub actions: HandlerRegistry,
 }
 
 fn build_data_adapter() -> Box<dyn DataAdapter> {
@@ -58,6 +63,10 @@ pub struct AppOptions {
     /// There is no default here and there must not be one: a Loco process is
     /// not a Studio process. Whoever runs it says which app it hosts.
     pub default_site: Option<String>,
+    /// Handlers for declared actions. [`Default`] registers none, which is
+    /// what [`build_app`] ships. The Hurl fixture handler is registered by
+    /// the test runner, so it is not in the server binary.
+    pub actions: HandlerRegistry,
 }
 
 fn build_auth_adapter(root: &std::path::Path, options: &AppOptions) -> Box<dyn AuthAdapter> {
@@ -115,6 +124,7 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         schema,
         secrets,
         default_site,
+        actions: options.actions,
     });
 
     Router::new()
@@ -122,6 +132,7 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         .nest("/schema", handlers::schema::router())
         .nest("/config", handlers::config::router())
         .nest("/auth", handlers::auth::router())
+        .nest("/actions", handlers::actions::router())
         // Everything the API does not own is a request for the site's pinned
         // version bundle. Reserved prefixes are re-checked inside, because a
         // nested router with no fallback of its own lands here too and a

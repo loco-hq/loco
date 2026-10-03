@@ -6,6 +6,7 @@ const apiProxy = {
   '/config': 'http://localhost:3000',
   '/schema': 'http://localhost:3000',
   '/data': 'http://localhost:3000',
+  '/actions': 'http://localhost:3000',
 };
 
 export default defineConfig(({ command }) => ({

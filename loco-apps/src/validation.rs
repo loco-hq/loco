@@ -15,7 +15,7 @@ use serde::Serialize;
 use loco_lake::Value;
 
 use crate::http::version_schema::VersionSchema;
-use crate::Field;
+use crate::Action;
 
 /// Stable string identifiers for the `kind` field on diagnostics. Clients can
 /// switch on these. Using string constants (not an enum) keeps the set open
@@ -144,63 +144,136 @@ fn check_record(
 ) -> ValidationReport {
     let field_defs = schema.fields_of(owner, collection);
     let collection = schema.reference(owner, collection);
-    let by_name: HashMap<&str, &Field> = field_defs.iter().map(|f| (f.name(), &**f)).collect();
+    let specs: Vec<ScalarSpec> = field_defs
+        .iter()
+        .map(|field| ScalarSpec {
+            name: field.name(),
+            ty: field.r#type(),
+            required: field.required,
+            options: field.options().iter().map(|o| o.value()).collect(),
+        })
+        .collect();
+    check_scalars(
+        &specs,
+        fields,
+        &[],
+        mode,
+        Wording {
+            noun: "field",
+            container: &format!("collection '{collection}'"),
+            version: schema.version(),
+        },
+        projection,
+    )
+}
+
+/// One declared scalar, whether it is a collection field or an action param.
+struct ScalarSpec<'a> {
+    name: &'a str,
+    ty: &'a str,
+    required: bool,
+    options: Vec<&'a str>,
+}
+
+/// The words that distinguish a field diagnostic from a param diagnostic.
+/// The `kind` strings stay the `/data` ones either way.
+#[derive(Clone, Copy)]
+struct Wording<'a> {
+    noun: &'a str,
+    container: &'a str,
+    version: &'a str,
+}
+
+/// `check_record` and [`validate_action_input`] share this walk. `non_scalars`
+/// are input values the lake `Value` cannot hold (a JSON array or object);
+/// record checks pass an empty list because `/data` already rejected those
+/// at the body parser.
+fn check_scalars(
+    specs: &[ScalarSpec<'_>],
+    fields: &HashMap<String, Value>,
+    non_scalars: &[(String, &'static str)],
+    mode: ValidationMode,
+    wording: Wording<'_>,
+    projection: Option<&[String]>,
+) -> ValidationReport {
+    let by_name: HashMap<&str, &ScalarSpec> = specs.iter().map(|spec| (spec.name, spec)).collect();
 
     let make = |kind: &str, path: Option<String>, message: String| match mode {
         ValidationMode::Create | ValidationMode::Update => Diagnostic::error(kind, path, message),
         ValidationMode::Read => Diagnostic::warning(kind, path, message),
     };
+    let unknown = |name: &str| {
+        make(
+            kind::UNKNOWN_FIELD,
+            Some(name.to_string()),
+            format!(
+                "{} '{name}' is not declared in {} (version {})",
+                wording.noun, wording.container, wording.version
+            ),
+        )
+    };
 
-    let version = schema.version();
     let mut diagnostics = Vec::new();
 
     for (name, value) in fields {
-        let Some(field) = by_name.get(name.as_str()).copied() else {
-            diagnostics.push(make(
-                kind::UNKNOWN_FIELD,
-                Some(name.clone()),
-                format!(
-                    "field '{name}' is not declared in collection '{collection}' (version {version})"
-                ),
-            ));
+        let Some(spec) = by_name.get(name.as_str()).copied() else {
+            diagnostics.push(unknown(name));
             continue;
         };
-
-        let declared = field.r#type();
-        if field.required && is_blank(field, value) {
+        let declared = spec.ty;
+        if spec.required && is_blank(declared, value) {
             diagnostics.push(make(
                 kind::REQUIRED,
                 Some(name.clone()),
-                format!("field '{name}' is required"),
+                format!("{} '{name}' is required", wording.noun),
             ));
         } else if let Some(actual) = type_mismatch(declared, value) {
             diagnostics.push(make(
                 kind::TYPE_MISMATCH,
                 Some(name.clone()),
-                format!("field '{name}' expected type '{declared}', got '{actual}'"),
+                format!(
+                    "{} '{name}' expected type '{declared}', got '{actual}'",
+                    wording.noun
+                ),
             ));
-        } else if let Some(given) = invalid_option(field, value) {
-            let allowed: Vec<&str> = field.options().iter().map(|o| o.value()).collect();
+        } else if let Some(given) = invalid_option(declared, &spec.options, value) {
             diagnostics.push(make(
                 kind::INVALID_OPTION,
                 Some(name.clone()),
                 format!(
-                    "field '{name}' must be one of [{}], got '{given}'",
-                    allowed.join(", ")
+                    "{} '{name}' must be one of [{}], got '{given}'",
+                    wording.noun,
+                    spec.options.join(", ")
                 ),
             ));
         }
     }
 
+    for (name, actual) in non_scalars {
+        let Some(spec) = by_name.get(name.as_str()).copied() else {
+            diagnostics.push(unknown(name));
+            continue;
+        };
+        diagnostics.push(make(
+            kind::TYPE_MISMATCH,
+            Some(name.clone()),
+            format!(
+                "{} '{name}' expected type '{}', got '{actual}'",
+                wording.noun, spec.ty
+            ),
+        ));
+    }
+
     if !matches!(mode, ValidationMode::Update) {
-        for field in field_defs.iter().filter(|f| f.required) {
-            let name = field.name();
-            let read = projection.is_none_or(|p| p.iter().any(|n| n == name));
-            if read && !fields.contains_key(name) {
+        for spec in specs.iter().filter(|spec| spec.required) {
+            let present = fields.contains_key(spec.name)
+                || non_scalars.iter().any(|(name, _)| name == spec.name);
+            let read = projection.is_none_or(|p| p.iter().any(|n| n == spec.name));
+            if read && !present {
                 diagnostics.push(make(
                     kind::REQUIRED,
-                    Some(name.to_string()),
-                    format!("field '{name}' is required"),
+                    Some(spec.name.to_string()),
+                    format!("{} '{}' is required", wording.noun, spec.name),
                 ));
             }
         }
@@ -209,14 +282,14 @@ fn check_record(
     ValidationReport { diagnostics }
 }
 
-/// Whether `value` leaves a required field unfilled: `Null` for any type, and
-/// `""` for a string field. An empty string is what a cleared text input
-/// sends, so if it counted as a value, `required` would stop nothing a form
-/// submits. `false` and `0` are values.
-fn is_blank(field: &Field, value: &Value) -> bool {
+/// Whether `value` leaves a required scalar unfilled: `Null` for any type, and
+/// `""` for a string. An empty string is what a cleared text input sends, so
+/// if it counted as a value, `required` would stop nothing a form submits.
+/// `false` and `0` are values.
+fn is_blank(declared: &str, value: &Value) -> bool {
     match value {
         Value::Null => true,
-        Value::String(s) => s.is_empty() && field.r#type() == "string",
+        Value::String(s) => s.is_empty() && declared == "string",
         _ => false,
     }
 }
@@ -251,14 +324,14 @@ fn type_mismatch(declared: &str, value: &Value) -> Option<&'static str> {
 /// Return the offending string if `field` is a string field that declares
 /// `options` and `value` is not one of them. A field without options, a
 /// non-string field, and `Null` all pass.
-fn invalid_option<'v>(field: &Field, value: &'v Value) -> Option<&'v str> {
+fn invalid_option<'v>(declared: &str, options: &[&str], value: &'v Value) -> Option<&'v str> {
     let Value::String(s) = value else {
         return None;
     };
-    if field.r#type() != "string" || field.options().is_empty() {
+    if declared != "string" || options.is_empty() {
         return None;
     }
-    if field.options().iter().any(|o| o.value() == s) {
+    if options.contains(&s.as_str()) {
         None
     } else {
         Some(s)
@@ -297,6 +370,75 @@ where
         }
     }
     combined
+}
+
+/// Validate `input` against `action`'s params, the same walk and the same
+/// diagnostic kinds as a `/data` create. `Ok` is the input as lake values,
+/// ready for the handler. `Err` means the handler must not run.
+///
+/// Params stay in the order the action declares them. A JSON array or object
+/// is a `type_mismatch`: the lake value is scalar only. The message says
+/// `param` where a record says `field`.
+pub fn validate_action_input(
+    schema: &VersionSchema,
+    action: &Action,
+    input: &serde_json::Map<String, serde_json::Value>,
+) -> Result<HashMap<String, Value>, ValidationReport> {
+    let action_ref = schema.reference(action.project(), action.name());
+    let specs: Vec<ScalarSpec> = action
+        .params()
+        .iter()
+        .map(|param| ScalarSpec {
+            name: param.name(),
+            ty: param.r#type(),
+            required: param.required,
+            options: param
+                .options()
+                .iter()
+                .map(|option| option.value())
+                .collect(),
+        })
+        .collect();
+
+    let mut scalars = HashMap::new();
+    let mut non_scalars = Vec::new();
+    for (name, value) in input {
+        match coerce_scalar(value) {
+            Ok(value) => {
+                scalars.insert(name.clone(), value);
+            }
+            Err(actual) => non_scalars.push((name.clone(), actual)),
+        }
+    }
+
+    let report = check_scalars(
+        &specs,
+        &scalars,
+        &non_scalars,
+        ValidationMode::Create,
+        Wording {
+            noun: "param",
+            container: &format!("action '{action_ref}'"),
+            version: schema.version(),
+        },
+        None,
+    );
+    if report.has_errors() {
+        Err(report)
+    } else {
+        Ok(scalars)
+    }
+}
+
+/// Lake values are scalars. Anything else is named so a diagnostic can say
+/// what arrived. A number the lake value rejects (it cannot be an i64 or an
+/// f64) is reported as `number`.
+fn coerce_scalar(value: &serde_json::Value) -> Result<Value, &'static str> {
+    match value {
+        serde_json::Value::Array(_) => Err("array"),
+        serde_json::Value::Object(_) => Err("object"),
+        other => serde_json::from_value(other.clone()).map_err(|_| "number"),
+    }
 }
 
 #[cfg(test)]
@@ -401,5 +543,68 @@ mod tests {
             type_mismatch("boolean", &Value::String("true".into())),
             Some("string")
         );
+    }
+
+    #[test]
+    fn field_messages_keep_their_wording() {
+        let specs = [ScalarSpec {
+            name: "quantity",
+            ty: "integer",
+            required: true,
+            options: Vec::new(),
+        }];
+        let fields = HashMap::from([("color".into(), Value::String("red".into()))]);
+        let report = check_scalars(
+            &specs,
+            &fields,
+            &[],
+            ValidationMode::Create,
+            Wording {
+                noun: "field",
+                container: "collection 'items'",
+                version: "0.0.1-dev",
+            },
+            None,
+        );
+        let unknown = report
+            .diagnostics
+            .iter()
+            .find(|d| d.kind == kind::UNKNOWN_FIELD)
+            .unwrap();
+        assert_eq!(
+            unknown.message,
+            "field 'color' is not declared in collection 'items' (version 0.0.1-dev)"
+        );
+        let required = report
+            .diagnostics
+            .iter()
+            .find(|d| d.kind == kind::REQUIRED)
+            .unwrap();
+        assert_eq!(required.message, "field 'quantity' is required");
+
+        let specs = [ScalarSpec {
+            name: "size",
+            ty: "string",
+            required: true,
+            options: vec!["s", "m"],
+        }];
+        let fields = HashMap::from([("size".into(), Value::String("xl".into()))]);
+        let report = check_scalars(
+            &specs,
+            &fields,
+            &[],
+            ValidationMode::Create,
+            Wording {
+                noun: "field",
+                container: "collection 'items'",
+                version: "0.0.1-dev",
+            },
+            None,
+        );
+        assert_eq!(
+            report.diagnostics[0].message,
+            "field 'size' must be one of [s, m], got 'xl'"
+        );
+        assert_eq!(report.diagnostics[0].kind, kind::INVALID_OPTION);
     }
 }

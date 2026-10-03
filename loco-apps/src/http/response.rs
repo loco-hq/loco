@@ -43,11 +43,25 @@ impl<T: Serialize> ApiResponse<T> {
 }
 
 pub fn error_response(status: StatusCode, msg: &str) -> Response {
+    error_response_with_diagnostics(status, msg, Vec::new())
+}
+
+/// Like [`error_response`], attaching diagnostics when the handler has any.
+/// An empty list stays off the body, the same as a clean success.
+pub fn error_response_with_diagnostics(
+    status: StatusCode,
+    msg: &str,
+    diagnostics: Vec<Diagnostic>,
+) -> Response {
     let body = ApiResponse::<()> {
         ok: false,
         data: None,
         error: Some(msg.to_string()),
-        diagnostics: None,
+        diagnostics: if diagnostics.is_empty() {
+            None
+        } else {
+            Some(diagnostics)
+        },
     };
     (status, Json(body)).into_response()
 }

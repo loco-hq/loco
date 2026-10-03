@@ -10,8 +10,9 @@ use crate::http::scope::{VersionReadScope, VersionScope};
 use crate::http::version_schema::reject_secret_value;
 use crate::server::AppState;
 use crate::{
-    Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, ManifestUpdate,
-    PermissionSet, PermissionSetUpdate, Secret, SecretUpdate, Variable, VariableUpdate,
+    Action, ActionUpdate, Collection, CollectionUpdate, Field, FieldUpdate, Fieldset,
+    FieldsetUpdate, ManifestUpdate, PermissionSet, PermissionSetUpdate, Secret, SecretUpdate,
+    Variable, VariableUpdate,
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -91,6 +92,12 @@ pub fn router() -> Router<Arc<AppState>> {
             get(get_variable)
                 .put(update_variable)
                 .delete(delete_variable),
+        )
+        .route("/{user}/{project}/{version}/action", post(create_action))
+        .route("/{user}/{project}/{version}/action/list", get(list_actions))
+        .route(
+            "/{user}/{project}/{version}/action/{name}",
+            get(get_action).put(update_action).delete(delete_action),
         )
         // The bundle is schema too: a version's file tree, written the same
         // way its YAML is. Its own module because the body is a zip, not JSON.
@@ -408,6 +415,48 @@ pub async fn delete_variable(
     Path((_, _, _, name)): Path<(String, String, String, String)>,
 ) -> Response {
     match scope.schema.delete_variable(&name) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn create_action(scope: VersionScope, Json(input): Json<Action>) -> Response {
+    match scope.schema.create_action(input) {
+        Ok(action) => (StatusCode::CREATED, ApiResponse::success(action)).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn list_actions(scope: VersionReadScope) -> Response {
+    ApiResponse::success(scope.schema.actions()).into_response()
+}
+
+pub async fn get_action(
+    scope: VersionReadScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+) -> Response {
+    match scope.schema.action(&name) {
+        Some(action) => ApiResponse::success(action).into_response(),
+        None => error_response(StatusCode::NOT_FOUND, &format!("action not found: {name}")),
+    }
+}
+
+pub async fn update_action(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+    Json(patch): Json<ActionUpdate>,
+) -> Response {
+    match scope.schema.update_action(&name, patch) {
+        Ok(action) => ApiResponse::success(action).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn delete_action(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+) -> Response {
+    match scope.schema.delete_action(&name) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => version_schema_error_to_response(e),
     }

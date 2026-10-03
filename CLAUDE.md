@@ -29,7 +29,7 @@ cargo test -p loco-gen-schema # Schema/codegen crate only
 cargo clippy --workspace      # Lint everything
 cargo fmt --all               # Format (CI checks with --check)
 cargo run -p loco-apps        # API server on :3000
-npm run dev -w loco-studio    # Studio on :5174 (proxies /auth /config /schema /data → :3000)
+npm run dev -w loco-studio    # Studio on :5174 (proxies /auth /config /schema /data /actions → :3000)
 npm run build -w loco-studio  # Static SPA in loco-studio/dist/ (no Node at runtime)
                               # to serve it, zip dist/ and PUT it to a draft's
                               # bundle, then point a site at that version
@@ -133,8 +133,11 @@ Persistence is `FileTreeFsAdapter` (`loco-schema-runtime`). Writes are whole-tre
 | permission_set | `${project}/versions/${version}/permission_sets/${name}` |
 | secret | `${project}/versions/${version}/secrets/${name}` |
 | variable | `${project}/versions/${version}/variables/${name}` |
+| action | `${project}/versions/${version}/actions/${name}` |
 
-`${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `secrets`, `variables`, `versions`).
+`${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `secrets`, `variables`, `actions`, `versions`).
+
+An `action` carries its input as `params`, an inline list of `action_param` objects (`name`, `type`, `label`, `description`, `required`, `options`). They are written with the action: a PUT that names `params` replaces the list, and there is no param route. On create and on that replacement, each `name` must be a slug (`[a-z0-9_.-]+`, one segment) and unique within the action, each `type` must pass the `FIELD_TYPES` check, and `options` are only meaningful for `string` — anything else is a 400 and nothing is stored. A consumer cannot add a param to a dependency's action, because the list lives on the owner's document.
 
 `secret` and `variable` declare named configuration a version needs (`label`, `description`, `required`). A variable may also set `default` (a string; empty means none). A secret has no `default` and no `value` — a body carrying either is a 400, because the declaration never holds the value. A secret and a variable may not share a name in one version.
 
@@ -144,7 +147,7 @@ Secret and variable values are lake records on the dataset, in the reserved coll
 
 `PUT` and `DELETE /config/secret/{account}/{project}/{dataset}/{name}` — and the same paths under `/variable` — take `{"value":"…"}`. `name` is that reference, percent-encoded as one segment (`alice%2Fbricklink.consumer_key`). Writes require developer or org owner, and the name must be declared by some version of the project, itself or a direct dependency. A `DELETE` whose declaration is already gone still removes the row. `GET .../list` is any project role, editor included. A secret row is `{name, project, set, updated_at}` and never the value, so the list uses the same gate as a variable read. A variable row adds `value` and, when one applies, `source` of `value` or `default` (the declaration's default when nothing is set). The list is the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing, even if a value was stored for it. Deleting a dataset or a project calls `SecretStore::delete_dataset` and then `DataAdapter::delete_dataset`, inside the same purge. The secret-store call is what a later cloud impl cleans up; the lake impl deletes `$secrets` rows the purge would remove anyway, and the lake purge still removes `$variables` and every other collection. If the secret store fails, the lake is not purged. A failed purge is reported left behind and keeps the dataset and project records.
 
-An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalCases it into the generated struct name.
+An inline `object`'s `name:` is snake_case (`collection_grant`, `action_param`, `action_param_option`); codegen PascalCases it into the generated struct name. An action param's `options` object is `action_param_option` — the same `{ value, label }` shape as a field option — so the generated struct is `ActionParamOption` and does not collide with `FieldOption`. The param object itself is `action_param` (`ActionParam`), not a schema type.
 
 ### Versions, sites, datasets
 
@@ -156,7 +159,7 @@ An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalC
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
-`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, secrets, variables, and manifest into the new id — the publish primitive. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. The version's file trees (its `bundle`) are copied too — metadata is a version directory, not only its YAML. Datasets, sites, records, and secret and variable values are never copied.
+`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, secrets, variables, actions, and manifest into the new id — the publish primitive. An action's params travel with the action document. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. The version's file trees (its `bundle`) are copied too — metadata is a version directory, not only its YAML. Datasets, sites, records, and secret and variable values are never copied.
 
 ### Manifests and dependency visibility
 
@@ -171,8 +174,9 @@ Dependency grammar and the scoped view live in `loco-apps/src/http/version_schem
 #### Name resolution
 
 **Rule: an unqualified name always means _self_ — the project that owns the running
-version. A dependency's collection, field, fieldset, permission set, secret, or
-variable must be named fully qualified (`{user}/{project}.{name}`) to be reachable.**
+version. A dependency's collection, field, fieldset, permission set, secret,
+variable, or action must be named fully qualified
+(`{user}/{project}.{name}`) to be reachable.**
 
 The point is that installing a dependency can never silently change what an existing
 bare name resolves to. Resolution is a property of the name, not of manifest order.
@@ -194,6 +198,13 @@ dependency list for a match, so two deps that share a name are both addressable.
   dependency adds to it by declaring fields under the same collection name. A fieldset
   on a dependency's collection is named qualified too:
   `/schema/.../fieldset/acme%2Fcrm.contacts/acme%2Fcrm.summary`.
+- **Actions** follow the same owner rule. `/actions/{name}` and
+  `/schema/.../action/{name}` take a bare name for this version's own action and a
+  dependency's qualified and percent-encoded (`loco%2Fbricklink.sync_orders`). Params
+  are the list on that action, so a consumer sees the owner's params and has no
+  separate write that could add one. The handler registry is keyed by that owning
+  project and the bare name, so a same-named declaration in another project does
+  not run this project's handler.
 - **Permission sets** in `public_permission_sets`: bare is this version's own set; a
   dependency's is opted into as `acme/crm.public_contacts`. A consumer's set may share a
   name with a dependency's — they are different sets.
@@ -202,9 +213,10 @@ dependency list for a match, so two deps that share a name are both addressable.
   consumer's set opens only the consumer's `contacts`, and in a set a dependency ships
   only the dependency's. A qualified grant names its owner exactly.
 - **Listings** (`collection/list`, `permission_set/list`, `secret/list`,
-  `variable/list`) span self + direct deps and return each item's `project`,
-  from which a client builds the qualified name. A bare secret or variable
+  `variable/list`, `action/list`) span self + direct deps and return each item's `project`,
+  from which a client builds the qualified name. A bare secret, variable, or action
   name is this version's own; a dependency's is `loco/bricklink.consumer_key`.
+  An action's params are on the action, in the order the action declares them.
 
 ### Fieldsets
 
@@ -232,7 +244,8 @@ Mounted in `server.rs`:
 | Prefix | Role |
 |--------|------|
 | `/data` | Record CRUD on `/data/{collection}/…` — bare for the site's own collection, a dependency's qualified and percent-encoded (`acme%2Fcrm.contacts`) — plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version — and `POST /data/query`, named batched reads with filters and cursors ([`docs/query.md`](docs/query.md)). Site-scoped via headers. Strict validation on write; diagnostics on read. |
-| `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, permission sets, secrets, variables, bundle). |
+| `/actions` | Site-scoped, like `/data`. `GET /actions` and `GET /actions/{name}` return the pinned version's actions (self + direct deps) with their params, in the order the action declares them. `POST /actions/{name}` body `{"input":{…}}` validates that input and runs the handler registered for the action's owning project and bare name. See "Actions". |
+| `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, permission sets, secrets, variables, actions, bundle). An action's params are part of the action document. |
 | `/config` | Unversioned project / dataset / site / version lifecycle, plus per-dataset secret and variable values (`/config/secret`, `/config/variable`). |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
 | *(fallback)* | Files from the request's site's **pinned version** bundle. `handlers/hosting.rs`. |
@@ -245,14 +258,14 @@ CORS is `*` origin, method, and header. No cookies; clients send `Authorization:
 
 - **Which site.** `{site}.{project}.{account}.<listen-host>` — `www.blog.ben.localhost:3000` is site `www` on `ben/blog`. The listen host is not configured: a host is a site host exactly when its first three labels name a site that exists. Anything else (the apex, an IP, a stale subdomain) is no site, and then `LOCO_DEFAULT_SITE={account}/{project}/{site}` decides whether `/` serves anything. There is no default for it in the binary and there must not be one — a Loco process is not a Studio process.
 - **Site headers.** Both cases fill in absent `X-Project-Id` / `X-Site-Id`, so a hosted frontend need not know its own address. A subdomain additionally *pins* them: a header naming another site is a 400. The apex default does not — a sent header wins, which is what keeps the apex usable by Studio and local Vite apps.
-- **Serving.** Reserved prefixes (`/data` `/schema` `/config` `/auth`) always answer JSON, never HTML, so a mistyped API path stays a JSON 404. Otherwise `/` is the tree's `index.html`; a miss falls back to it when the path is extensionless or `Accept` asks for HTML, and 404s otherwise (a missing hashed asset must not come back as an HTML shell). Files are public — no token. A published version's assets go out `immutable`; `index.html` and everything in a draft revalidate, because the pin is what moves.
+- **Serving.** Reserved prefixes (`/data` `/schema` `/config` `/auth` `/actions`) always answer JSON, never HTML, so a mistyped API path stays a JSON 404. Otherwise `/` is the tree's `index.html`; a miss falls back to it when the path is extensionless or `Accept` asks for HTML, and 404s otherwise (a missing hashed asset must not come back as an HTML shell). Files are public — no token. A published version's assets go out `immutable`; `index.html` and everything in a draft revalidate, because the pin is what moves.
 - **Missing bundle** is an ordinary state: one warning at boot if the default site has none, then `/` 404s. Never a boot failure.
 
 Studio is not special-cased anywhere: it is a bundle on a `loco/studio` version like any other frontend, and no path in `server.rs` names it. Vite-dev on `:5174` stays the inner loop.
 
 Handlers sit on request extractors in `http/scope/`:
 
-- `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_developer`, `require_can_write_data`. Access is membership, not the site.
+- `SiteScope` — resolves project + site from headers, attaches auth (or `public`), builds a **read-only** `VersionSchema` for the site's pinned version. Home of `require_authenticated`, `require_developer`, `require_can_write_data`. `/data` and `/actions` both use it. Access is membership, not the site.
 - `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema` writes.
 - `VersionReadScope` — read-only `VersionSchema` for GET `/schema`. Developer/editor on the path project (any version, no site headers). `public` (and authenticated non-members) on a site whose pinned version assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required).
 - `ConfigProjectScope` / `ConfigMemberScope` / `ConfigUserScope` — `/config` routes. Project-targeted writes require developer. Secret and variable value reads (`ConfigMemberScope`) allow any project role. Project list/create/org do not need site headers.
@@ -265,7 +278,23 @@ Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the
 
 ### Validation
 
-Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, scalar type mismatches (`string` / `integer` / `float` / `boolean`), and a `string` value outside the field's `options` when it declares any (`invalid_option`; exact match on `value`, so `""` is rejected too). `Null` is allowed for any type that is not `required`. A field's `type` must be one of those four scalars (`FIELD_TYPES`): `/schema` field create and update reject anything else with a 400. Boot does not check, so a field YAML written earlier with another type (`list`) still loads, and its values pass. A field with `required: true` must have a value on create: missing, `null`, or (for a `string`) `""` is `required`. `""` counts as blank because it is what a cleared text input sends. An update checks a required field only when the patch names it. Reads — `/data` get/list and `/data/query` — report a gap as a warning, never an error, so making a field required later does not break records written before; a query with `fields` checks only the fields it read.
+Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, scalar type mismatches (`string` / `integer` / `float` / `boolean`), and a `string` value outside the field's `options` when it declares any (`invalid_option`; exact match on `value`, so `""` is rejected too). `Null` is allowed for any type that is not `required`. A field's `type` must be one of those four scalars (`FIELD_TYPES`): `/schema` field create and update reject anything else with a 400, and so does each param on an action create or on a PUT that replaces `params` — the same check, so the message still says `unknown field type`. Boot does not check, so a field YAML written earlier with another type (`list`) still loads, and its values pass. An action loaded from disk is likewise not re-checked, and a version copy does not re-check its params. A field with `required: true` must have a value on create: missing, `null`, or (for a `string`) `""` is `required`. `""` counts as blank because it is what a cleared text input sends. An update checks a required field only when the patch names it. Reads — `/data` get/list and `/data/query` — report a gap as a warning, never an error, so making a field required later does not break records written before; a query with `fields` checks only the fields it read.
+
+Action input uses that same walk (`validate_action_input`). The diagnostic `kind` is unchanged (`unknown_field`, `type_mismatch`, `invalid_option`, `required`). The message says `param` and names the action, where a record says `field` and names the collection. A JSON array or object is a `type_mismatch`: values are scalars.
+
+### Actions
+
+An action is a declared operation on a version (`label`, `description`, `params`). Each param is the field vocabulary (`name`, `type`, `label`, `description`, `required`, `options`) and lives in the action document, in declared order. `/schema` writes the action only. Output is not declared: the handler returns JSON, and the description says what that JSON is. There is no workflow language, trigger, or schedule.
+
+`GET /actions` and `GET /actions/{name}` are how a hosted UI builds the form, the way `GET /data/{collection}/fields` reads field metadata. The read rule is that one, lifted off a single collection: data access, or a read grant on any collection the pinned version shows. A version with nothing readable is members only. Params come back in the order the action declares them, and they are the owning project's params.
+
+`POST /actions/{name}` runs it. The body is `{"input":{…}}`; a missing `input` is `{}`. The runner validates first. Any error is the `/data` create 400 (`validation failed` plus diagnostics) and the handler is not called. The handler then receives the site's dataset id, the `DataAdapter`, a read-only `VersionSchema` for the pinned version, the caller's identity, and the validated input. Secrets, variables, and outbound HTTP are not on that context.
+
+Who may run: an authenticated editor or developer, via `require_can_write_data`. That is the refusal a `/data` add gives a caller who cannot write. Token-less `public` is never allowed, including when a public permission set grants `create` on a collection. An unknown name is 404 (`action not found: {name}`) before that check. A declared action with no handler is 501 `no handler for action {project}.{name}`.
+
+Handlers are registered in code against `(owning project, bare name)`. The production binary registers none: `build_app` uses an empty registry. The Hurl fixture handler (`alice/fixture` / `echo`) is registered by the test runner, so it is not in the server binary.
+
+The lake has no transactions. A handler that fails after it has written leaves those writes in place. That partial failure is the contract: handlers must be safe to re-run, and a handler error should say what was already written. The handler maps that to 400 (bad input it found itself), 409 (conflict), or 500, with diagnostics when it has them — the same body shape as `/data`. Handlers update records by patch and never replace a record's `fields` wholesale, because an installer may have added fields the owning package's code does not know about (#117).
 
 ## Key Patterns
 
@@ -284,7 +313,7 @@ All frontend apps use the same stack:
 - **TanStack Query**
 - API client: `loco-client` (below) for new apps. Studio still has its own `src/api.js` (plain JS, not a hook) and `src/auth.js`; moving it onto `loco-client` is a follow-up.
 - Components in `src/components/` as `.jsx` files
-- Dev-only Vite proxy of `/auth` `/config` `/schema` `/data` to `localhost:3000` (no `/api` prefix). `API_ORIGIN` in `loco-studio/src/config.js` is `''` — same origin — which is what both the proxy and a hosted bundle need; set it absolute only for a deliberately cross-origin build like `examples/public-page`
+- Dev-only Vite proxy of `/auth` `/config` `/schema` `/data` `/actions` to `localhost:3000` (no `/api` prefix). Studio and `examples/brickos-inventory` both proxy `/actions`. `API_ORIGIN` in `loco-studio/src/config.js` is `''` — same origin — which is what both the proxy and a hosted bundle need; set it absolute only for a deliberately cross-origin build like `examples/public-page`
 
 ### Frontend locations
 
