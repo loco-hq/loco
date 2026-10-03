@@ -23,8 +23,8 @@ pub struct AppState {
     /// Plaintext trait. The lake impl encrypts. Handlers clone this `Arc`.
     /// See `crate::values`.
     pub secrets: Arc<dyn SecretStore>,
-    /// Shared by action handlers. Timeouts are set, and a redirect to another
-    /// host is not followed. See [`crate::actions::http_client`].
+    /// Shared by action handlers. No proxy. A redirect that changes scheme,
+    /// host, or port is not followed. See [`crate::actions::http_client`].
     pub http: reqwest::Client,
     /// The site the apex serves at `/`, as `({account}/{project}, {site})`.
     /// `None` is the API-only process. A host that names a site of its own

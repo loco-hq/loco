@@ -6,11 +6,11 @@
 //! (`AppOptions::default`); the Hurl fixture handlers live in the test runner.
 //!
 //! Handlers are async. Outbound HTTP uses [`reqwest`]'s async client, so the
-//! call awaits instead of blocking a worker. [`DataAdapter`] stays
-//! synchronous and runs on that same task: its locks are the short critical
-//! sections a handler already took. A blocking client is not used:
-//! `reqwest::blocking` builds a nested runtime, and the server already runs
-//! inside one (`#[tokio::main]` in `main.rs`, and the Hurl runner).
+//! call awaits on the request task. [`DataAdapter`] stays synchronous and
+//! runs on that same task: a call finishes without awaiting, so no lock is
+//! held across an `.await`, the same as a `/data` handler. A blocking client
+//! is not used. One call can take the whole 30s timeout, and that would hold
+//! a blocking-pool thread for that long.
 //!
 //! The lake has no transactions. A handler that fails after it has written
 //! leaves those writes in place. Handlers must be safe to re-run, and a
@@ -52,8 +52,12 @@ pub enum ActionFailure {
     },
     /// The handler's upstream HTTP call failed. `status` is the upstream
     /// status, or `0` when the call never got a response. The HTTP layer
-    /// answers 502. This is not [`Self::Failed`]: an upstream failure is
-    /// never a 500.
+    /// answers 502 `upstream {status}: {message}`, and that string is the
+    /// caller's response as written. A handler must not put secret material
+    /// in `message`, or an upstream body that echoes the request (the URL,
+    /// a query string, a token). [`From<reqwest::Error>`] drops the URL
+    /// reqwest would otherwise append. This is not [`Self::Failed`]: an
+    /// upstream failure is never a 500.
     Upstream { status: u16, message: String },
     /// `LOCO_SECRET_KEY` is missing or malformed. The string names it. The
     /// HTTP layer answers 503, the same as `PUT /config/secret`.
@@ -114,6 +118,17 @@ impl std::fmt::Display for ConfigReadError {
 }
 
 impl std::error::Error for ConfigReadError {}
+
+impl From<reqwest::Error> for ActionFailure {
+    fn from(err: reqwest::Error) -> Self {
+        let status = err.status().map(|status| status.as_u16()).unwrap_or(0);
+        // `Display` appends ` for url ({url})`, query string included.
+        Self::Upstream {
+            status,
+            message: err.without_url().to_string(),
+        }
+    }
+}
 
 impl From<ConfigReadError> for ActionFailure {
     fn from(err: ConfigReadError) -> Self {
@@ -190,8 +205,9 @@ impl ActionContext {
         }
     }
 
-    /// Shared client. Connect and total timeouts are set. A redirect is
-    /// followed only when the next host is the same host.
+    /// Shared client. Connect and total timeouts are set. No proxy. A
+    /// redirect is followed only when the next URL keeps the same scheme,
+    /// host, and port.
     pub fn http(&self) -> &reqwest::Client {
         &self.http
     }
@@ -405,31 +421,44 @@ fn non_empty(value: &str) -> Option<String> {
 
 /// The client handlers share. Built once at boot.
 ///
-/// No system proxy: the call goes to the URL the handler built, and a proxy
-/// would be a different host. Redirects stop at a host change. Ten same-host
-/// redirects are followed; the eleventh fails the call.
+/// No proxy: not `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, and not the OS
+/// proxy settings. The call goes to the URL the handler built. A redirect is
+/// followed only when the next URL keeps the same scheme, host, and port.
+/// Ten such redirects are followed; the eleventh fails the call.
+/// `previous()` already includes the original URL, so the limit is `len > 10`,
+/// the same comparison reqwest's own `limited` uses.
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
         .timeout(HTTP_TIMEOUT)
         .redirect(redirect_policy())
+        .no_proxy()
         .build()
         .expect("build the action HTTP client")
 }
 
+fn same_origin(prev: &reqwest::Url, next: &reqwest::Url) -> bool {
+    let hosts = match (prev.host_str(), next.host_str()) {
+        (Some(prev), Some(next)) => prev.eq_ignore_ascii_case(next),
+        _ => false,
+    };
+    prev.scheme() == next.scheme()
+        && hosts
+        && prev.port_or_known_default() == next.port_or_known_default()
+}
+
 fn redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
-        if attempt.previous().len() >= HTTP_MAX_REDIRECTS {
+        if attempt.previous().len() > HTTP_MAX_REDIRECTS {
             return attempt.error(RedirectLimited);
         }
         let Some(prev) = attempt.previous().last() else {
             return attempt.follow();
         };
-        match (prev.host_str(), attempt.url().host_str()) {
-            (Some(prev_host), Some(next_host)) if prev_host.eq_ignore_ascii_case(next_host) => {
-                attempt.follow()
-            }
-            _ => attempt.stop(),
+        if same_origin(prev, attempt.url()) {
+            attempt.follow()
+        } else {
+            attempt.stop()
         }
     })
 }
@@ -1032,6 +1061,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_secret_key_over_a_stored_row_is_unavailable() {
+        let world = World::new();
+        world
+            .secrets
+            .put(STORE_DATASET, "alice/pkg.token", "installer-token")
+            .unwrap();
+        put_variable(world.data.as_ref(), STORE_DATASET, "alice/pkg.region", "eu").unwrap();
+        let missing: Arc<dyn SecretStore> =
+            Arc::new(LakeSecretStore::new(world.data.clone(), KeyStatus::Missing));
+        let mut registry = HandlerRegistry::default();
+        registry.register(PKG, "pull", |ctx| async move {
+            let _token = ctx.secret("token")?;
+            Ok(json!({ "ran": true }))
+        });
+        let schema = world.store_schema();
+        let outcome = dispatch_pull(&schema, &world, missing, STORE_DATASET, &registry).await;
+        match outcome {
+            Dispatch::Failed(ActionFailure::Unavailable { message }) => {
+                assert!(message.contains("LOCO_SECRET_KEY"), "{message}");
+            }
+            other => panic!("expected an unavailable secret key, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reqwest_error_drops_the_request_url() {
+        let err = http_client()
+            .get("http://127.0.0.1:9/?k=1")
+            .send()
+            .await
+            .expect_err("port 9 accepts nothing");
+        let ActionFailure::Upstream { status, message } = ActionFailure::from(err) else {
+            panic!("expected an upstream failure");
+        };
+        assert_eq!(status, 0);
+        assert!(!message.contains("127.0.0.1"), "{message}");
+        assert!(!message.contains("k=1"), "{message}");
+    }
+
+    /// `HTTP_PROXY` is set for this test only. The client is built with
+    /// [`http_client`], so a proxy hit means `.no_proxy()` was dropped.
+    #[tokio::test]
+    async fn http_client_ignores_http_proxy() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_proxy = Arc::clone(&hits);
+        let proxy = spawn_server(move |_port, _path| {
+            hits_for_proxy.fetch_add(1, Ordering::SeqCst);
+            response(502, "Bad Gateway", &[], "proxied")
+        });
+        let dest = spawn_server(|_port, _path| response(200, "OK", &[], "direct"));
+        let _guard = ProxyEnv::set(&format!("http://127.0.0.1:{proxy}"));
+        let client = http_client();
+        let response = client
+            .get(format!("http://127.0.0.1:{dest}/direct"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.unwrap(), "direct");
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    struct ProxyEnv;
+
+    impl ProxyEnv {
+        fn set(url: &str) -> Self {
+            // SAFETY: the guard removes both names on drop, including on panic.
+            // Other clients in this process are built with `no_proxy`, so they
+            // do not read these variables.
+            unsafe {
+                std::env::set_var("HTTP_PROXY", url);
+                std::env::set_var("http_proxy", url);
+            }
+            Self
+        }
+    }
+
+    impl Drop for ProxyEnv {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("HTTP_PROXY");
+                std::env::remove_var("http_proxy");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn redirect_stays_on_the_same_host() {
         let client = test_http();
         let hits = Arc::new(AtomicUsize::new(0));
@@ -1082,6 +1198,28 @@ mod tests {
             .unwrap();
         assert_eq!(stopped.status(), 302);
         assert_eq!(stopped.text().await.unwrap(), "go-away");
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // Same host, different port. Following would hit `other`.
+        let cross_port = spawn_server(move |_port, path| {
+            if path == "/port" {
+                response(
+                    302,
+                    "Found",
+                    &[("Location", &format!("http://127.0.0.1:{other}/landed"))],
+                    "go-away",
+                )
+            } else {
+                response(404, "Not Found", &[], "no")
+            }
+        });
+        let stopped_port = client
+            .get(format!("http://127.0.0.1:{cross_port}/port"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stopped_port.status(), 302);
+        assert_eq!(stopped_port.text().await.unwrap(), "go-away");
         assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 

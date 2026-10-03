@@ -37,7 +37,7 @@ Content-Type: application/json
   "name": "upstream",
   "label": "Upstream",
   "required": true,
-  "default": "http://127.0.0.1:9"
+  "default": "http://127.0.0.1:9/?k=1"
 }
 HTTP 201
 
@@ -195,7 +195,7 @@ jsonpath "$.data.ran" == true
 jsonpath "$.data.dataset_id" == "alice/pkg/dev"
 jsonpath "$.data.token" == "from-the-package-dataset"
 jsonpath "$.data.region" == "pkg-region"
-jsonpath "$.data.upstream" == "http://127.0.0.1:9"
+jsonpath "$.data.upstream" == "http://127.0.0.1:9/?k=1"
 jsonpath "$.data.label" == "from-the-package-default"
 jsonpath "$.data.store_only.error" contains "not declared"
 jsonpath "$.data.http_body" not exists
@@ -234,12 +234,28 @@ jsonpath "$.data.dataset_id" == "alice/store/dev"
 jsonpath "$.data.token" == "installer-token"
 jsonpath "$.data.region" == "eu"
 jsonpath "$.data.label" == "from-the-package-default"
-jsonpath "$.data.upstream" == "http://127.0.0.1:9"
+jsonpath "$.data.upstream" == "http://127.0.0.1:9/?k=1"
 jsonpath "$.data.store_only.error" contains "not declared"
 jsonpath "$.data.http_body" not exists
 body not contains "from-the-package-dataset"
 body not contains "store-own-token"
 body not contains "store-only-token"
+
+# Nothing listens on the default. call with no path requests that URL,
+# query string included. A 502 must not echo it.
+POST http://127.0.0.1:{{port}}/actions/alice%2Fpkg.pull
+Authorization: Bearer {{token}}
+X-Project-Id: alice/store
+X-Site-Id: dev
+Content-Type: application/json
+{"input": {"call": true}}
+HTTP 502
+[Asserts]
+jsonpath "$.ok" == false
+jsonpath "$.error" startsWith "upstream 0:"
+jsonpath "$.data" not exists
+body not contains "127.0.0.1:9"
+body not contains "k=1"
 
 # The store points upstream at the fixture server, then the handler calls it.
 PUT http://127.0.0.1:{{port}}/config/variable/alice/store/dev/alice%2Fpkg.upstream

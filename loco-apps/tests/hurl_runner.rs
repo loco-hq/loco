@@ -294,17 +294,11 @@ async fn pull(
             Some(Value::String(path)) => path.clone(),
             _ => "/ok".to_string(),
         };
-        let response = ctx
-            .http()
-            .get(format!("{base}{path}"))
-            .send()
-            .await
-            .map_err(|err| ActionFailure::Upstream {
-                status: 0,
-                message: err.to_string(),
-            })?;
+        let response = ctx.http().get(format!("{base}{path}")).send().await?;
         let status = response.status().as_u16();
         let message = response.text().await.unwrap_or_default().trim().to_string();
+        // This fixture's failure body is a fixed string. A handler must not
+        // forward an upstream body that echoes the request.
         if !(200..300).contains(&status) {
             return Err(ActionFailure::Upstream { status, message });
         }
