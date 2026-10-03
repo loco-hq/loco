@@ -207,11 +207,10 @@ impl ProjectConfig {
     /// manifest; every dataset and its records; every site; then the project
     /// record.
     ///
-    /// `purge` deletes one dataset's records — user rows and the reserved
-    /// `$secrets` / `$variables` collections, which live in that same lake
-    /// dataset — and is called with that dataset's name before its schema
-    /// row is removed. A purge failure leaves the row in place. There is no
-    /// second cleanup for values.
+    /// `purge` is called with that dataset's name before its schema row is
+    /// removed. The handler's purge deletes the dataset's secrets
+    /// (`SecretStore::delete_dataset`) and then its lake records. A purge
+    /// failure leaves the row in place.
     ///
     /// Every store is attempted even when an earlier one fails, and the
     /// error names every key that could not be removed. A leftover fieldset
@@ -337,8 +336,8 @@ impl ProjectConfig {
             .update(&Dataset::to_path(&self.project_id(), name), patch)
     }
 
-    /// Delete a dataset, refusing while a site pins it. `purge` removes its
-    /// records from the lake, including `$secrets` and `$variables`; it runs
+    /// Delete a dataset, refusing while a site pins it. `purge` deletes its
+    /// secrets and then its lake records, including `$variables`. It runs
     /// after the pin check and before the dataset itself goes, so a failed
     /// purge leaves the dataset in place. A value write holds `PINS` too, so
     /// it either lands first and is swept or runs after and finds the
@@ -1497,6 +1496,78 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert!(listed[0].set);
         assert_eq!(listed[0].name, "consumer_key");
+    }
+
+    /// `alice/shop.label_prefix` and `label_prefix` are one row. The secret
+    /// read is the bare name, which is also the additional data the
+    /// ciphertext was sealed under.
+    #[test]
+    fn qualified_self_name_stores_the_bare_row() {
+        use crate::values::SecretStore;
+
+        let world = world(true);
+        let qualified = format!("{PROJECT}.consumer_key");
+        let set = world
+            .config
+            .set_secret_value(&world.secrets, "dev", &qualified, "s3cret")
+            .unwrap();
+        assert_eq!(set.name, "consumer_key");
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("s3cret")
+        );
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), &qualified)
+            .unwrap()
+            .is_none());
+        assert!(
+            world
+                .config
+                .list_secret_values(&world.secrets, "dev")
+                .unwrap()[0]
+                .set
+        );
+        world
+            .config
+            .delete_secret_value(&world.secrets, "dev", "consumer_key")
+            .unwrap();
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), "consumer_key")
+            .unwrap()
+            .is_none());
+
+        let qualified_var = format!("{PROJECT}.api_base");
+        world
+            .config
+            .set_variable_value(
+                world.data.as_ref(),
+                "dev",
+                &qualified_var,
+                "https://set.example",
+            )
+            .unwrap();
+        let rows = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert!(rows[0].set);
+        assert_eq!(rows[0].value.as_deref(), Some("https://set.example"));
+        world
+            .config
+            .delete_variable_value(world.data.as_ref(), "dev", &qualified_var)
+            .unwrap();
+        let rows = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert!(!rows[0].set);
+        assert_eq!(rows[0].source, Some("default"));
     }
 
     /// Two sites pin two versions that declare the same variable with

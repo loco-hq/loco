@@ -12,9 +12,10 @@
 //! resolve a bare name that contains `$`. The lake key of a real collection
 //! is `{owner}.{name}`, never the literal `$secrets` or `$variables`.
 //!
-//! The record id is the declaration reference a client puts in the path:
-//! bare for this project, `{account}/{project}.{name}` for a dependency.
-//! The lake stores that string as text, so `/` and `.` need no encoding.
+//! The record id is the canonical declaration reference: bare when it
+//! belongs to this project, `{account}/{project}.{name}` for a dependency.
+//! A qualified name for this project is stored as the bare name. The lake
+//! stores that string as text, so `/` and `.` need no encoding.
 
 mod lake;
 mod seal;
@@ -93,10 +94,10 @@ pub trait SecretStore: Send + Sync {
     fn get(&self, dataset_id: &str, name: &str) -> Result<Option<String>, SecretError>;
     fn delete(&self, dataset_id: &str, name: &str) -> Result<(), SecretError>;
     fn list(&self, dataset_id: &str) -> Result<Vec<SecretMeta>, SecretError>;
-    /// Remove this dataset's secrets only. The HTTP dataset delete does not
-    /// call this: those rows live in the lake, and
-    /// [`DataAdapter::delete_dataset`] already removes every collection.
-    /// A store that is not the lake implements this for real.
+    /// Remove this dataset's secrets. Dataset and project delete call this
+    /// before [`DataAdapter::delete_dataset`], so a store that is not the
+    /// lake is cleaned up on the same path. The lake impl deletes `$secrets`
+    /// rows the purge would remove anyway.
     fn delete_dataset(&self, dataset_id: &str) -> Result<(), SecretError>;
 }
 

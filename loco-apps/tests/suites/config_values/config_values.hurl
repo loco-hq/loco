@@ -511,6 +511,39 @@ jsonpath "$.data[2].set" == false
 jsonpath "$.data[2].source" == "default"
 jsonpath "$.data[2].value" == "Lot"
 
+# A qualified name for this project is the same row as the bare name.
+PUT http://127.0.0.1:{{port}}/config/variable/alice/shop/dev/alice%2Fshop.label_prefix
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"value": "Batch"}
+HTTP 200
+[Asserts]
+jsonpath "$.data.name" == "label_prefix"
+jsonpath "$.data.project" == "alice/shop"
+jsonpath "$.data.value" == "Batch"
+jsonpath "$.data.set" == true
+
+GET http://127.0.0.1:{{port}}/config/variable/alice/shop/dev/list
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data[2].name" == "label_prefix"
+jsonpath "$.data[2].set" == true
+jsonpath "$.data[2].source" == "value"
+jsonpath "$.data[2].value" == "Batch"
+
+DELETE http://127.0.0.1:{{port}}/config/variable/alice/shop/dev/label_prefix
+Authorization: Bearer {{token}}
+HTTP 200
+
+GET http://127.0.0.1:{{port}}/config/variable/alice/shop/dev/list
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data[2].set" == false
+jsonpath "$.data[2].source" == "default"
+jsonpath "$.data[2].value" == "Lot"
+
 PUT http://127.0.0.1:{{port}}/config/variable/alice/shop/dev/nope
 Authorization: Bearer {{token}}
 Content-Type: application/json

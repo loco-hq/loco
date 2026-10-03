@@ -6,9 +6,12 @@
 //! a store can set a credential before a site pins the version that needs
 //! it. The two rules are different on purpose.
 //!
-//! The reference a value is stored under is the same string a client puts
-//! in the path: bare for this project, `{account}/{project}.{name}` for a
-//! dependency ([`VersionSchema::reference`]).
+//! The row id is the canonical reference of the resolved declaration
+//! ([`reference`]): bare when the declaration belongs to this project,
+//! `{account}/{project}.{name}` for a dependency. A qualified name for this
+//! project (`alice/shop.label_prefix`) is the same row as the bare name.
+//! `DELETE` skips the declaration lookup, so it only strips a `{project}.`
+//! prefix and otherwise uses the path string as the id.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -110,13 +113,22 @@ impl Kind {
 }
 
 /// How a client names `name` owned by `owner` from `project_id`. Same rule
-/// as [`VersionSchema::reference`].
+/// as [`VersionSchema::reference`]. This is the row id a write stores.
 fn reference(project_id: &str, owner: &str, name: &str) -> String {
     if owner == project_id {
         name.to_string()
     } else {
         format!("{owner}.{name}")
     }
+}
+
+/// Row id for a delete. There is no declaration to resolve: a `{project_id}.`
+/// prefix is a qualified name for this project and means the bare name.
+/// Anything else, including a dependency's `{owner}.{name}`, is already the
+/// stored id.
+fn canonical_delete_name(project_id: &str, name: &str) -> String {
+    let prefix = format!("{project_id}.");
+    name.strip_prefix(&prefix).unwrap_or(name).to_string()
 }
 
 impl ProjectConfig {
@@ -197,8 +209,11 @@ impl ProjectConfig {
         // sweeps the row. Lock order is `PINS`, then the lake adapter.
         let _pins = self.pin_dataset(dataset)?;
         let decl = self.require_declaration(name, Kind::Secret)?;
+        // The path may be the bare name or `{self}.{name}`. Both are this row.
+        // The ciphertext's additional data is this canonical name.
+        let stored_as = reference(&self.project_id(), &decl.project, &decl.name);
         let record = secrets
-            .put(&self.dataset_id(dataset), name, plaintext)
+            .put(&self.dataset_id(dataset), &stored_as, plaintext)
             .map_err(secret_err)?;
         Ok(SecretValueView {
             name: decl.name,
@@ -217,9 +232,11 @@ impl ProjectConfig {
         let _pins = self.pin_dataset(dataset)?;
         // A value whose declaration was removed since the write is still
         // deleted: the declaration check would make that orphan permanent
-        // until the dataset itself went.
-        check_name(name).map_err(ValueError::InvalidName)?;
-        match secrets.delete(&self.dataset_id(dataset), name) {
+        // until the dataset itself went. A `{self}.` prefix is stripped so
+        // this still finds the row a qualified self name wrote.
+        let stored_as = canonical_delete_name(&self.project_id(), name);
+        check_name(&stored_as).map_err(ValueError::InvalidName)?;
+        match secrets.delete(&self.dataset_id(dataset), &stored_as) {
             Ok(()) => Ok(()),
             Err(SecretError::NotFound) => Err(ValueError::NotFound(format!(
                 "secret value not found: {name}"
@@ -237,7 +254,8 @@ impl ProjectConfig {
     ) -> Result<VariableValueView, ValueError> {
         let _pins = self.pin_dataset(dataset)?;
         let decl = self.require_declaration(name, Kind::Variable)?;
-        let record = put_variable(data, &self.dataset_id(dataset), name, value)
+        let stored_as = reference(&self.project_id(), &decl.project, &decl.name);
+        let record = put_variable(data, &self.dataset_id(dataset), &stored_as, value)
             .map_err(|err| lake_write_err(err, "variable", name))?;
         Ok(VariableValueView {
             name: decl.name,
@@ -256,8 +274,9 @@ impl ProjectConfig {
         name: &str,
     ) -> Result<(), ValueError> {
         let _pins = self.pin_dataset(dataset)?;
-        check_name(name).map_err(ValueError::InvalidName)?;
-        delete_variable(data, &self.dataset_id(dataset), name)
+        let stored_as = canonical_delete_name(&self.project_id(), name);
+        check_name(&stored_as).map_err(ValueError::InvalidName)?;
+        delete_variable(data, &self.dataset_id(dataset), &stored_as)
             .map_err(|err| lake_write_err(err, "variable", name))
     }
 

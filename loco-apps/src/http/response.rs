@@ -143,3 +143,16 @@ pub fn version_schema_error_to_response(
         VersionSchemaError::Schema(e) => schema_error_to_response(e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::config_values::ValueError;
+
+    #[test]
+    fn unavailable_maps_to_503() {
+        let response =
+            value_error_to_response(ValueError::Unavailable("LOCO_SECRET_KEY is not set".into()));
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
