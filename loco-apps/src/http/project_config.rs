@@ -204,7 +204,7 @@ impl ProjectConfig {
 
     /// Removes everything under this project: each version's collections,
     /// fields, fieldsets, permission sets, secrets, variables, actions,
-    /// action params, bundle, and manifest; every dataset and its records;
+    /// bundle, and manifest; every dataset and its records;
     /// every site; then the project record.
     ///
     /// `purge` is called with that dataset's name before its schema row is
@@ -269,13 +269,6 @@ impl ProjectConfig {
             &mut left,
             self.store.variables().delete_by_prefix(&versions_prefix),
             || keys_of(self.store.variables().list(&versions_prefix)),
-        );
-        note_prefix(
-            &mut left,
-            self.store
-                .action_params()
-                .delete_by_prefix(&versions_prefix),
-            || keys_of(self.store.action_params().list(&versions_prefix)),
         );
         note_prefix(
             &mut left,
@@ -465,7 +458,7 @@ impl ProjectConfig {
     }
 
     /// Delete a version: cascade-removes its collections, fields, fieldsets,
-    /// permission sets, secrets, variables, actions, action params, bundle,
+    /// permission sets, secrets, variables, actions, bundle,
     /// and manifest. Secret and variable *values* are per dataset, not per
     /// version, and stay. Refused while a site pins it or another project's
     /// manifest depends on it.
@@ -504,8 +497,6 @@ impl ProjectConfig {
             format!("{}/versions/{version}/permission_sets/", self.project_id());
         let secrets_prefix = format!("{}/versions/{version}/secrets/", self.project_id());
         let variables_prefix = format!("{}/versions/{version}/variables/", self.project_id());
-        let action_params_prefix =
-            format!("{}/versions/{version}/action_params/", self.project_id());
         let actions_prefix = format!("{}/versions/{version}/actions/", self.project_id());
         let mut left = Vec::new();
         note_prefix(
@@ -544,13 +535,6 @@ impl ProjectConfig {
         );
         note_prefix(
             &mut left,
-            self.store
-                .action_params()
-                .delete_by_prefix(&action_params_prefix),
-            || keys_of(self.store.action_params().list(&action_params_prefix)),
-        );
-        note_prefix(
-            &mut left,
             self.store.actions().delete_by_prefix(&actions_prefix),
             || keys_of(self.store.actions().list(&actions_prefix)),
         );
@@ -584,7 +568,6 @@ impl ProjectConfig {
             || !self.store.permission_sets().list(&prefix).is_empty()
             || !self.store.secrets().list(&prefix).is_empty()
             || !self.store.variables().list(&prefix).is_empty()
-            || !self.store.action_params().list(&prefix).is_empty()
             || !self.store.actions().list(&prefix).is_empty()
             || !self.store.bundles().list(&prefix).is_empty()
     }
@@ -616,7 +599,7 @@ impl ProjectConfig {
 
     /// Copy every piece of versioned metadata from `from` into a brand-new
     /// version `to`: collections, fields, fieldsets, permission sets, secrets,
-    /// variables, actions, action params, the version's file trees (its
+    /// variables, actions, the version's file trees (its
     /// `bundle`), and the manifest (dependencies plus the public
     /// permission-set assignment).
     ///
@@ -767,17 +750,6 @@ impl ProjectConfig {
             self.store.actions().create(copy)?;
             copied.actions.push(key);
         }
-        for (_, param) in self
-            .store
-            .action_params()
-            .list(&source_prefix("action_params"))
-        {
-            let mut copy = (*param).clone();
-            copy.version = to.to_string();
-            let key = copy.to_path();
-            self.store.action_params().create(copy)?;
-            copied.action_params.push(key);
-        }
 
         // File trees, by prefix rather than by naming `bundle`: the store
         // rewrites each key's version segment and skips anything that stops
@@ -828,9 +800,6 @@ impl ProjectConfig {
         for key in &copied.variables {
             let _ = self.store.variables().delete(key);
         }
-        for key in &copied.action_params {
-            let _ = self.store.action_params().delete(key);
-        }
         for key in &copied.actions {
             let _ = self.store.actions().delete(key);
         }
@@ -851,7 +820,6 @@ struct CopiedKeys {
     secrets: Vec<String>,
     variables: Vec<String>,
     actions: Vec<String>,
-    action_params: Vec<String>,
     /// File-tree keys (the version's `bundle`), which are whole trees rather
     /// than documents but undo the same way.
     bundles: Vec<String>,
@@ -1017,19 +985,13 @@ mod tests {
                 "echo".into(),
                 "Echo".into(),
                 String::new(),
+                vec![ActionParam {
+                    name: "qty".into(),
+                    r#type: "integer".into(),
+                    required: true,
+                    ..ActionParam::default()
+                }],
             ))
-            .unwrap();
-        store
-            .action_params()
-            .create(ActionParam {
-                project: PROJECT.into(),
-                version: VERSION.into(),
-                action: "echo".into(),
-                name: "qty".into(),
-                r#type: "integer".into(),
-                required: true,
-                ..ActionParam::default()
-            })
             .unwrap();
         let mut tree = FileTree::new();
         tree.insert("index.html", b"<p>hi</p>".to_vec()).unwrap();
@@ -1065,7 +1027,6 @@ mod tests {
         assert!(store.secrets().list(&prefix).is_empty());
         assert!(store.variables().list(&prefix).is_empty());
         assert!(store.actions().list(&prefix).is_empty());
-        assert!(store.action_params().list(&prefix).is_empty());
         assert!(store.bundles().list(&prefix).is_empty());
         let fields = super::keys_of(store.fields().list(&prefix));
         let expected: Vec<String> = except_fields.iter().map(|key| (*key).to_string()).collect();
@@ -1155,7 +1116,6 @@ mod tests {
         assert!(world.store.secrets().list(&prefix).is_empty());
         assert!(world.store.variables().list(&prefix).is_empty());
         assert!(world.store.actions().list(&prefix).is_empty());
-        assert!(world.store.action_params().list(&prefix).is_empty());
         assert!(!world
             .store
             .manifests()

@@ -16,3 +16,41 @@ properties:
   # What the handler returns is not declared. Say the JSON shape here.
   description:
     type: string
+  # Written with the action. A PUT that names `params` replaces the list.
+  # Nothing outside this action adds to it, so params are not their own type.
+  params:
+    type: list
+    items:
+      type: object
+      name: action_param
+      properties:
+        # A slug, and unique within this action. Checked on write.
+        name:
+          type: slug
+        # string, integer, float, or boolean. /schema rejects anything else,
+        # the same check as a collection field.
+        type:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        # A run must give the param a value: missing, null, and (for a
+        # string) "" are errors (kind required). Checked before the handler.
+        required:
+          type: boolean
+        # The allowed values of a string param. Empty means any string. A
+        # run rejects a value that is not one of them (invalid_option).
+        # Options on any other type are rejected at declaration.
+        options:
+          type: list
+          items:
+            type: object
+            # Not `field_option`: codegen emits one struct per object name,
+            # and a second `field_option` would be a second `FieldOption`.
+            name: action_param_option
+            properties:
+              value:
+                type: string
+              label:
+                type: string

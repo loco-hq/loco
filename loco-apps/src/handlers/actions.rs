@@ -14,7 +14,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Map;
 
 use crate::actions::{dispatch, ActionFailure, Dispatch};
@@ -23,34 +22,13 @@ use crate::http::response::{
     error_response, error_response_with_diagnostics, validation_error_response, ApiResponse,
 };
 use crate::http::scope::SiteScope;
-use crate::http::version_schema::VersionSchema;
 use crate::server::AppState;
-use crate::{Action, ActionParam};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::get;
     Router::new()
         .route("/", get(list_actions))
         .route("/{name}", get(get_action).post(run_action))
-}
-
-#[derive(Serialize)]
-struct ActionView {
-    #[serde(flatten)]
-    action: Action,
-    params: Vec<ActionParam>,
-}
-
-fn view(schema: &VersionSchema, action: &Action) -> ActionView {
-    let params = schema
-        .action_params_of(action.project(), action.name())
-        .into_iter()
-        .map(|param| (*param).clone())
-        .collect();
-    ActionView {
-        action: action.clone(),
-        params,
-    }
 }
 
 fn require_read(scope: &SiteScope) -> Result<(), Response> {
@@ -65,13 +43,7 @@ pub async fn list_actions(scope: SiteScope) -> Response {
     if let Err(resp) = require_read(&scope) {
         return resp;
     }
-    let views: Vec<ActionView> = scope
-        .schema
-        .actions()
-        .iter()
-        .map(|action| view(&scope.schema, action))
-        .collect();
-    ApiResponse::success(views).into_response()
+    ApiResponse::success(scope.schema.actions()).into_response()
 }
 
 pub async fn get_action(scope: SiteScope, Path(name): Path<String>) -> Response {
@@ -81,7 +53,7 @@ pub async fn get_action(scope: SiteScope, Path(name): Path<String>) -> Response 
     if let Err(resp) = require_read(&scope) {
         return resp;
     }
-    ApiResponse::success(view(&scope.schema, &action)).into_response()
+    ApiResponse::success(action).into_response()
 }
 
 #[derive(Deserialize)]

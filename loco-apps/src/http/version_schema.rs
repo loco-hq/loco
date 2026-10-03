@@ -24,15 +24,16 @@
 //! - [`VersionSchema::new_read_only`] — read-only. Used by `SiteScope` (data
 //!   routes) and `VersionReadScope` (GET `/schema`).
 
+use std::collections::HashSet;
 use std::sync::{Arc, MutexGuard};
 
 use crate::http::authz::is_draft_version;
 use crate::http::project_config::lock_pins;
 use crate::validation::FIELD_TYPES;
 use crate::{
-    Action, ActionParam, ActionParamUpdate, ActionUpdate, Bundle, Collection, CollectionUpdate,
-    Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest, ManifestUpdate, PermissionSet,
-    PermissionSetUpdate, SchemaStore, Secret, SecretUpdate, Variable, VariableUpdate,
+    Action, ActionParam, ActionUpdate, Bundle, Collection, CollectionUpdate, Field, FieldUpdate,
+    Fieldset, FieldsetUpdate, Manifest, ManifestUpdate, PermissionSet, PermissionSetUpdate,
+    SchemaStore, Secret, SecretUpdate, Variable, VariableUpdate,
 };
 
 /// Name of the fieldset auto-created when a collection is created. The boolean
@@ -59,7 +60,7 @@ pub enum VersionSchemaError {
     /// The version has no manifest: it was never created through `/config`,
     /// or it has since been deleted.
     UnknownVersion(String),
-    /// `delete_collection` or `delete_action` attempted its child prefixes.
+    /// `delete_collection` attempted its child prefixes.
     /// These keys are still present. The parent record was left in place, so
     /// a recreate cannot inherit a leftover child and the delete can be
     /// retried.
@@ -846,121 +847,33 @@ impl VersionSchema {
             .get(&Action::to_path(project, version, bare))
     }
 
-    /// The params of the action `action` names. They are the ones its owner
-    /// declares, like a collection's fields. Sorted by param name.
-    pub fn action_params(&self, action: &str) -> Vec<Arc<ActionParam>> {
-        let (owner, bare) = self.split(action);
-        self.action_params_of(owner, bare)
-    }
-
-    /// [`Self::action_params`] for the action `action` owned by `owner`.
-    /// Empty when that project is not visible. Order is the param name.
-    pub fn action_params_of(&self, owner: &str, action: &str) -> Vec<Arc<ActionParam>> {
-        let Some(version) = self.visible_version(owner) else {
-            return Vec::new();
-        };
-        let prefix = format!("{owner}/versions/{version}/action_params/{action}/");
-        let mut params: Vec<Arc<ActionParam>> = self
-            .store
-            .action_params()
-            .list(&prefix)
-            .into_iter()
-            .map(|(_, param)| param)
-            .collect();
-        params.sort_by(|a, b| a.name().cmp(b.name()));
-        params
-    }
-
     pub fn create_action(&self, mut input: Action) -> Result<Arc<Action>, VersionSchemaError> {
+        check_action_params(input.params())?;
         let _pins = self.write_guard()?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
         Ok(self.store.actions().create(input)?)
     }
 
+    /// `patch.params` replaces the whole list. Omitting it leaves the stored
+    /// params in place.
     pub fn update_action(
         &self,
         name: &str,
         patch: ActionUpdate,
     ) -> Result<Arc<Action>, VersionSchemaError> {
+        if let Some(params) = &patch.params {
+            check_action_params(params)?;
+        }
         let _pins = self.write_guard()?;
         let key = Action::to_path(&self.project_id, &self.version, name);
         Ok(self.store.actions().update(&key, patch)?)
     }
 
-    /// Deletes the action and every param belonging to it in this version.
-    ///
-    /// The param prefix is attempted even when it fails, and the error names
-    /// every key that could not be removed. A leftover param is what an
-    /// action recreated at this name would inherit. The action record stays
-    /// until the prefix is gone, so that cannot happen and the delete can be
-    /// retried.
     pub fn delete_action(&self, name: &str) -> Result<(), VersionSchemaError> {
         let _pins = self.write_guard()?;
-        let param_prefix = format!(
-            "{}/versions/{}/action_params/{}/",
-            self.project_id, self.version, name
-        );
-        let mut left = Vec::new();
-        if self
-            .store
-            .action_params()
-            .delete_by_prefix(&param_prefix)
-            .is_err()
-        {
-            left.extend(
-                self.store
-                    .action_params()
-                    .list(&param_prefix)
-                    .into_iter()
-                    .map(|(key, _)| key),
-            );
-        }
         let key = Action::to_path(&self.project_id, &self.version, name);
-        if left.is_empty() {
-            match self.store.actions().delete(&key) {
-                Ok(()) | Err(loco_schema_runtime::Error::NotFound(_)) => {}
-                Err(_) => left.push(key),
-            }
-        }
-        if left.is_empty() {
-            Ok(())
-        } else {
-            left.sort();
-            left.dedup();
-            Err(VersionSchemaError::LeftBehind(left))
-        }
-    }
-
-    pub fn create_action_param(
-        &self,
-        mut input: ActionParam,
-    ) -> Result<Arc<ActionParam>, VersionSchemaError> {
-        let _pins = self.write_guard()?;
-        check_field_type(&input.r#type)?;
-        input.project = self.project_id.clone();
-        input.version = self.version.clone();
-        Ok(self.store.action_params().create(input)?)
-    }
-
-    pub fn update_action_param(
-        &self,
-        action: &str,
-        name: &str,
-        patch: ActionParamUpdate,
-    ) -> Result<Arc<ActionParam>, VersionSchemaError> {
-        let _pins = self.write_guard()?;
-        if let Some(ty) = &patch.r#type {
-            check_field_type(ty)?;
-        }
-        let key = ActionParam::to_path(&self.project_id, &self.version, action, name);
-        Ok(self.store.action_params().update(&key, patch)?)
-    }
-
-    pub fn delete_action_param(&self, action: &str, name: &str) -> Result<(), VersionSchemaError> {
-        let _pins = self.write_guard()?;
-        let key = ActionParam::to_path(&self.project_id, &self.version, action, name);
-        Ok(self.store.action_params().delete(&key)?)
+        Ok(self.store.actions().delete(&key)?)
     }
 
     /// A secret and a variable of one bare name in this version would make a
@@ -1168,6 +1081,46 @@ fn check_field_type(ty: &str) -> Result<(), VersionSchemaError> {
         "unknown field type '{ty}': expected one of {}",
         FIELD_TYPES.join(", ")
     )))
+}
+
+/// Params are part of the action document. Each `name` is one slug segment
+/// (`[a-z0-9_.-]+`) and unique in the list, each `type` is a [`FIELD_TYPES`]
+/// entry, and `options` are only stored on a string param. Checked on write
+/// only: an action loaded from disk is left as it is, and a version copy
+/// does not run this again.
+fn check_action_params(params: &[ActionParam]) -> Result<(), VersionSchemaError> {
+    let mut seen = HashSet::new();
+    for param in params {
+        if !param_name_ok(param.name()) {
+            return Err(VersionSchemaError::InvalidName(format!(
+                "param name {:?} must be a slug: one or more of a-z, 0-9, '_', '.', and '-'",
+                param.name()
+            )));
+        }
+        if !seen.insert(param.name()) {
+            return Err(VersionSchemaError::InvalidName(format!(
+                "param name '{}' is declared more than once",
+                param.name()
+            )));
+        }
+        check_field_type(param.r#type())?;
+        if param.r#type() != "string" && !param.options().is_empty() {
+            return Err(VersionSchemaError::InvalidDeclaration(format!(
+                "param '{}' declares options, which are only meaningful for type string",
+                param.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// One segment of the schema slug charset. A param name is not a path, so a
+/// `/` is not a separator here — it is simply not a slug character.
+fn param_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
 }
 
 /// Why `deps` may not be the dependency list of a version of `project_id`,
@@ -1543,5 +1496,54 @@ mod tests {
         schema.delete_collection("task").unwrap();
         assert!(!store.fieldsets().has(&fieldset_key));
         assert!(!store.collections().has(&collection_key));
+    }
+}
+
+#[cfg(test)]
+mod action_param_checks {
+    use super::check_action_params;
+    use crate::{ActionParam, ActionParamOption};
+
+    fn param(name: &str, ty: &str, options: &[(&str, &str)]) -> ActionParam {
+        ActionParam {
+            name: name.into(),
+            r#type: ty.into(),
+            options: options
+                .iter()
+                .map(|(value, label)| ActionParamOption {
+                    value: (*value).into(),
+                    label: (*label).into(),
+                })
+                .collect(),
+            ..ActionParam::default()
+        }
+    }
+
+    #[test]
+    fn names_types_and_options() {
+        assert!(check_action_params(&[
+            param("qty", "integer", &[]),
+            param("size", "string", &[("s", "Small")]),
+        ])
+        .is_ok());
+
+        let err = check_action_params(&[param("Qty", "string", &[])]).unwrap_err();
+        assert!(err.to_string().contains("slug"), "{err}");
+
+        let err = check_action_params(&[param("qty", "integer", &[]), param("qty", "string", &[])])
+            .unwrap_err();
+        assert!(err.to_string().contains("more than once"), "{err}");
+
+        let err = check_action_params(&[param("tags", "list", &[])]).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field type 'list'"),
+            "{err}"
+        );
+
+        let err = check_action_params(&[param("qty", "integer", &[("1", "One")])]).unwrap_err();
+        assert!(
+            err.to_string().contains("only meaningful for type string"),
+            "{err}"
+        );
     }
 }

@@ -122,7 +122,7 @@ pub fn dispatch(
     let Some(action) = schema.action(name) else {
         return Dispatch::NotFound;
     };
-    let input = match validate_action_input(schema, action.project(), action.name(), input) {
+    let input = match validate_action_input(schema, &action, input) {
         Ok(input) => input,
         Err(report) => return Dispatch::Invalid(report),
     };
@@ -154,7 +154,7 @@ mod tests {
 
     use super::*;
     use crate::validation::kind;
-    use crate::{Action, ActionParam, Manifest, SchemaStore};
+    use crate::{Action, ActionParam, ActionParamOption, Manifest, SchemaStore};
 
     const PROJECT: &str = "ben/crm";
     const VERSION: &str = "0.0.1-dev";
@@ -179,6 +179,30 @@ mod tests {
                 "echo".into(),
                 "Echo".into(),
                 String::new(),
+                vec![
+                    ActionParam {
+                        name: "qty".into(),
+                        r#type: "integer".into(),
+                        required: true,
+                        ..ActionParam::default()
+                    },
+                    ActionParam {
+                        name: "size".into(),
+                        r#type: "string".into(),
+                        required: true,
+                        options: vec![
+                            ActionParamOption {
+                                value: "s".into(),
+                                label: "Small".into(),
+                            },
+                            ActionParamOption {
+                                value: "m".into(),
+                                label: "Medium".into(),
+                            },
+                        ],
+                        ..ActionParam::default()
+                    },
+                ],
             ))
             .unwrap();
         store
@@ -189,41 +213,8 @@ mod tests {
                 "noop".into(),
                 "Noop".into(),
                 String::new(),
+                Vec::new(),
             ))
-            .unwrap();
-        store
-            .action_params()
-            .create(ActionParam {
-                project: PROJECT.into(),
-                version: VERSION.into(),
-                action: "echo".into(),
-                name: "qty".into(),
-                r#type: "integer".into(),
-                required: true,
-                ..ActionParam::default()
-            })
-            .unwrap();
-        store
-            .action_params()
-            .create(ActionParam {
-                project: PROJECT.into(),
-                version: VERSION.into(),
-                action: "echo".into(),
-                name: "size".into(),
-                r#type: "string".into(),
-                required: true,
-                options: vec![
-                    crate::ActionParamOption {
-                        value: "s".into(),
-                        label: "Small".into(),
-                    },
-                    crate::ActionParamOption {
-                        value: "m".into(),
-                        label: "Medium".into(),
-                    },
-                ],
-                ..ActionParam::default()
-            })
             .unwrap();
         let schema = VersionSchema::new_read_only(Arc::new(store), PROJECT, VERSION);
         (dir, schema)

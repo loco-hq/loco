@@ -15,6 +15,7 @@ use serde::Serialize;
 use loco_lake::Value;
 
 use crate::http::version_schema::VersionSchema;
+use crate::Action;
 
 /// Stable string identifiers for the `kind` field on diagnostics. Clients can
 /// switch on these. Using string constants (not an enum) keeps the set open
@@ -371,22 +372,21 @@ where
     combined
 }
 
-/// Validate `input` against the params of the action `action` owned by
-/// `owner`, the same walk and the same diagnostic kinds as a `/data` create.
-/// `Ok` is the input as lake values, ready for the handler. `Err` means the
-/// handler must not run.
+/// Validate `input` against `action`'s params, the same walk and the same
+/// diagnostic kinds as a `/data` create. `Ok` is the input as lake values,
+/// ready for the handler. `Err` means the handler must not run.
 ///
-/// A JSON array or object is a `type_mismatch`: the lake value is scalar
-/// only. The message says `param` where a record says `field`.
+/// Params stay in the order the action declares them. A JSON array or object
+/// is a `type_mismatch`: the lake value is scalar only. The message says
+/// `param` where a record says `field`.
 pub fn validate_action_input(
     schema: &VersionSchema,
-    owner: &str,
-    action: &str,
+    action: &Action,
     input: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<HashMap<String, Value>, ValidationReport> {
-    let params = schema.action_params_of(owner, action);
-    let action_ref = schema.reference(owner, action);
-    let specs: Vec<ScalarSpec> = params
+    let action_ref = schema.reference(action.project(), action.name());
+    let specs: Vec<ScalarSpec> = action
+        .params()
         .iter()
         .map(|param| ScalarSpec {
             name: param.name(),

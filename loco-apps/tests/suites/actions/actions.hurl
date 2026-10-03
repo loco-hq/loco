@@ -1,9 +1,11 @@
 # Declared actions and the /actions runner (issue #47).
 #
-# A draft declares an action and its params; a published version refuses the
-# write; a version copy carries both; a version delete removes both. GET
-# /actions on a site returns the action with its params, and a consumer sees
-# a dependency's action qualified. POST runs the fixture handler registered
+# A draft declares an action with its params on the document; a duplicate
+# param name and an unknown param type are 400; a published version refuses
+# the write; a version copy carries the action; a version delete removes it.
+# GET /actions on a site returns the action with its params, in declared
+# order, and a consumer sees a dependency's action qualified. POST runs the
+# fixture handler registered
 # for alice/fixture echo. Bad input is the /data 400 and does not run it. A
 # declared action with no handler is 501. An unknown name is 404. Public and
 # a caller who cannot write data get the same refusal as POST /data/.../add.
@@ -38,8 +40,8 @@ Content-Type: application/json
 HTTP 201
 
 # ---------------------------------------------------------------------------
-# Draft declares an action and its params, and lists them on /schema.
-# Params are created out of name order; reads come back by name.
+# Draft declares an action with its params, and lists it on /schema.
+# Params stay in the order the body declared them.
 # ---------------------------------------------------------------------------
 
 POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action
@@ -48,7 +50,22 @@ Content-Type: application/json
 {
   "name": "echo",
   "label": "Echo",
-  "description": "Returns {ran, dataset_id, caller, input}."
+  "description": "Returns {ran, dataset_id, caller, input}.",
+  "params": [
+    {
+      "name": "size",
+      "type": "string",
+      "label": "Size",
+      "description": "Shirt size",
+      "required": true,
+      "options": [
+        {"value": "s", "label": "Small"},
+        {"value": "m", "label": "Medium"}
+      ]
+    },
+    {"name": "qty", "type": "integer", "label": "Qty", "required": true},
+    {"name": "note", "type": "string", "label": "Note"}
+  ]
 }
 HTTP 201
 [Asserts]
@@ -58,65 +75,78 @@ jsonpath "$.data.label" == "Echo"
 jsonpath "$.data.description" == "Returns {ran, dataset_id, caller, input}."
 jsonpath "$.data.project" == "alice/fixture"
 jsonpath "$.data.version" == "0.0.1-dev"
+jsonpath "$.data.params" count == 3
+jsonpath "$.data.params[0].name" == "size"
+jsonpath "$.data.params[0].type" == "string"
+jsonpath "$.data.params[0].required" == true
+jsonpath "$.data.params[0].options[0].value" == "s"
+jsonpath "$.data.params[0].options[1].label" == "Medium"
+jsonpath "$.data.params[1].name" == "qty"
+jsonpath "$.data.params[1].type" == "integer"
+jsonpath "$.data.params[2].name" == "note"
+jsonpath "$.data.params[2].required" == false
+jsonpath "$.data.params[2].options" count == 0
 
 GET http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/echo
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Echo"
+jsonpath "$.data.params[0].name" == "size"
+jsonpath "$.data.params[1].name" == "qty"
+jsonpath "$.data.params[2].name" == "note"
 
-POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param
+# A duplicate name, a name that is not a slug, an unknown type, and options
+# on a non-string are 400, and none of those actions is stored.
+POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {
-  "action": "echo",
-  "name": "size",
-  "type": "string",
-  "label": "Size",
-  "description": "Shirt size",
-  "required": true,
-  "options": [
-    {"value": "s", "label": "Small"},
-    {"value": "m", "label": "Medium"}
+  "name": "dup",
+  "label": "Dup",
+  "params": [
+    {"name": "qty", "type": "integer", "label": "Qty"},
+    {"name": "qty", "type": "string", "label": "Qty again"}
   ]
 }
-HTTP 201
-[Asserts]
-jsonpath "$.data.name" == "size"
-jsonpath "$.data.type" == "string"
-jsonpath "$.data.required" == true
-jsonpath "$.data.action" == "echo"
-jsonpath "$.data.project" == "alice/fixture"
-jsonpath "$.data.options[0].value" == "s"
-jsonpath "$.data.options[1].label" == "Medium"
-
-POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param
-Authorization: Bearer {{token}}
-Content-Type: application/json
-{"action": "echo", "name": "qty", "type": "integer", "label": "Qty", "required": true}
-HTTP 201
-[Asserts]
-jsonpath "$.data.type" == "integer"
-jsonpath "$.data.required" == true
-
-POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param
-Authorization: Bearer {{token}}
-Content-Type: application/json
-{"action": "echo", "name": "note", "type": "string", "label": "Note"}
-HTTP 201
-[Asserts]
-jsonpath "$.data.required" == false
-jsonpath "$.data.options" count == 0
-
-# The field-type check. The message stays the field one.
-POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param
-Authorization: Bearer {{token}}
-Content-Type: application/json
-{"action": "echo", "name": "tags", "type": "list", "label": "Tags"}
 HTTP 400
 [Asserts]
 jsonpath "$.ok" == false
+jsonpath "$.error" contains "param name 'qty' is declared more than once"
+
+GET http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/dup
+Authorization: Bearer {{token}}
+HTTP 404
+
+POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"name": "bad_name", "label": "Bad", "params": [{"name": "Qty", "type": "string", "label": "Qty"}]}
+HTTP 400
+[Asserts]
+jsonpath "$.error" contains "must be a slug"
+
+POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"name": "bad_type", "label": "Bad", "params": [{"name": "tags", "type": "list", "label": "Tags"}]}
+HTTP 400
+[Asserts]
 jsonpath "$.error" contains "unknown field type 'list'"
+
+POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "name": "bad_options",
+  "label": "Bad",
+  "params": [
+    {"name": "qty", "type": "integer", "label": "Qty", "options": [{"value": "1", "label": "One"}]}
+  ]
+}
+HTTP 400
+[Asserts]
+jsonpath "$.error" contains "only meaningful for type string"
 
 GET http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/list
 Authorization: Bearer {{token}}
@@ -125,16 +155,9 @@ HTTP 200
 jsonpath "$.data" count == 1
 jsonpath "$.data[0].name" == "echo"
 jsonpath "$.data[0].project" == "alice/fixture"
+jsonpath "$.data[0].params" count == 3
 
-GET http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param/echo/list
-Authorization: Bearer {{token}}
-HTTP 200
-[Asserts]
-jsonpath "$.data" count == 3
-jsonpath "$.data[0].name" == "note"
-jsonpath "$.data[1].name" == "qty"
-jsonpath "$.data[2].name" == "size"
-
+# A label write leaves the params. A write that names params replaces the list.
 PUT http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/echo
 Authorization: Bearer {{token}}
 Content-Type: application/json
@@ -143,9 +166,38 @@ HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Echo input"
 jsonpath "$.data.description" == "Returns {ran, dataset_id, caller, input}."
+jsonpath "$.data.params" count == 3
+jsonpath "$.data.params[0].name" == "size"
+
+POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"name": "swap", "label": "Swap", "params": [{"name": "note", "type": "string", "label": "Note"}]}
+HTTP 201
+
+PUT http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/swap
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "params": [
+    {"name": "qty", "type": "integer", "label": "Qty", "required": true},
+    {"name": "size", "type": "string", "label": "Size"}
+  ]
+}
+HTTP 200
+[Asserts]
+jsonpath "$.data.label" == "Swap"
+jsonpath "$.data.params" count == 2
+jsonpath "$.data.params[0].name" == "qty"
+jsonpath "$.data.params[1].name" == "size"
+
+DELETE http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/swap
+Authorization: Bearer {{token}}
+HTTP 200
 
 # ---------------------------------------------------------------------------
-# Copy carries both. The published target then refuses a write.
+# Copy carries the action, params included. The published target then
+# refuses a write, including one that would replace the params.
 # ---------------------------------------------------------------------------
 
 POST http://127.0.0.1:{{port}}/config/version/alice/fixture
@@ -162,15 +214,11 @@ HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Echo input"
 jsonpath "$.data.version" == "1.0.0"
-
-GET http://127.0.0.1:{{port}}/schema/alice/fixture/1.0.0/action_param/echo/list
-Authorization: Bearer {{token}}
-HTTP 200
-[Asserts]
-jsonpath "$.data" count == 3
-jsonpath "$.data[2].name" == "size"
-jsonpath "$.data[2].options[0].value" == "s"
-jsonpath "$.data[2].version" == "1.0.0"
+jsonpath "$.data.params" count == 3
+jsonpath "$.data.params[0].name" == "size"
+jsonpath "$.data.params[0].options[0].value" == "s"
+jsonpath "$.data.params[1].name" == "qty"
+jsonpath "$.data.params[2].name" == "note"
 
 POST http://127.0.0.1:{{port}}/schema/alice/fixture/1.0.0/action
 Authorization: Bearer {{token}}
@@ -180,17 +228,22 @@ HTTP 400
 [Asserts]
 jsonpath "$.error" contains "published"
 
-POST http://127.0.0.1:{{port}}/schema/alice/fixture/1.0.0/action_param
+PUT http://127.0.0.1:{{port}}/schema/alice/fixture/1.0.0/action/echo
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"action": "echo", "name": "extra", "type": "string", "label": "Extra"}
+{"params": []}
 HTTP 400
 [Asserts]
 jsonpath "$.error" contains "published"
 
+GET http://127.0.0.1:{{port}}/schema/alice/fixture/1.0.0/action/echo
+Authorization: Bearer {{token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data.params" count == 3
+
 # ---------------------------------------------------------------------------
-# The site list, and a consumer. A param the consumer declares under the
-# same action name does not attach to the dependency's action. A bare name
+# The site list, and a consumer. Params are the owner's list. A bare name
 # on the consumer is the consumer's own action, which does not exist.
 # ---------------------------------------------------------------------------
 
@@ -199,14 +252,6 @@ Authorization: Bearer {{token}}
 Content-Type: application/json
 {"dependencies": ["alice/fixture@0.0.1-dev"]}
 HTTP 200
-
-POST http://127.0.0.1:{{port}}/schema/alice/shop/0.0.1-dev/action_param
-Authorization: Bearer {{token}}
-Content-Type: application/json
-{"action": "echo", "name": "extra", "type": "string", "label": "Shop extra"}
-HTTP 201
-[Asserts]
-jsonpath "$.data.project" == "alice/shop"
 
 GET http://127.0.0.1:{{port}}/schema/alice/shop/0.0.1-dev/action/list
 Authorization: Bearer {{token}}
@@ -222,25 +267,14 @@ HTTP 200
 [Asserts]
 jsonpath "$.data.project" == "alice/fixture"
 jsonpath "$.data.name" == "echo"
+jsonpath "$.data.params" count == 3
+jsonpath "$.data.params[0].name" == "size"
+jsonpath "$.data.params[1].name" == "qty"
+jsonpath "$.data.params[2].name" == "note"
 
 GET http://127.0.0.1:{{port}}/schema/alice/shop/0.0.1-dev/action/echo
 Authorization: Bearer {{token}}
 HTTP 404
-
-GET http://127.0.0.1:{{port}}/schema/alice/shop/0.0.1-dev/action_param/alice%2Ffixture.echo/list
-Authorization: Bearer {{token}}
-HTTP 200
-[Asserts]
-jsonpath "$.data" count == 3
-jsonpath "$.data[*].name" not includes "extra"
-
-GET http://127.0.0.1:{{port}}/schema/alice/shop/0.0.1-dev/action_param/echo/list
-Authorization: Bearer {{token}}
-HTTP 200
-[Asserts]
-jsonpath "$.data" count == 1
-jsonpath "$.data[0].name" == "extra"
-jsonpath "$.data[0].project" == "alice/shop"
 
 GET http://127.0.0.1:{{port}}/actions
 Authorization: Bearer {{token}}
@@ -254,12 +288,12 @@ jsonpath "$.data[0].name" == "echo"
 jsonpath "$.data[0].project" == "alice/fixture"
 jsonpath "$.data[0].label" == "Echo input"
 jsonpath "$.data[0].params" count == 3
-jsonpath "$.data[0].params[0].name" == "note"
+jsonpath "$.data[0].params[0].name" == "size"
+jsonpath "$.data[0].params[0].options[0].value" == "s"
 jsonpath "$.data[0].params[1].name" == "qty"
 jsonpath "$.data[0].params[1].type" == "integer"
 jsonpath "$.data[0].params[1].required" == true
-jsonpath "$.data[0].params[2].name" == "size"
-jsonpath "$.data[0].params[2].options[0].value" == "s"
+jsonpath "$.data[0].params[2].name" == "note"
 
 GET http://127.0.0.1:{{port}}/actions/echo
 Authorization: Bearer {{token}}
@@ -267,8 +301,8 @@ X-Project-Id: alice/fixture
 X-Site-Id: dev
 HTTP 200
 [Asserts]
-jsonpath "$.data.params[0].name" == "note"
-jsonpath "$.data.params[2].name" == "size"
+jsonpath "$.data.params[0].name" == "size"
+jsonpath "$.data.params[2].name" == "note"
 
 GET http://127.0.0.1:{{port}}/actions
 Authorization: Bearer {{token}}
@@ -280,7 +314,8 @@ jsonpath "$.data" count == 1
 jsonpath "$.data[0].project" == "alice/fixture"
 jsonpath "$.data[0].name" == "echo"
 jsonpath "$.data[0].params" count == 3
-jsonpath "$.data[0].params[*].name" not includes "extra"
+jsonpath "$.data[0].params[0].name" == "size"
+jsonpath "$.data[0].params[2].name" == "note"
 
 GET http://127.0.0.1:{{port}}/actions/alice%2Ffixture.echo
 Authorization: Bearer {{token}}
@@ -601,26 +636,21 @@ jsonpath "$.error" == "you do not have access to this resource"
 jsonpath "$.data" not exists
 
 # ---------------------------------------------------------------------------
-# Deleting an action removes its params, so a recreate does not inherit them.
+# Deleting an action removes the document, params included. A recreate
+# starts from the body it is given.
 # ---------------------------------------------------------------------------
 
 POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"name": "temp", "label": "Temp"}
-HTTP 201
-
-POST http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param
-Authorization: Bearer {{token}}
-Content-Type: application/json
-{"action": "temp", "name": "qty", "type": "integer", "label": "Qty", "required": true}
+{"name": "temp", "label": "Temp", "params": [{"name": "qty", "type": "integer", "label": "Qty", "required": true}]}
 HTTP 201
 
 DELETE http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/temp
 Authorization: Bearer {{token}}
 HTTP 200
 
-GET http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param/temp/qty
+GET http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/temp
 Authorization: Bearer {{token}}
 HTTP 404
 
@@ -629,12 +659,8 @@ Authorization: Bearer {{token}}
 Content-Type: application/json
 {"name": "temp", "label": "Temp again"}
 HTTP 201
-
-GET http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param/temp/list
-Authorization: Bearer {{token}}
-HTTP 200
 [Asserts]
-jsonpath "$.data" count == 0
+jsonpath "$.data.params" count == 0
 
 DELETE http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action/temp
 Authorization: Bearer {{token}}
@@ -677,22 +703,13 @@ HTTP 200
 [Asserts]
 jsonpath "$.data" count == 0
 
-GET http://127.0.0.1:{{port}}/schema/alice/fixture/0.0.1-dev/action_param/echo/list
-Authorization: Bearer {{token}}
-HTTP 200
-[Asserts]
-jsonpath "$.data" count == 0
-
-# The copy still has both.
+# The copy still has the action, params included, in declared order.
 GET http://127.0.0.1:{{port}}/schema/alice/fixture/1.0.0/action/echo
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data.label" == "Echo input"
-
-GET http://127.0.0.1:{{port}}/schema/alice/fixture/1.0.0/action_param/echo/list
-Authorization: Bearer {{token}}
-HTTP 200
-[Asserts]
-jsonpath "$.data" count == 3
-jsonpath "$.data[1].name" == "qty"
+jsonpath "$.data.params" count == 3
+jsonpath "$.data.params[0].name" == "size"
+jsonpath "$.data.params[1].name" == "qty"
+jsonpath "$.data.params[2].name" == "note"

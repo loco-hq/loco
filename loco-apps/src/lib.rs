@@ -104,41 +104,28 @@ mod generated_tests {
     }
 
     #[test]
-    fn action_and_param_path_roundtrip() {
-        let action = Action::to_path("ben/crm", "0.0.1-dev", "sync_orders");
-        assert_eq!(action, "ben/crm/versions/0.0.1-dev/actions/sync_orders");
-        let vars = Action::from_path(&action).unwrap();
+    fn action_yaml_params_roundtrip() {
+        let path = Action::to_path("ben/crm", "0.0.1-dev", "sync_orders");
+        assert_eq!(path, "ben/crm/versions/0.0.1-dev/actions/sync_orders");
+        let vars = Action::from_path(&path).unwrap();
         assert_eq!(vars.get("project").unwrap(), "ben/crm");
         assert_eq!(vars.get("name").unwrap(), "sync_orders");
 
-        let param = ActionParam::to_path("ben/crm", "0.0.1-dev", "sync_orders", "qty");
-        assert_eq!(
-            param,
-            "ben/crm/versions/0.0.1-dev/action_params/sync_orders/qty"
-        );
-        let vars = ActionParam::from_path(&param).unwrap();
-        assert_eq!(vars.get("action").unwrap(), "sync_orders");
-        assert_eq!(vars.get("name").unwrap(), "qty");
-    }
-
-    #[test]
-    fn action_param_yaml_options() {
-        let vars = std::collections::HashMap::from([
-            ("project".into(), "alice/fixture".into()),
-            ("version".into(), "0.0.1-dev".into()),
-            ("action".into(), "echo".into()),
-            ("name".into(), "size".into()),
-        ]);
-        let param = ActionParam::from_yaml(
-            "type: string\nlabel: Size\nrequired: true\noptions:\n  - value: s\n    label: Small\n",
+        let action = Action::from_yaml(
+            "label: Echo\ndescription: Returns JSON\nparams:\n  - name: size\n    type: string\n    label: Size\n    required: true\n    options:\n      - value: s\n        label: Small\n  - name: qty\n    type: integer\n    label: Qty\n    required: true\n",
             &vars,
         )
         .unwrap();
-        assert_eq!(param.r#type(), "string");
-        assert!(param.required());
-        assert_eq!(param.options().len(), 1);
-        assert_eq!(param.options()[0].value(), "s");
-        assert_eq!(param.options()[0].label(), "Small");
+        assert_eq!(action.label(), "Echo");
+        assert_eq!(action.params().len(), 2);
+        assert_eq!(action.params()[0].name(), "size");
+        assert_eq!(action.params()[0].r#type(), "string");
+        assert!(action.params()[0].required());
+        assert_eq!(action.params()[0].options().len(), 1);
+        assert_eq!(action.params()[0].options()[0].value(), "s");
+        assert_eq!(action.params()[0].options()[0].label(), "Small");
+        assert_eq!(action.params()[1].name(), "qty");
+        assert_eq!(action.params()[1].r#type(), "integer");
     }
 
     #[test]
