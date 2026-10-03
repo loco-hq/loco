@@ -150,8 +150,26 @@ impl SiteScope {
         Ok(self.has_data_access()? || self.public_allowed(name, project, DataVerb::Read))
     }
 
+    /// `GET /actions`: data access, or a read on any collection this version
+    /// shows. An action is not a collection, so the fields read rule is
+    /// lifted off one collection. A version with nothing readable is members
+    /// only.
+    pub fn may_read_actions(&self) -> Result<bool, Response> {
+        if self.has_data_access()? {
+            return Ok(true);
+        }
+        for collection in self.schema.collections() {
+            if self.may_read_collection(collection.name(), collection.project())? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Member data mutation (developer or editor). Public verbs live on
     /// [`super::CollectionScope`] and follow the site's permission sets.
+    /// `POST /actions` uses this and not the public create grant: token-less
+    /// `public` cannot run an action.
     pub fn require_can_write_data(&self) -> Result<(), Response> {
         if self.has_data_access()? {
             Ok(())

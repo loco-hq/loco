@@ -30,9 +30,9 @@ use crate::http::authz::is_draft_version;
 use crate::http::project_config::lock_pins;
 use crate::validation::FIELD_TYPES;
 use crate::{
-    Bundle, Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest,
-    ManifestUpdate, PermissionSet, PermissionSetUpdate, SchemaStore, Secret, SecretUpdate,
-    Variable, VariableUpdate,
+    Action, ActionParam, ActionParamUpdate, ActionUpdate, Bundle, Collection, CollectionUpdate,
+    Field, FieldUpdate, Fieldset, FieldsetUpdate, Manifest, ManifestUpdate, PermissionSet,
+    PermissionSetUpdate, SchemaStore, Secret, SecretUpdate, Variable, VariableUpdate,
 };
 
 /// Name of the fieldset auto-created when a collection is created. The boolean
@@ -59,9 +59,10 @@ pub enum VersionSchemaError {
     /// The version has no manifest: it was never created through `/config`,
     /// or it has since been deleted.
     UnknownVersion(String),
-    /// `delete_collection` attempted both prefixes. These keys are still
-    /// present. The collection record was left in place, so a recreate cannot
-    /// inherit a leftover fieldset and the delete can be retried.
+    /// `delete_collection` or `delete_action` attempted its child prefixes.
+    /// These keys are still present. The parent record was left in place, so
+    /// a recreate cannot inherit a leftover child and the delete can be
+    /// retried.
     LeftBehind(Vec<String>),
     Schema(loco_schema_runtime::Error),
 }
@@ -818,6 +819,148 @@ impl VersionSchema {
         let _pins = self.write_guard()?;
         let key = Variable::to_path(&self.project_id, &self.version, name);
         Ok(self.store.variables().delete(&key)?)
+    }
+
+    /// Every action visible to this version, across self + direct deps.
+    /// Each carries its `project`, like [`Self::collections`].
+    pub fn actions(&self) -> Vec<Arc<Action>> {
+        self.dependencies
+            .iter()
+            .flat_map(|(project_id, version)| {
+                let prefix = format!("{project_id}/versions/{version}/actions/");
+                self.store
+                    .actions()
+                    .list(&prefix)
+                    .into_iter()
+                    .map(|(_, action)| action)
+            })
+            .collect()
+    }
+
+    /// The action `name` names: this project's for a bare name, a direct
+    /// dependency's for `{account}/{project}.{name}`.
+    pub fn action(&self, name: &str) -> Option<Arc<Action>> {
+        let (project, version, bare) = self.resolve(name)?;
+        self.store
+            .actions()
+            .get(&Action::to_path(project, version, bare))
+    }
+
+    /// The params of the action `action` names. They are the ones its owner
+    /// declares, like a collection's fields. Sorted by param name.
+    pub fn action_params(&self, action: &str) -> Vec<Arc<ActionParam>> {
+        let (owner, bare) = self.split(action);
+        self.action_params_of(owner, bare)
+    }
+
+    /// [`Self::action_params`] for the action `action` owned by `owner`.
+    /// Empty when that project is not visible. Order is the param name.
+    pub fn action_params_of(&self, owner: &str, action: &str) -> Vec<Arc<ActionParam>> {
+        let Some(version) = self.visible_version(owner) else {
+            return Vec::new();
+        };
+        let prefix = format!("{owner}/versions/{version}/action_params/{action}/");
+        let mut params: Vec<Arc<ActionParam>> = self
+            .store
+            .action_params()
+            .list(&prefix)
+            .into_iter()
+            .map(|(_, param)| param)
+            .collect();
+        params.sort_by(|a, b| a.name().cmp(b.name()));
+        params
+    }
+
+    pub fn create_action(&self, mut input: Action) -> Result<Arc<Action>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.actions().create(input)?)
+    }
+
+    pub fn update_action(
+        &self,
+        name: &str,
+        patch: ActionUpdate,
+    ) -> Result<Arc<Action>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = Action::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.actions().update(&key, patch)?)
+    }
+
+    /// Deletes the action and every param belonging to it in this version.
+    ///
+    /// The param prefix is attempted even when it fails, and the error names
+    /// every key that could not be removed. A leftover param is what an
+    /// action recreated at this name would inherit. The action record stays
+    /// until the prefix is gone, so that cannot happen and the delete can be
+    /// retried.
+    pub fn delete_action(&self, name: &str) -> Result<(), VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let param_prefix = format!(
+            "{}/versions/{}/action_params/{}/",
+            self.project_id, self.version, name
+        );
+        let mut left = Vec::new();
+        if self
+            .store
+            .action_params()
+            .delete_by_prefix(&param_prefix)
+            .is_err()
+        {
+            left.extend(
+                self.store
+                    .action_params()
+                    .list(&param_prefix)
+                    .into_iter()
+                    .map(|(key, _)| key),
+            );
+        }
+        let key = Action::to_path(&self.project_id, &self.version, name);
+        if left.is_empty() {
+            match self.store.actions().delete(&key) {
+                Ok(()) | Err(loco_schema_runtime::Error::NotFound(_)) => {}
+                Err(_) => left.push(key),
+            }
+        }
+        if left.is_empty() {
+            Ok(())
+        } else {
+            left.sort();
+            left.dedup();
+            Err(VersionSchemaError::LeftBehind(left))
+        }
+    }
+
+    pub fn create_action_param(
+        &self,
+        mut input: ActionParam,
+    ) -> Result<Arc<ActionParam>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        check_field_type(&input.r#type)?;
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.action_params().create(input)?)
+    }
+
+    pub fn update_action_param(
+        &self,
+        action: &str,
+        name: &str,
+        patch: ActionParamUpdate,
+    ) -> Result<Arc<ActionParam>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        if let Some(ty) = &patch.r#type {
+            check_field_type(ty)?;
+        }
+        let key = ActionParam::to_path(&self.project_id, &self.version, action, name);
+        Ok(self.store.action_params().update(&key, patch)?)
+    }
+
+    pub fn delete_action_param(&self, action: &str, name: &str) -> Result<(), VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = ActionParam::to_path(&self.project_id, &self.version, action, name);
+        Ok(self.store.action_params().delete(&key)?)
     }
 
     /// A secret and a variable of one bare name in this version would make a

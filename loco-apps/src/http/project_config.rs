@@ -203,9 +203,9 @@ impl ProjectConfig {
     }
 
     /// Removes everything under this project: each version's collections,
-    /// fields, fieldsets, permission sets, secrets, variables, bundle, and
-    /// manifest; every dataset and its records; every site; then the project
-    /// record.
+    /// fields, fieldsets, permission sets, secrets, variables, actions,
+    /// action params, bundle, and manifest; every dataset and its records;
+    /// every site; then the project record.
     ///
     /// `purge` is called with that dataset's name before its schema row is
     /// removed. The handler's purge deletes the dataset's secrets
@@ -269,6 +269,18 @@ impl ProjectConfig {
             &mut left,
             self.store.variables().delete_by_prefix(&versions_prefix),
             || keys_of(self.store.variables().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .action_params()
+                .delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.action_params().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store.actions().delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.actions().list(&versions_prefix)),
         );
         // File trees too, or a deleted project leaves its frontends on disk
         // for a same-named project to inherit.
@@ -453,9 +465,10 @@ impl ProjectConfig {
     }
 
     /// Delete a version: cascade-removes its collections, fields, fieldsets,
-    /// permission sets, secrets, variables, bundle, and manifest. Secret and
-    /// variable *values* are per dataset, not per version, and stay. Refused
-    /// while a site pins it or another project's manifest depends on it.
+    /// permission sets, secrets, variables, actions, action params, bundle,
+    /// and manifest. Secret and variable *values* are per dataset, not per
+    /// version, and stay. Refused while a site pins it or another project's
+    /// manifest depends on it.
     ///
     /// Every store is attempted even when an earlier one fails, and the error
     /// names every key that could not be removed. A leftover fieldset is the
@@ -491,6 +504,9 @@ impl ProjectConfig {
             format!("{}/versions/{version}/permission_sets/", self.project_id());
         let secrets_prefix = format!("{}/versions/{version}/secrets/", self.project_id());
         let variables_prefix = format!("{}/versions/{version}/variables/", self.project_id());
+        let action_params_prefix =
+            format!("{}/versions/{version}/action_params/", self.project_id());
+        let actions_prefix = format!("{}/versions/{version}/actions/", self.project_id());
         let mut left = Vec::new();
         note_prefix(
             &mut left,
@@ -526,6 +542,18 @@ impl ProjectConfig {
             self.store.variables().delete_by_prefix(&variables_prefix),
             || keys_of(self.store.variables().list(&variables_prefix)),
         );
+        note_prefix(
+            &mut left,
+            self.store
+                .action_params()
+                .delete_by_prefix(&action_params_prefix),
+            || keys_of(self.store.action_params().list(&action_params_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store.actions().delete_by_prefix(&actions_prefix),
+            || keys_of(self.store.actions().list(&actions_prefix)),
+        );
         // The version's bundle goes with it; a recreated version must not
         // inherit the frontend of the one that was deleted.
         let bundle_key = Bundle::to_path(&self.project_id(), version);
@@ -556,6 +584,8 @@ impl ProjectConfig {
             || !self.store.permission_sets().list(&prefix).is_empty()
             || !self.store.secrets().list(&prefix).is_empty()
             || !self.store.variables().list(&prefix).is_empty()
+            || !self.store.action_params().list(&prefix).is_empty()
+            || !self.store.actions().list(&prefix).is_empty()
             || !self.store.bundles().list(&prefix).is_empty()
     }
 
@@ -585,9 +615,10 @@ impl ProjectConfig {
     // --- Version copy (the publish primitive) ---
 
     /// Copy every piece of versioned metadata from `from` into a brand-new
-    /// version `to`: collections, fields, fieldsets, permission sets, the
-    /// version's file trees (its `bundle`), and the manifest (dependencies
-    /// plus the public permission-set assignment).
+    /// version `to`: collections, fields, fieldsets, permission sets, secrets,
+    /// variables, actions, action params, the version's file trees (its
+    /// `bundle`), and the manifest (dependencies plus the public
+    /// permission-set assignment).
     ///
     /// Metadata is a version directory, not just its YAML — so a published
     /// snapshot that dropped the frontend would not be a snapshot, and
@@ -729,6 +760,24 @@ impl ProjectConfig {
             self.store.variables().create(copy)?;
             copied.variables.push(key);
         }
+        for (_, action) in self.store.actions().list(&source_prefix("actions")) {
+            let mut copy = (*action).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.actions().create(copy)?;
+            copied.actions.push(key);
+        }
+        for (_, param) in self
+            .store
+            .action_params()
+            .list(&source_prefix("action_params"))
+        {
+            let mut copy = (*param).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.action_params().create(copy)?;
+            copied.action_params.push(key);
+        }
 
         // File trees, by prefix rather than by naming `bundle`: the store
         // rewrites each key's version segment and skips anything that stops
@@ -779,6 +828,12 @@ impl ProjectConfig {
         for key in &copied.variables {
             let _ = self.store.variables().delete(key);
         }
+        for key in &copied.action_params {
+            let _ = self.store.action_params().delete(key);
+        }
+        for key in &copied.actions {
+            let _ = self.store.actions().delete(key);
+        }
         for key in &copied.bundles {
             let _ = self.store.bundles().delete(key);
         }
@@ -795,6 +850,8 @@ struct CopiedKeys {
     permission_sets: Vec<String>,
     secrets: Vec<String>,
     variables: Vec<String>,
+    actions: Vec<String>,
+    action_params: Vec<String>,
     /// File-tree keys (the version's `bundle`), which are whole trees rather
     /// than documents but undo the same way.
     bundles: Vec<String>,
@@ -810,7 +867,9 @@ mod tests {
     use loco_schema_runtime::FileTree;
 
     use super::*;
-    use crate::{Collection, Field, Fieldset, PermissionSet, Secret, Variable};
+    use crate::{
+        Action, ActionParam, Collection, Field, Fieldset, PermissionSet, Secret, Variable,
+    };
 
     const PROJECT: &str = "ben/crm";
     const VERSION: &str = "0.0.1-dev";
@@ -950,6 +1009,28 @@ mod tests {
                 "https://example.test".into(),
             ))
             .unwrap();
+        store
+            .actions()
+            .create(Action::new(
+                PROJECT.into(),
+                VERSION.into(),
+                "echo".into(),
+                "Echo".into(),
+                String::new(),
+            ))
+            .unwrap();
+        store
+            .action_params()
+            .create(ActionParam {
+                project: PROJECT.into(),
+                version: VERSION.into(),
+                action: "echo".into(),
+                name: "qty".into(),
+                r#type: "integer".into(),
+                required: true,
+                ..ActionParam::default()
+            })
+            .unwrap();
         let mut tree = FileTree::new();
         tree.insert("index.html", b"<p>hi</p>".to_vec()).unwrap();
         store
@@ -983,6 +1064,8 @@ mod tests {
         assert!(store.permission_sets().list(&prefix).is_empty());
         assert!(store.secrets().list(&prefix).is_empty());
         assert!(store.variables().list(&prefix).is_empty());
+        assert!(store.actions().list(&prefix).is_empty());
+        assert!(store.action_params().list(&prefix).is_empty());
         assert!(store.bundles().list(&prefix).is_empty());
         let fields = super::keys_of(store.fields().list(&prefix));
         let expected: Vec<String> = except_fields.iter().map(|key| (*key).to_string()).collect();
@@ -1071,6 +1154,8 @@ mod tests {
         let prefix = format!("{PROJECT}/versions/{VERSION}/");
         assert!(world.store.secrets().list(&prefix).is_empty());
         assert!(world.store.variables().list(&prefix).is_empty());
+        assert!(world.store.actions().list(&prefix).is_empty());
+        assert!(world.store.action_params().list(&prefix).is_empty());
         assert!(!world
             .store
             .manifests()

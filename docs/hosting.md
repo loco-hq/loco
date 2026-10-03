@@ -140,7 +140,7 @@ Draft versions are not this deal. A live `*-dev` site is an editor preview.
 
 Reserved prefixes always win, on every host:
 
-`/data` `/schema` `/config` `/auth`
+`/data` `/schema` `/config` `/auth` `/actions`
 
 There is no `/host` prefix. The bundle is schema. Deploy is a draft write:
 

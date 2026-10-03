@@ -1,0 +1,42 @@
+description: "One input of an action. Same vocabulary as a collection field, and the same types."
+pathTemplate: "${project}/versions/${version}/action_params/${action}/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  action:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  # string, integer, float, or boolean. /schema rejects anything else, the
+  # same check as a collection field.
+  type:
+    type: string
+  label:
+    type: string
+  description:
+    type: string
+  # A run must give the param a value: missing, null, and (for a string) ""
+  # are errors (kind required). Checked before the handler is called.
+  required:
+    type: boolean
+  # The allowed values of a string param. Empty means any string. A run
+  # rejects a value that is not one of them (invalid_option).
+  options:
+    type: list
+    items:
+      type: object
+      # Not `field_option`: codegen emits one struct per object name, and a
+      # second `field_option` would be a second `FieldOption`.
+      name: action_param_option
+      properties:
+        value:
+          type: string
+        label:
+          type: string

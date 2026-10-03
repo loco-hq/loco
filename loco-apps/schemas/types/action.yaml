@@ -1,0 +1,18 @@
+description: "A named operation a version exposes. The handler is code, registered against the owning project and this name; the declaration is the input it accepts."
+pathTemplate: "${project}/versions/${version}/actions/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+  # What the handler returns is not declared. Say the JSON shape here.
+  description:
+    type: string

@@ -3,6 +3,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/loco_generated.rs"));
 
+pub mod actions;
 pub mod auth;
 pub mod bundle;
 pub mod handlers;
@@ -100,6 +101,44 @@ mod generated_tests {
         let omitted = Variable::from_yaml("label: API base\n", &vars).unwrap();
         assert_eq!(omitted.default(), "");
         assert!(!omitted.required());
+    }
+
+    #[test]
+    fn action_and_param_path_roundtrip() {
+        let action = Action::to_path("ben/crm", "0.0.1-dev", "sync_orders");
+        assert_eq!(action, "ben/crm/versions/0.0.1-dev/actions/sync_orders");
+        let vars = Action::from_path(&action).unwrap();
+        assert_eq!(vars.get("project").unwrap(), "ben/crm");
+        assert_eq!(vars.get("name").unwrap(), "sync_orders");
+
+        let param = ActionParam::to_path("ben/crm", "0.0.1-dev", "sync_orders", "qty");
+        assert_eq!(
+            param,
+            "ben/crm/versions/0.0.1-dev/action_params/sync_orders/qty"
+        );
+        let vars = ActionParam::from_path(&param).unwrap();
+        assert_eq!(vars.get("action").unwrap(), "sync_orders");
+        assert_eq!(vars.get("name").unwrap(), "qty");
+    }
+
+    #[test]
+    fn action_param_yaml_options() {
+        let vars = std::collections::HashMap::from([
+            ("project".into(), "alice/fixture".into()),
+            ("version".into(), "0.0.1-dev".into()),
+            ("action".into(), "echo".into()),
+            ("name".into(), "size".into()),
+        ]);
+        let param = ActionParam::from_yaml(
+            "type: string\nlabel: Size\nrequired: true\noptions:\n  - value: s\n    label: Small\n",
+            &vars,
+        )
+        .unwrap();
+        assert_eq!(param.r#type(), "string");
+        assert!(param.required());
+        assert_eq!(param.options().len(), 1);
+        assert_eq!(param.options()[0].value(), "s");
+        assert_eq!(param.options()[0].label(), "Small");
     }
 
     #[test]

@@ -105,6 +105,36 @@ HTTP 404
 [Asserts]
 header "Content-Type" contains "application/json"
 
+# /actions is reserved too. The list and a named action are the actions
+# router (JSON). A path it does not own falls through to this fallback and
+# still must not be the bundle.
+GET http://127.0.0.1:{{port}}/actions
+Host: www.blog.alice.localhost:{{port}}
+Accept: text/html
+HTTP 403
+[Asserts]
+header "Content-Type" contains "application/json"
+jsonpath "$.ok" == false
+body not contains "draft blog"
+
+GET http://127.0.0.1:{{port}}/actions/echo
+Host: www.blog.alice.localhost:{{port}}
+Accept: text/html
+HTTP 404
+[Asserts]
+header "Content-Type" contains "application/json"
+jsonpath "$.error" contains "action not found"
+body not contains "draft blog"
+
+GET http://127.0.0.1:{{port}}/actions/extra/junk
+Host: www.blog.alice.localhost:{{port}}
+Accept: text/html
+HTTP 404
+[Asserts]
+header "Content-Type" contains "application/json"
+jsonpath "$.error" contains "no such endpoint"
+body not contains "draft blog"
+
 # 9. The host filled in the site headers, which is why step 8 got as far as
 #    "unknown collection" instead of "missing project". Sending them is still
 #    fine when they agree.
