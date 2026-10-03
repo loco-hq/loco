@@ -241,8 +241,8 @@ body not contains "from-the-package-dataset"
 body not contains "store-own-token"
 body not contains "store-only-token"
 
-# Nothing listens on the default. call with no path requests that URL,
-# query string included. A 502 must not echo it.
+# Nothing listens on the default. With no path the fixture appends /ok,
+# so the call is http://127.0.0.1:9/?k=1/ok. A 502 must not echo it.
 POST http://127.0.0.1:{{port}}/actions/alice%2Fpkg.pull
 Authorization: Bearer {{token}}
 X-Project-Id: alice/store

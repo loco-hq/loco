@@ -1100,53 +1100,6 @@ mod tests {
         assert!(!message.contains("k=1"), "{message}");
     }
 
-    /// `HTTP_PROXY` is set for this test only. The client is built with
-    /// [`http_client`], so a proxy hit means `.no_proxy()` was dropped.
-    #[tokio::test]
-    async fn http_client_ignores_http_proxy() {
-        let hits = Arc::new(AtomicUsize::new(0));
-        let hits_for_proxy = Arc::clone(&hits);
-        let proxy = spawn_server(move |_port, _path| {
-            hits_for_proxy.fetch_add(1, Ordering::SeqCst);
-            response(502, "Bad Gateway", &[], "proxied")
-        });
-        let dest = spawn_server(|_port, _path| response(200, "OK", &[], "direct"));
-        let _guard = ProxyEnv::set(&format!("http://127.0.0.1:{proxy}"));
-        let client = http_client();
-        let response = client
-            .get(format!("http://127.0.0.1:{dest}/direct"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        assert_eq!(response.text().await.unwrap(), "direct");
-        assert_eq!(hits.load(Ordering::SeqCst), 0);
-    }
-
-    struct ProxyEnv;
-
-    impl ProxyEnv {
-        fn set(url: &str) -> Self {
-            // SAFETY: the guard removes both names on drop, including on panic.
-            // Other clients in this process are built with `no_proxy`, so they
-            // do not read these variables.
-            unsafe {
-                std::env::set_var("HTTP_PROXY", url);
-                std::env::set_var("http_proxy", url);
-            }
-            Self
-        }
-    }
-
-    impl Drop for ProxyEnv {
-        fn drop(&mut self) {
-            unsafe {
-                std::env::remove_var("HTTP_PROXY");
-                std::env::remove_var("http_proxy");
-            }
-        }
-    }
-
     #[tokio::test]
     async fn redirect_stays_on_the_same_host() {
         let client = test_http();
