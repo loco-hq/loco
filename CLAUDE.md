@@ -294,7 +294,7 @@ Who may run: an authenticated editor or developer, via `require_can_write_data`.
 
 Handlers are registered in code against `(owning project, bare name)`. The production binary registers none: `build_app` uses an empty registry. The Hurl fixture handler (`alice/fixture` / `echo`) is registered by the test runner, so it is not in the server binary.
 
-The lake has no transactions. A handler that fails after it has written leaves those writes in place. That partial failure is the contract: handlers must be safe to re-run, and a handler error should say what was already written. The handler maps that to 400 (bad input it found itself), 409 (conflict), or 500, with diagnostics when it has them — the same body shape as `/data`.
+The lake has no transactions. A handler that fails after it has written leaves those writes in place. That partial failure is the contract: handlers must be safe to re-run, and a handler error should say what was already written. The handler maps that to 400 (bad input it found itself), 409 (conflict), or 500, with diagnostics when it has them — the same body shape as `/data`. Handlers update records by patch and never replace a record's `fields` wholesale, because an installer may have added fields the owning package's code does not know about (#117).
 
 ## Key Patterns
 
