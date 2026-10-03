@@ -7,10 +7,11 @@ use axum::{Json, Router};
 
 use crate::http::response::{error_response, version_schema_error_to_response, ApiResponse};
 use crate::http::scope::{VersionReadScope, VersionScope};
+use crate::http::version_schema::reject_secret_value;
 use crate::server::AppState;
 use crate::{
     Collection, CollectionUpdate, Field, FieldUpdate, Fieldset, FieldsetUpdate, ManifestUpdate,
-    PermissionSet, PermissionSetUpdate,
+    PermissionSet, PermissionSetUpdate, Secret, SecretUpdate, Variable, VariableUpdate,
 };
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -70,6 +71,26 @@ pub fn router() -> Router<Arc<AppState>> {
             get(get_permission_set)
                 .put(update_permission_set)
                 .delete(delete_permission_set),
+        )
+        .route("/{user}/{project}/{version}/secret", post(create_secret))
+        .route("/{user}/{project}/{version}/secret/list", get(list_secrets))
+        .route(
+            "/{user}/{project}/{version}/secret/{name}",
+            get(get_secret).put(update_secret).delete(delete_secret),
+        )
+        .route(
+            "/{user}/{project}/{version}/variable",
+            post(create_variable),
+        )
+        .route(
+            "/{user}/{project}/{version}/variable/list",
+            get(list_variables),
+        )
+        .route(
+            "/{user}/{project}/{version}/variable/{name}",
+            get(get_variable)
+                .put(update_variable)
+                .delete(delete_variable),
         )
         // The bundle is schema too: a version's file tree, written the same
         // way its YAML is. Its own module because the body is a zip, not JSON.
@@ -276,6 +297,117 @@ pub async fn delete_permission_set(
     Path((_, _, _, name)): Path<(String, String, String, String)>,
 ) -> Response {
     match scope.schema.delete_permission_set(&name) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+/// `default` and `value` are refused before the body is read as a `Secret`,
+/// which would otherwise drop them. A published version is refused first, so
+/// the error names that rather than the body.
+fn secret_from_body<T: serde::de::DeserializeOwned>(
+    scope: &VersionScope,
+    body: serde_json::Value,
+) -> Result<T, Response> {
+    scope
+        .schema
+        .require_writable()
+        .map_err(version_schema_error_to_response)?;
+    reject_secret_value(&body).map_err(version_schema_error_to_response)?;
+    serde_json::from_value(body)
+        .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err.to_string()))
+}
+
+pub async fn create_secret(scope: VersionScope, Json(body): Json<serde_json::Value>) -> Response {
+    let input: Secret = match secret_from_body(&scope, body) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    match scope.schema.create_secret(input) {
+        Ok(secret) => (StatusCode::CREATED, ApiResponse::success(secret)).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn list_secrets(scope: VersionReadScope) -> Response {
+    ApiResponse::success(scope.schema.secrets()).into_response()
+}
+
+pub async fn get_secret(
+    scope: VersionReadScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+) -> Response {
+    match scope.schema.secret(&name) {
+        Some(secret) => ApiResponse::success(secret).into_response(),
+        None => error_response(StatusCode::NOT_FOUND, &format!("secret not found: {name}")),
+    }
+}
+
+pub async fn update_secret(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let patch: SecretUpdate = match secret_from_body(&scope, body) {
+        Ok(patch) => patch,
+        Err(response) => return response,
+    };
+    match scope.schema.update_secret(&name, patch) {
+        Ok(secret) => ApiResponse::success(secret).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn delete_secret(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+) -> Response {
+    match scope.schema.delete_secret(&name) {
+        Ok(()) => ApiResponse::success("deleted").into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn create_variable(scope: VersionScope, Json(input): Json<Variable>) -> Response {
+    match scope.schema.create_variable(input) {
+        Ok(variable) => (StatusCode::CREATED, ApiResponse::success(variable)).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn list_variables(scope: VersionReadScope) -> Response {
+    ApiResponse::success(scope.schema.variables()).into_response()
+}
+
+pub async fn get_variable(
+    scope: VersionReadScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+) -> Response {
+    match scope.schema.variable(&name) {
+        Some(variable) => ApiResponse::success(variable).into_response(),
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            &format!("variable not found: {name}"),
+        ),
+    }
+}
+
+pub async fn update_variable(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+    Json(patch): Json<VariableUpdate>,
+) -> Response {
+    match scope.schema.update_variable(&name, patch) {
+        Ok(variable) => ApiResponse::success(variable).into_response(),
+        Err(e) => version_schema_error_to_response(e),
+    }
+}
+
+pub async fn delete_variable(
+    scope: VersionScope,
+    Path((_, _, _, name)): Path<(String, String, String, String)>,
+) -> Response {
+    match scope.schema.delete_variable(&name) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => version_schema_error_to_response(e),
     }
