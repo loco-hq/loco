@@ -70,6 +70,43 @@ Content-Type: application/json
 {"name": "label_prefix", "label": "Label prefix", "default": "Lot"}
 HTTP 201
 
+# `$` is not a collection name, so the reserved lake collections cannot be
+# declared or read. Ciphertext lives under the literal collection `$secrets`,
+# which `/data` never resolves to.
+POST http://127.0.0.1:{{port}}/schema/alice/shop/0.0.1-dev/collection
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"name": "$secrets", "label": "no"}
+HTTP 400
+[Asserts]
+jsonpath "$.error" contains "$"
+
+GET http://127.0.0.1:{{port}}/data/$secrets/list
+Authorization: Bearer {{token}}
+X-Project-Id: alice/shop
+X-Site-Id: dev
+HTTP 404
+[Asserts]
+jsonpath "$.error" contains "unknown collection"
+
+GET http://127.0.0.1:{{port}}/data/$variables/list
+Authorization: Bearer {{token}}
+X-Project-Id: alice/shop
+X-Site-Id: dev
+HTTP 404
+[Asserts]
+jsonpath "$.error" contains "unknown collection"
+
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: alice/shop
+X-Site-Id: dev
+Content-Type: application/json
+{"queries": {"reserved": {"collection": "$secrets"}}}
+HTTP 200
+[Asserts]
+jsonpath "$.data.reserved.diagnostics[0].kind" == "unknown_collection"
+
 # ---------------------------------------------------------------------------
 # Auth. No token is 401. A non-member is 403. An editor can read, not write.
 # ---------------------------------------------------------------------------

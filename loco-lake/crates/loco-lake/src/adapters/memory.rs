@@ -51,6 +51,32 @@ impl DataAdapter for InMemoryAdapter {
         Ok(record)
     }
 
+    fn upsert(
+        &self,
+        dataset_id: &str,
+        collection: &str,
+        id: &str,
+        user: &str,
+        fields: HashMap<String, Value>,
+    ) -> Result<Record, Error> {
+        let key = Self::scoped_key(dataset_id, collection);
+        let mut store = self
+            .store
+            .write()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let coll = store.entry(key).or_default();
+        let record = if let Some(existing) = coll.get(id).cloned() {
+            existing.apply_patch(UpdatePatch {
+                user: user.to_string(),
+                fields,
+            })
+        } else {
+            Record::with_id(dataset_id, id, user, fields)
+        };
+        coll.insert(id.to_string(), record.clone());
+        Ok(record)
+    }
+
     fn get(&self, dataset_id: &str, collection: &str, id: &str) -> Result<Option<Record>, Error> {
         let key = Self::scoped_key(dataset_id, collection);
         let store = self
@@ -331,5 +357,31 @@ mod tests {
     fn test_delete_dataset_empty() {
         let adapter = InMemoryAdapter::new();
         adapter.delete_dataset("nonexistent").unwrap();
+    }
+
+    #[test]
+    fn test_upsert_keeps_the_caller_id() {
+        let adapter = InMemoryAdapter::new();
+        let id = "alice/bricklink.consumer_key";
+        let mut fields = HashMap::new();
+        fields.insert("nonce".into(), Value::String("one".into()));
+        let created = adapter
+            .upsert(DATASET, "$secrets", id, "system", fields)
+            .unwrap();
+        assert_eq!(created.id, id);
+        assert_eq!(created.created_by, "system");
+
+        let mut fields = HashMap::new();
+        fields.insert("nonce".into(), Value::String("two".into()));
+        let updated = adapter
+            .upsert(DATASET, "$secrets", id, "system", fields)
+            .unwrap();
+        assert_eq!(updated.id, id);
+        assert_eq!(updated.created_at, created.created_at);
+        assert_eq!(
+            updated.fields.get("nonce"),
+            Some(&Value::String("two".into()))
+        );
+        assert_eq!(adapter.list(DATASET, "$secrets").unwrap().len(), 1);
     }
 }

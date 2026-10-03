@@ -33,9 +33,7 @@ NOTES.md
 # Playwright MCP session artifacts
 .playwright-mcp/
 
-# The live schema store and the per-dataset secret/variable value store.
-# Committed projects are seeded into instances from schemas/seed/ at boot.
-# Values are not schema instances: SchemaStore::load does not walk them.
-# Test suites have their own fixtures under tests/suites/.
+# The live schema store. Committed projects are seeded into it from
+# schemas/seed/ at boot. Test suites have their own fixtures under tests/suites/.
+# Secret and variable values are lake records, not files under schemas/.
 /loco-apps/schemas/instances/
-/loco-apps/schemas/values/

@@ -105,7 +105,7 @@ fn open_project(
     user: String,
     project: String,
 ) -> Result<ProjectConfig, Response> {
-    let config = ProjectConfig::new(state.schema.clone(), state.values.clone(), user, project);
+    let config = ProjectConfig::new(state.schema.clone(), user, project);
     if !config.exists() {
         return Err(error_response(
             StatusCode::NOT_FOUND,
@@ -153,12 +153,7 @@ impl ConfigUserScope {
     /// responsible for any existence semantics (e.g. `create_project`
     /// expects no entry; `update`/`delete` expect one).
     pub fn project_config(&self, account: &str, project: &str) -> ProjectConfig {
-        ProjectConfig::new(
-            self.store.clone(),
-            self.state.values.clone(),
-            account.to_string(),
-            project.to_string(),
-        )
+        ProjectConfig::new(self.store.clone(), account.to_string(), project.to_string())
     }
 }
 

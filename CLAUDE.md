@@ -64,7 +64,7 @@ loco/
 ├── loco-schema/crates/loco-schema-runtime/    # InstanceStore + YamlFsAdapter, FileTreeStore + FileTreeFsAdapter
 ├── loco-lake/crates/loco-lake/                # DataAdapter + InMemoryAdapter + SqliteAdapter
 ├── loco-apps/                                 # Axum server consuming generated types
-│   └── schemas/{types,seed,instances,values}/ # type defs, seed, live schema store, value store (both stores gitignored)
+│   └── schemas/{types,seed,instances}/       # type defs, committed seed, live schema store (gitignored)
 ├── loco-studio/                               # Schema + record editor
 ├── loco-ui/                                   # Field component library (npm workspace)
 ├── loco-client/                               # Plain-JS API client (npm workspace)
@@ -99,7 +99,7 @@ An instance's namespace IS its path relative to `schemas/instances/` with `.yaml
 - `schemas/instances/ben/crm/datasets/acme.yaml` → `ben/crm/datasets/acme`
 - `schemas/instances/ben/crm/versions/0.0.1/collections/account.yaml` → `ben/crm/versions/0.0.1/collections/account`
 
-`schemas/instances/` is the live schema store and is wholly gitignored — every `/schema` write and every `/config` write of a project, dataset, site, or version, bundle deploys included, lands there and never in a tracked file. Dataset secret and variable values are the exception: they live in `schemas/values/` (also gitignored), which `SchemaStore::load` does not walk. Committed projects live in `schemas/seed/` with the same layout: `seed/loco/` (core, studio, demo) and `seed/brickos/` (inventory, [`docs/brickos.md`](docs/brickos.md)). At boot (`loco-apps/src/seed.rs`) a seed project is copied whole into the store only when the store has no `{account}/{project}/project.yaml` for it — decided by that file, not the directory, so leftovers such as an old `bundle/` do not block it. Files already in the store are never overwritten, and a seed is never re-synced: to pick up a changed seed, delete the project from `schemas/instances/` and restart. The server never writes to `schemas/seed/`; change it by editing the YAML and committing. Scratch projects (`ben/…`) live only in the store.
+`schemas/instances/` is the live schema store and is wholly gitignored — every `/schema` write and every `/config` write of a project, dataset, site, or version, bundle deploys included, lands there and never in a tracked file. Secret and variable *values* are not schema files: they are lake records (below). Committed projects live in `schemas/seed/` with the same layout: `seed/loco/` (core, studio, demo) and `seed/brickos/` (inventory, [`docs/brickos.md`](docs/brickos.md)). At boot (`loco-apps/src/seed.rs`) a seed project is copied whole into the store only when the store has no `{account}/{project}/project.yaml` for it — decided by that file, not the directory, so leftovers such as an old `bundle/` do not block it. Files already in the store are never overwritten, and a seed is never re-synced: to pick up a changed seed, delete the project from `schemas/instances/` and restart. The server never writes to `schemas/seed/`; change it by editing the YAML and committing. Scratch projects (`ben/…`) live only in the store.
 
 A project whose account does not exist loads anyway and logs one warning at boot. The `brickos` org account is not created at boot: create it with `POST /config/org` and its creator owns it. Hurl suites use their own fixtures under `loco-apps/tests/suites/*/fixtures/`, and a root with no `schemas/seed/` seeds nothing; `run_suite_over_seed` in `tests/hurl_runner.rs` copies named seed accounts in for suites that need them.
 
@@ -136,18 +136,13 @@ Persistence is `FileTreeFsAdapter` (`loco-schema-runtime`). Writes are whole-tre
 
 `${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `secrets`, `variables`, `versions`).
 
-`secret` and `variable` declare named configuration a version needs (`label`, `description`, `required`). A variable may also set `default` (a string; empty means none). A secret has no `default` and no `value` — a body carrying either is a 400, because the declaration never holds the value. A secret and a variable may not share a name in one version. The declaration never holds the value.
+`secret` and `variable` declare named configuration a version needs (`label`, `description`, `required`). A variable may also set `default` (a string; empty means none). A secret has no `default` and no `value` — a body carrying either is a 400, because the declaration never holds the value. A secret and a variable may not share a name in one version.
 
-Dataset values live in `schemas/values/`, one YAML file per value, not a schema type, so `/schema` and `/data` have no route that returns them:
+Secret and variable values are lake records on the dataset, in the reserved collections `$secrets` and `$variables`. The record id is the declaration reference, stored as text with no encoding: bare for this project (`consumer_key`), `{account}/{project}.{name}` for a dependency (`alice/bricklink.consumer_key`). `/` and `.` stay in the id. A collection name is one or more of `a-z`, `0-9`, `_`, `.`, and `-`. `create_collection` returns 400 for anything else, so `$` cannot be declared. A name that contains `$` does not resolve either: `GET /data/$secrets/list` is 404 (`unknown collection`) and `POST /data/query` reports `unknown_collection`. A real collection's lake key is `{owner}.{name}`, which is never the literal `$secrets`.
 
-```text
-{account}/{project}/datasets/{dataset}/secrets/{segment}.yaml
-{account}/{project}/datasets/{dataset}/variables/{segment}.yaml
-```
+`SecretStore` (`loco-apps/src/values/`) is plaintext in and plaintext out, so a later cloud store can replace the lake without a second shape. `AppState` holds `Box<dyn SecretStore>` beside the shared `Arc<dyn DataAdapter>`. The one impl is `LakeSecretStore`: AES-256-GCM, a random 12-byte nonce per write, additional data bound to the dataset id and the name, fields `nonce` and `ciphertext` as standard base64. `LOCO_SECRET_KEY` is standard base64 of exactly 32 bytes (`openssl rand -base64 32`); surrounding whitespace is ignored. Unset or malformed, the process still boots and `PUT /config/secret` returns 503 naming `LOCO_SECRET_KEY`. `DELETE` of a stored secret does not need the key. `get` is server-internal (for a later issue) and has no route. Variables are a plain `value` string in `$variables` and do not need the key or a trait. Crypto for values is `src/values/`, not `auth/secret.rs` (that one hashes passwords and API keys).
 
-`{segment}` is the declaration reference with `%` encoded as `%25` and `/` as `%2F` (`.` stays). `alice/bricklink.consumer_key` is one path segment, and a bare name that already contains those characters cannot collide with it. A secret file is AES-256-GCM ciphertext: a random 12-byte nonce per write, additional data bound to the project, dataset, and name. `LOCO_SECRET_KEY` is standard base64 of exactly 32 bytes (`openssl rand -base64 32`); surrounding whitespace is ignored. Unset or malformed, the process still boots and `PUT`/`DELETE /config/secret` return 503 naming `LOCO_SECRET_KEY`. Variable files are plaintext and do not need the key. Crypto for values is `loco-apps/src/values/`, not `auth/secret.rs` (that one hashes passwords and API keys).
-
-`PUT` and `DELETE /config/secret/{account}/{project}/{dataset}/{name}` — and the same paths under `/variable` — take `{"value":"…"}`. `name` is that reference, percent-encoded as one segment (`alice%2Fbricklink.consumer_key`). Writes require developer or org owner, and the name must be declared by some version of the project, itself or a direct dependency. `GET .../list` is any project role, editor included. A secret row is `{name, project, set, updated_at}` and never the value, so the list uses the same gate as a variable read. A variable row adds `value` and, when one applies, `source` of `value` or `default` (the declaration's default when nothing is set). The list is the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing, even if a value was stored for it. Deleting a dataset deletes its values. Deleting a project does too, and a value file that cannot be removed is reported left behind and keeps the project record.
+`PUT` and `DELETE /config/secret/{account}/{project}/{dataset}/{name}` — and the same paths under `/variable` — take `{"value":"…"}`. `name` is that reference, percent-encoded as one segment (`alice%2Fbricklink.consumer_key`). Writes require developer or org owner, and the name must be declared by some version of the project, itself or a direct dependency. A `DELETE` whose declaration is already gone still removes the row. `GET .../list` is any project role, editor included. A secret row is `{name, project, set, updated_at}` and never the value, so the list uses the same gate as a variable read. A variable row adds `value` and, when one applies, `source` of `value` or `default` (the declaration's default when nothing is set). The list is the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing, even if a value was stored for it. Deleting a dataset or a project removes the values through `DataAdapter::delete_dataset`, the same purge as the dataset's other records. That path does not also call `SecretStore::delete_dataset`; the trait method is for a store that is not the lake. A failed purge is reported left behind and keeps the dataset and project records.
 
 An inline `object`'s `name:` is snake_case (`collection_grant`); codegen PascalCases it into the generated struct name.
 
@@ -192,7 +187,8 @@ dependency list for a match, so two deps that share a name are both addressable.
   qualified name percent-encoded as one segment: `/data/acme%2Fcrm.contacts/list`
   (`loco-client`'s `data('acme/crm.contacts')` encodes it). A qualified name for self
   equals the bare one. Records of a dependency's collection live in the site's dataset
-  under the lake key `{owner_project}.{name}`.
+  under the lake key `{owner_project}.{name}`. A name containing `$` does not resolve
+  (`$secrets`, `$variables`).
 - **Fields and fieldsets** belong to the collection's owner. `acme/crm.contacts` has the
   fields acme/crm declares on `contacts`; neither the running project nor another
   dependency adds to it by declaring fields under the same collection name. A fieldset
@@ -218,7 +214,7 @@ A fieldset is an ordered named subset of a collection's fields. `auto_add: true`
 
 These conventions apply to property names in type definitions and variable names in `pathTemplate`s.
 
-- **`id`** — opaque identifier (uuid/number) with no semantic meaning. Immutable once set. Reserved on schema types. Lake records get a UUID `id` stamped by `Record::new_for_insert`.
+- **`id`** — opaque identifier (uuid/number) with no semantic meaning. Immutable once set. Reserved on schema types. Lake records get a UUID `id` stamped by `Record::new_for_insert`. Secret and variable value rows are the exception: `upsert` stores the declaration reference as the id.
 - **`name`** — semantic slug identifier: `[a-z_]` only, lowercase, immutable. Used as path-segment identifiers in `pathTemplate`s. Declare it as a `slug` + `createOnly` property when it appears in the template; do not repeat it in instance YAML bodies.
 - **`label`** — human-readable display string. Any characters, short, mutable.
 - **`description`** — free-form text. Any characters, longer, mutable.
@@ -276,7 +272,7 @@ Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, 
 - **Rust keyword escaping**: Codegen emits `r#type` (etc.) for property names that are Rust keywords. See `rust_ident()` in `codegen.rs`.
 - **Error types**: Each crate has its own error enum — `loco_gen_schema::Error`, `loco_schema_runtime::Error`, `loco_lake::Error`.
 - **Tests**: Unit tests are co-located (`#[cfg(test)] mod tests`). Filesystem tests use `tempfile`. API tests are Hurl suites under `loco-apps/tests/suites/`, driven by `tests/hurl_runner.rs`.
-- **Thread safety**: `InstanceStore` uses `RwLock<BTreeMap<...>>` for reads, and every mutation holds a per-store writer mutex across check, persist, and cache update (`FileTreeStore` too). Read-modify-write goes through `InstanceStore::update_with`, never `get` then `update`. No store locks another, so nothing nests: a caller touching several stores takes them one after another. `ConfigValueStore` (`values/store.rs`) is the same shape for dataset secret and variable values: one writer mutex covers both maps, taken after `PINS` and never while holding a schema store's lock. `InMemoryAdapter` uses `RwLock<HashMap<...>>`. `SqliteAdapter` uses `Mutex<Connection>`.
+- **Thread safety**: `InstanceStore` uses `RwLock<BTreeMap<...>>` for reads, and every mutation holds a per-store writer mutex across check, persist, and cache update (`FileTreeStore` too). Read-modify-write goes through `InstanceStore::update_with`, never `get` then `update`. No store locks another, so nothing nests: a caller touching several stores takes them one after another. Secret and variable writes take `PINS`, then the lake adapter lock: `DataAdapter::upsert` holds that lock across the existence check and the write. `InMemoryAdapter` uses `RwLock<HashMap<...>>`. `SqliteAdapter` uses `Mutex<Connection>`.
 
 ## Frontend Apps
 

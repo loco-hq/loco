@@ -16,16 +16,23 @@ use std::sync::MutexGuard;
 
 use serde::Serialize;
 
+use loco_lake::DataAdapter;
+
 use super::project_config::lock_pins;
 use super::project_config::ProjectConfig;
 use super::version_schema::VersionSchema;
-use crate::values::KeyStatus;
+use crate::values::check_name;
+use crate::values::delete_variable;
+use crate::values::list_variables;
+use crate::values::put_variable;
+use crate::values::SecretError;
+use crate::values::SecretStore;
 use crate::Secret;
 use crate::Variable;
 
 #[derive(Debug)]
 pub enum ValueError {
-    /// The name cannot be one path segment, or load would skip the file.
+    /// Empty, or a NUL, which the lake would cut short.
     InvalidName(String),
     /// No version of this project declares the name.
     Undeclared(String),
@@ -34,7 +41,7 @@ pub enum ValueError {
     NotFound(String),
     /// `LOCO_SECRET_KEY` is missing or malformed. The string names it.
     Unavailable(String),
-    Schema(loco_schema_runtime::Error),
+    Lake(loco_lake::Error),
 }
 
 impl std::fmt::Display for ValueError {
@@ -45,23 +52,12 @@ impl std::fmt::Display for ValueError {
             | Self::UnknownDataset(msg)
             | Self::NotFound(msg)
             | Self::Unavailable(msg) => write!(f, "{msg}"),
-            Self::Schema(err) => write!(f, "{err}"),
+            Self::Lake(err) => write!(f, "{err}"),
         }
     }
 }
 
 impl std::error::Error for ValueError {}
-
-impl From<loco_schema_runtime::Error> for ValueError {
-    fn from(err: loco_schema_runtime::Error) -> Self {
-        match err {
-            loco_schema_runtime::Error::InvalidPath(name) => {
-                Self::InvalidName(format!("invalid config value name: {name}"))
-            }
-            other => Self::Schema(other),
-        }
-    }
-}
 
 /// One row of `GET /config/secret/.../list`, and the body of a secret `PUT`.
 /// There is no `value` field.
@@ -124,15 +120,26 @@ fn reference(project_id: &str, owner: &str, name: &str) -> String {
 }
 
 impl ProjectConfig {
-    pub fn list_secret_values(&self, dataset: &str) -> Result<Vec<SecretValueView>, ValueError> {
+    fn dataset_id(&self, dataset: &str) -> String {
+        format!("{}/{dataset}", self.project_id())
+    }
+
+    pub fn list_secret_values(
+        &self,
+        secrets: &dyn SecretStore,
+        dataset: &str,
+    ) -> Result<Vec<SecretValueView>, ValueError> {
         self.require_dataset(dataset)?;
+        let stored = secrets
+            .list(&self.dataset_id(dataset))
+            .map_err(secret_err)?;
         let mut rows = Vec::new();
         for decl in self.pinned_declarations(dataset, Kind::Secret) {
             let stored_as = reference(&self.project_id(), &decl.project, &decl.name);
-            let updated_at = self
-                .values
-                .secret(&self.project_id(), dataset, &stored_as)
-                .map(|record| record.updated_at().to_string());
+            let updated_at = stored
+                .iter()
+                .find(|row| row.name == stored_as)
+                .map(|row| row.updated_at.clone());
             rows.push(SecretValueView {
                 name: decl.name,
                 project: decl.project,
@@ -145,27 +152,27 @@ impl ProjectConfig {
 
     pub fn list_variable_values(
         &self,
+        data: &dyn DataAdapter,
         dataset: &str,
     ) -> Result<Vec<VariableValueView>, ValueError> {
         self.require_dataset(dataset)?;
+        let stored = list_variables(data, &self.dataset_id(dataset)).map_err(ValueError::Lake)?;
         let mut rows = Vec::new();
         for decl in self.pinned_declarations(dataset, Kind::Variable) {
             let stored_as = reference(&self.project_id(), &decl.project, &decl.name);
-            let stored = self
-                .values
-                .variable(&self.project_id(), dataset, &stored_as);
-            let (value, source, set, updated_at) = if let Some(record) = stored {
-                (
-                    Some(record.value().to_string()),
-                    Some("value"),
-                    true,
-                    Some(record.updated_at().to_string()),
-                )
-            } else if let Some(default) = decl.default_value.clone() {
-                (Some(default), Some("default"), false, None)
-            } else {
-                (None, None, false, None)
-            };
+            let (value, source, set, updated_at) =
+                if let Some(record) = stored.iter().find(|row| row.name == stored_as) {
+                    (
+                        Some(record.value.clone()),
+                        Some("value"),
+                        true,
+                        Some(record.updated_at.clone()),
+                    )
+                } else if let Some(default) = decl.default_value.clone() {
+                    (Some(default), Some("default"), false, None)
+                } else {
+                    (None, None, false, None)
+                };
             rows.push(VariableValueView {
                 name: decl.name,
                 project: decl.project,
@@ -180,60 +187,78 @@ impl ProjectConfig {
 
     pub fn set_secret_value(
         &self,
+        secrets: &dyn SecretStore,
         dataset: &str,
         name: &str,
         plaintext: &str,
-        key: &KeyStatus,
     ) -> Result<SecretValueView, ValueError> {
-        let key = key.require().map_err(ValueError::Unavailable)?;
         // `PINS` across the check and the write, so a dataset delete either
         // finishes first (this finds the dataset gone) or runs after and
-        // sweeps the value. Lock order is `PINS`, then the value writer.
+        // sweeps the row. Lock order is `PINS`, then the lake adapter.
         let _pins = self.pin_dataset(dataset)?;
         let decl = self.require_declaration(name, Kind::Secret)?;
-        let record = self
-            .values
-            .put_secret(&self.project_id(), dataset, name, plaintext, key)?;
+        let record = secrets
+            .put(&self.dataset_id(dataset), name, plaintext)
+            .map_err(secret_err)?;
         Ok(SecretValueView {
             name: decl.name,
             project: decl.project,
             set: true,
-            updated_at: Some(record.updated_at().to_string()),
+            updated_at: Some(record.updated_at),
         })
     }
 
-    pub fn delete_secret_value(&self, dataset: &str, name: &str) -> Result<(), ValueError> {
+    pub fn delete_secret_value(
+        &self,
+        secrets: &dyn SecretStore,
+        dataset: &str,
+        name: &str,
+    ) -> Result<(), ValueError> {
         let _pins = self.pin_dataset(dataset)?;
         // A value whose declaration was removed since the write is still
         // deleted: the declaration check would make that orphan permanent
         // until the dataset itself went.
-        self.delete_stored(dataset, name, true)
+        check_name(name).map_err(ValueError::InvalidName)?;
+        match secrets.delete(&self.dataset_id(dataset), name) {
+            Ok(()) => Ok(()),
+            Err(SecretError::NotFound) => Err(ValueError::NotFound(format!(
+                "secret value not found: {name}"
+            ))),
+            Err(err) => Err(secret_err(err)),
+        }
     }
 
     pub fn set_variable_value(
         &self,
+        data: &dyn DataAdapter,
         dataset: &str,
         name: &str,
         value: &str,
     ) -> Result<VariableValueView, ValueError> {
         let _pins = self.pin_dataset(dataset)?;
         let decl = self.require_declaration(name, Kind::Variable)?;
-        let record = self
-            .values
-            .put_variable(&self.project_id(), dataset, name, value)?;
+        let record = put_variable(data, &self.dataset_id(dataset), name, value)
+            .map_err(|err| lake_write_err(err, "variable", name))?;
         Ok(VariableValueView {
             name: decl.name,
             project: decl.project,
             set: true,
-            value: Some(record.value().to_string()),
+            value: Some(record.value),
             source: Some("value"),
-            updated_at: Some(record.updated_at().to_string()),
+            updated_at: Some(record.updated_at),
         })
     }
 
-    pub fn delete_variable_value(&self, dataset: &str, name: &str) -> Result<(), ValueError> {
+    pub fn delete_variable_value(
+        &self,
+        data: &dyn DataAdapter,
+        dataset: &str,
+        name: &str,
+    ) -> Result<(), ValueError> {
         let _pins = self.pin_dataset(dataset)?;
-        self.delete_stored(dataset, name, false)
+        check_name(name).map_err(ValueError::InvalidName)?;
+        delete_variable(data, &self.dataset_id(dataset), name)
+            .map_err(|err| lake_write_err(err, "variable", name))
     }
 
     fn pin_dataset(&self, dataset: &str) -> Result<MutexGuard<'static, ()>, ValueError> {
@@ -260,25 +285,6 @@ impl ProjectConfig {
                 noun = kind.noun(),
             ))
         })
-    }
-
-    fn delete_stored(&self, dataset: &str, name: &str, secret: bool) -> Result<(), ValueError> {
-        let result = if secret {
-            self.values.delete_secret(&self.project_id(), dataset, name)
-        } else {
-            self.values
-                .delete_variable(&self.project_id(), dataset, name)
-        };
-        match result {
-            Ok(()) => Ok(()),
-            Err(loco_schema_runtime::Error::NotFound(_)) => {
-                let noun = if secret { "secret" } else { "variable" };
-                Err(ValueError::NotFound(format!(
-                    "{noun} value not found: {name}"
-                )))
-            }
-            Err(err) => Err(err.into()),
-        }
     }
 
     /// The declaration `name` resolves to on any version of this project.
@@ -344,6 +350,31 @@ impl ProjectConfig {
             }
         }
         rows.into_values().collect()
+    }
+}
+
+fn secret_err(err: SecretError) -> ValueError {
+    match err {
+        SecretError::Unavailable(msg) => ValueError::Unavailable(msg),
+        SecretError::InvalidName(msg) => ValueError::InvalidName(msg),
+        SecretError::NotFound => ValueError::NotFound("secret value not found".to_string()),
+        SecretError::Failed(msg) => ValueError::Lake(loco_lake::Error::Internal(msg)),
+        SecretError::Lake(err) => ValueError::Lake(err),
+    }
+}
+
+/// A lake `Internal` whose text is `invalid config value name` is the name
+/// check inside the variable helpers. Everything else is a real lake error.
+/// `NotFound` is the missing-value 404.
+fn lake_write_err(err: loco_lake::Error, noun: &str, name: &str) -> ValueError {
+    match err {
+        loco_lake::Error::NotFound => {
+            ValueError::NotFound(format!("{noun} value not found: {name}"))
+        }
+        loco_lake::Error::Internal(msg) if msg.starts_with("invalid config value name") => {
+            ValueError::InvalidName(msg)
+        }
+        other => ValueError::Lake(other),
     }
 }
 

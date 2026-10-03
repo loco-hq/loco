@@ -34,16 +34,34 @@ impl Record {
     /// Build a fresh record from an insert request — generates the id and
     /// stamps all system fields.
     pub fn new_for_insert(dataset_id: &str, req: InsertRequest) -> Record {
+        Self::with_id(
+            dataset_id,
+            &uuid::Uuid::new_v4().to_string(),
+            &req.user,
+            req.fields,
+        )
+    }
+
+    /// A record whose id the caller chose. Same stamps as [`Self::new_for_insert`].
+    ///
+    /// Reserved lake collections (`$secrets`, `$variables`) use this so the id
+    /// is the declaration name and a later write replaces that row.
+    pub fn with_id(
+        dataset_id: &str,
+        id: &str,
+        user: &str,
+        fields: HashMap<String, Value>,
+    ) -> Record {
         let now = chrono::Utc::now().to_rfc3339();
         Record {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: id.to_string(),
             dataset_id: dataset_id.to_string(),
             created_at: now.clone(),
-            created_by: req.user.clone(),
+            created_by: user.to_string(),
             updated_at: now,
-            updated_by: req.user.clone(),
-            owner: req.user,
-            fields: req.fields,
+            updated_by: user.to_string(),
+            owner: user.to_string(),
+            fields,
         }
     }
 

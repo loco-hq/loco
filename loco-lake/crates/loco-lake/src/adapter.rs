@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use crate::error::Error;
 use crate::query::{LakeQuery, Page};
 use crate::record::{InsertRequest, Record, UpdatePatch};
+use crate::value::Value;
 
 pub trait DataAdapter: Send + Sync {
     fn insert(
@@ -8,6 +11,21 @@ pub trait DataAdapter: Send + Sync {
         dataset_id: &str,
         collection: &str,
         req: InsertRequest,
+    ) -> Result<Record, Error>;
+    /// Insert or replace the record `id`. A new row is stamped like `insert`,
+    /// with this id instead of a generated one. An existing row keeps
+    /// `created_*`, `dataset_id`, and `owner`, and `fields` are merged the
+    /// way `update` merges them.
+    ///
+    /// One critical section: the check and the write share the adapter's
+    /// lock. `insert` cannot do this, because it always mints a new id.
+    fn upsert(
+        &self,
+        dataset_id: &str,
+        collection: &str,
+        id: &str,
+        user: &str,
+        fields: HashMap<String, Value>,
     ) -> Result<Record, Error>;
     fn get(&self, dataset_id: &str, collection: &str, id: &str) -> Result<Option<Record>, Error>;
     fn update(

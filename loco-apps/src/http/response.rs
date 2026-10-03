@@ -102,7 +102,7 @@ pub fn value_error_to_response(err: crate::http::config_values::ValueError) -> R
         e @ ValueError::Unavailable(_) => {
             error_response(StatusCode::SERVICE_UNAVAILABLE, &e.to_string())
         }
-        ValueError::Schema(e) => schema_error_to_response(e),
+        ValueError::Lake(e) => lake_error_to_response(e),
     }
 }
 
@@ -130,7 +130,8 @@ pub fn version_schema_error_to_response(
         e @ (VersionSchemaError::NotWritable(_)
         | VersionSchemaError::InvalidDependency(_)
         | VersionSchemaError::InvalidFieldType(_)
-        | VersionSchemaError::InvalidDeclaration(_)) => {
+        | VersionSchemaError::InvalidDeclaration(_)
+        | VersionSchemaError::InvalidName(_)) => {
             error_response(StatusCode::BAD_REQUEST, &e.to_string())
         }
         e @ VersionSchemaError::UnknownVersion(_) => {

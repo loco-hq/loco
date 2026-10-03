@@ -47,9 +47,13 @@ struct SetValueBody {
 
 async fn list_secrets(
     scope: ConfigMemberScope,
+    State(state): State<Arc<AppState>>,
     Path((_, _, dataset)): Path<(String, String, String)>,
 ) -> Response {
-    match scope.config.list_secret_values(&dataset) {
+    match scope
+        .config
+        .list_secret_values(state.secrets.as_ref(), &dataset)
+    {
         Ok(rows) => ApiResponse::success(rows).into_response(),
         Err(err) => value_error_to_response(err),
     }
@@ -63,7 +67,7 @@ async fn put_secret(
 ) -> Response {
     match scope
         .config
-        .set_secret_value(&dataset, &name, &body.value, &state.secret_key)
+        .set_secret_value(state.secrets.as_ref(), &dataset, &name, &body.value)
     {
         Ok(view) => ApiResponse::success(view).into_response(),
         Err(err) => value_error_to_response(err),
@@ -72,9 +76,13 @@ async fn put_secret(
 
 async fn delete_secret(
     scope: ConfigProjectScope,
+    State(state): State<Arc<AppState>>,
     Path((_, _, dataset, name)): Path<(String, String, String, String)>,
 ) -> Response {
-    match scope.config.delete_secret_value(&dataset, &name) {
+    match scope
+        .config
+        .delete_secret_value(state.secrets.as_ref(), &dataset, &name)
+    {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(err) => value_error_to_response(err),
     }
@@ -82,9 +90,13 @@ async fn delete_secret(
 
 async fn list_variables(
     scope: ConfigMemberScope,
+    State(state): State<Arc<AppState>>,
     Path((_, _, dataset)): Path<(String, String, String)>,
 ) -> Response {
-    match scope.config.list_variable_values(&dataset) {
+    match scope
+        .config
+        .list_variable_values(state.data_adapter.as_ref(), &dataset)
+    {
         Ok(rows) => ApiResponse::success(rows).into_response(),
         Err(err) => value_error_to_response(err),
     }
@@ -92,12 +104,13 @@ async fn list_variables(
 
 async fn put_variable(
     scope: ConfigProjectScope,
+    State(state): State<Arc<AppState>>,
     Path((_, _, dataset, name)): Path<(String, String, String, String)>,
     Json(body): Json<SetValueBody>,
 ) -> Response {
     match scope
         .config
-        .set_variable_value(&dataset, &name, &body.value)
+        .set_variable_value(state.data_adapter.as_ref(), &dataset, &name, &body.value)
     {
         Ok(view) => ApiResponse::success(view).into_response(),
         Err(err) => value_error_to_response(err),
@@ -106,9 +119,13 @@ async fn put_variable(
 
 async fn delete_variable(
     scope: ConfigProjectScope,
+    State(state): State<Arc<AppState>>,
     Path((_, _, dataset, name)): Path<(String, String, String, String)>,
 ) -> Response {
-    match scope.config.delete_variable_value(&dataset, &name) {
+    match scope
+        .config
+        .delete_variable_value(state.data_adapter.as_ref(), &dataset, &name)
+    {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(err) => value_error_to_response(err),
     }

@@ -10,18 +10,17 @@ use crate::auth::AuthAdapter;
 use crate::handlers;
 use crate::http::host;
 use crate::seed;
-use crate::values::{ConfigValueStore, KeyStatus};
+use crate::values::{KeyStatus, LakeSecretStore, SecretStore};
 use crate::{Bundle, Project, SchemaStore, Site};
 
 pub struct AppState {
-    pub data_adapter: Box<dyn DataAdapter>,
+    /// Shared with [`crate::values::LakeSecretStore`]. Secret and variable
+    /// rows live in this lake, under `$secrets` and `$variables`.
+    pub data_adapter: Arc<dyn DataAdapter>,
     pub auth_adapter: Box<dyn AuthAdapter>,
     pub schema: Arc<SchemaStore>,
-    /// Secret and variable values. A separate tree from `schema` so a schema
-    /// route cannot read them. See `crate::values`.
-    pub values: Arc<ConfigValueStore>,
-    /// `LOCO_SECRET_KEY`. Missing and malformed both boot; secret writes 503.
-    pub secret_key: KeyStatus,
+    /// Plaintext trait. The lake impl encrypts. See `crate::values`.
+    pub secrets: Box<dyn SecretStore>,
     /// The site the apex serves at `/`, as `({account}/{project}, {site})`.
     /// `None` is the API-only process. A host that names a site of its own
     /// always wins over this.
@@ -94,9 +93,6 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         println!("Seeded {project} from schemas/seed");
     }
     let schema = Arc::new(SchemaStore::load(&instances_dir).expect("failed to load schema"));
-    let values = Arc::new(
-        ConfigValueStore::load(&root.join("schemas/values")).expect("failed to load config values"),
-    );
     let secret_key = KeyStatus::from_env();
     match &secret_key {
         KeyStatus::Missing => {
@@ -106,7 +102,9 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         KeyStatus::Ready(_) => {}
     }
 
-    let data_adapter = build_data_adapter();
+    let data_adapter: Arc<dyn DataAdapter> = Arc::from(build_data_adapter());
+    let secrets: Box<dyn SecretStore> =
+        Box::new(LakeSecretStore::new(data_adapter.clone(), secret_key));
     let auth_adapter = build_auth_adapter(root, &options);
     warn_projects_without_account(&schema, auth_adapter.as_ref());
     let default_site = resolve_default_site(&schema, &options);
@@ -115,8 +113,7 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         data_adapter,
         auth_adapter,
         schema,
-        values,
-        secret_key,
+        secrets,
         default_site,
     });
 

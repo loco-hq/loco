@@ -98,6 +98,83 @@ impl DataAdapter for SqliteAdapter {
         Ok(record)
     }
 
+    fn upsert(
+        &self,
+        dataset_id: &str,
+        collection: &str,
+        id: &str,
+        user: &str,
+        fields: HashMap<String, Value>,
+    ) -> Result<Record, Error> {
+        // One lock for the read and the write. `write_record` takes the same
+        // mutex, so the SQL stays inline here.
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM records WHERE dataset_id = ?1 AND collection = ?2 AND id = ?3"
+            ))
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let existing = stmt
+            .query_row(rusqlite::params![dataset_id, collection, id], |row| {
+                read_row(row, dataset_id)
+            })
+            .optional()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        drop(stmt);
+
+        let replacing = existing.is_some();
+        let record = if let Some(existing) = existing {
+            decode(existing)?.apply_patch(UpdatePatch {
+                user: user.to_string(),
+                fields,
+            })
+        } else {
+            Record::with_id(dataset_id, id, user, fields)
+        };
+        let fields_json =
+            serde_json::to_string(&record.fields).map_err(|e| Error::Internal(e.to_string()))?;
+        if replacing {
+            let rows = conn
+                .execute(
+                    "UPDATE records SET updated_at = ?1, updated_by = ?2, fields = ?3
+                     WHERE dataset_id = ?4 AND collection = ?5 AND id = ?6",
+                    rusqlite::params![
+                        record.updated_at,
+                        record.updated_by,
+                        fields_json,
+                        dataset_id,
+                        collection,
+                        id,
+                    ],
+                )
+                .map_err(|e| Error::Internal(e.to_string()))?;
+            if rows == 0 {
+                return Err(Error::NotFound);
+            }
+        } else {
+            conn.execute(
+                "INSERT INTO records (dataset_id, collection, id, created_at, created_by, updated_at, updated_by, owner, fields)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    dataset_id,
+                    collection,
+                    record.id,
+                    record.created_at,
+                    record.created_by,
+                    record.updated_at,
+                    record.updated_by,
+                    record.owner,
+                    fields_json,
+                ],
+            )
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        }
+        Ok(record)
+    }
+
     fn get(&self, dataset_id: &str, collection: &str, id: &str) -> Result<Option<Record>, Error> {
         let conn = self
             .conn
@@ -749,5 +826,35 @@ mod tests {
     fn test_delete_dataset_empty() {
         let adapter = make_adapter();
         adapter.delete_dataset("nonexistent").unwrap();
+    }
+
+    #[test]
+    fn test_upsert_keeps_the_caller_id() {
+        let adapter = make_adapter();
+        let id = "alice/bricklink.consumer_key";
+        let mut fields = HashMap::new();
+        fields.insert("nonce".into(), Value::String("one".into()));
+        let created = adapter
+            .upsert(DATASET, "$secrets", id, "system", fields)
+            .unwrap();
+        assert_eq!(created.id, id);
+
+        let mut fields = HashMap::new();
+        fields.insert("nonce".into(), Value::String("two".into()));
+        let updated = adapter
+            .upsert(DATASET, "$secrets", id, "system", fields)
+            .unwrap();
+        assert_eq!(updated.id, id);
+        assert_eq!(updated.created_at, created.created_at);
+        assert_eq!(adapter.list(DATASET, "$secrets").unwrap().len(), 1);
+        assert_eq!(
+            adapter
+                .get(DATASET, "$secrets", id)
+                .unwrap()
+                .unwrap()
+                .fields
+                .get("nonce"),
+            Some(&Value::String("two".into()))
+        );
     }
 }

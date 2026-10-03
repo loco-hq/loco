@@ -3,8 +3,8 @@
 //! This is not `crate::auth::secret`, which hashes passwords and API keys.
 //! A secret value is reversible: a later handler (#102) has to read it back.
 //! The key never goes on disk. Each write draws a fresh 12-byte nonce, and
-//! the ciphertext is bound to the project, dataset, and declaration name so
-//! a file copied onto another name does not open.
+//! the ciphertext is bound to the dataset id and the declaration name, so a
+//! row copied onto another name or dataset does not open.
 
 use aes_gcm::aead::Aead;
 use aes_gcm::aead::KeyInit;
@@ -86,20 +86,18 @@ pub struct Sealed {
     pub ciphertext: Vec<u8>,
 }
 
+/// Wrong key, tampered bytes, or a body that is not a sealed secret.
+/// One error for all of them: a caller must not be able to tell a wrong
+/// key from garbage by the message. A missing row is `Ok(None)` from the
+/// store, not an open failure.
 #[derive(Debug)]
 pub enum OpenError {
-    /// No value is stored under that name.
-    NotFound,
-    /// Wrong key, tampered bytes, or a body that is not a sealed secret.
-    /// One error for all of them: a caller must not be able to tell a wrong
-    /// key from garbage by the message.
     Failed,
 }
 
 impl std::fmt::Display for OpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound => write!(f, "secret value not found"),
             Self::Failed => write!(f, "secret ciphertext failed to decrypt"),
         }
     }
@@ -108,9 +106,10 @@ impl std::fmt::Display for OpenError {
 impl std::error::Error for OpenError {}
 
 /// Length-prefixed parts, so two different tuples cannot share an AAD.
-pub fn secret_aad(project: &str, dataset: &str, name: &str) -> Vec<u8> {
+/// `dataset_id` is `{account}/{project}/{dataset}`.
+pub fn secret_aad(dataset_id: &str, name: &str) -> Vec<u8> {
     let mut out = Vec::new();
-    for part in ["secret", project, dataset, name] {
+    for part in ["secret", dataset_id, name] {
         let bytes = part.as_bytes();
         out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
         out.extend_from_slice(bytes);
@@ -198,7 +197,7 @@ mod tests {
     #[test]
     fn wrong_key_and_moved_aad_fail_closed() {
         let key = [3u8; 32];
-        let aad = secret_aad("alice/shop", "dev", "alice/bricklink.consumer_key");
+        let aad = secret_aad("alice/shop/dev", "alice/bricklink.consumer_key");
         let sealed = seal(&key, &aad, b"plain secret: do-not-store").unwrap();
         let opened = open(&key, &aad, &sealed.nonce, &sealed.ciphertext).unwrap();
         assert_eq!(opened, b"plain secret: do-not-store");
@@ -206,7 +205,7 @@ mod tests {
         let wrong = [4u8; 32];
         assert!(open(&wrong, &aad, &sealed.nonce, &sealed.ciphertext).is_err());
 
-        let other = secret_aad("alice/shop", "dev", "alice/bricklink.other");
+        let other = secret_aad("alice/shop/dev", "alice/bricklink.other");
         assert!(open(&key, &other, &sealed.nonce, &sealed.ciphertext).is_err());
 
         let mut flipped = sealed.ciphertext.clone();
@@ -217,7 +216,7 @@ mod tests {
     #[test]
     fn two_seals_use_different_nonces() {
         let key = [5u8; 32];
-        let aad = secret_aad("a/b", "dev", "k");
+        let aad = secret_aad("a/b/dev", "k");
         let a = seal(&key, &aad, b"same").unwrap();
         let b = seal(&key, &aad, b"same").unwrap();
         assert_ne!(a.nonce, b.nonce);
