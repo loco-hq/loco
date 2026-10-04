@@ -151,6 +151,7 @@ pub fn version_schema_error_to_response(
         e @ VersionSchemaError::UnknownVersion(_) => {
             error_response(StatusCode::NOT_FOUND, &e.to_string())
         }
+        e @ VersionSchemaError::InUse(_) => error_response(StatusCode::CONFLICT, &e.to_string()),
         e @ VersionSchemaError::LeftBehind(_) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
         }
@@ -168,5 +169,16 @@ mod tests {
         let response =
             value_error_to_response(ValueError::Unavailable("LOCO_SECRET_KEY is not set".into()));
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn integration_type_in_use_maps_to_409() {
+        let response = version_schema_error_to_response(
+            crate::http::version_schema::VersionSchemaError::InUse(
+                "integration type ben/crm.bricklink is declared by integration(s): ben/crm@0.0.1-dev store"
+                    .into(),
+            ),
+        );
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 }
