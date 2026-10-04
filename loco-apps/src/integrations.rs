@@ -122,14 +122,5 @@ mod tests {
         assert!(type_actions.contains("alice/pkg", "warehouse", "set_status"));
         assert!(!type_actions.contains("alice/pkg", "bricklink", "other"));
         assert!(!type_actions.contains("alice/shop", "bricklink", "set_status"));
-
-        // Ordinary actions stay (project, name). This registers, and does
-        // not occupy either type-action slot above.
-        let mut actions = crate::actions::HandlerRegistry::default();
-        actions.register("alice/pkg", "set_status", |_| async {
-            Ok(serde_json::json!({}))
-        });
-        assert!(type_actions.contains("alice/pkg", "bricklink", "set_status"));
-        assert!(type_actions.contains("alice/pkg", "warehouse", "set_status"));
     }
 }

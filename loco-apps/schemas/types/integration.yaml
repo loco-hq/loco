@@ -31,6 +31,8 @@ properties:
           type: slug
         label:
           type: string
+        label_plural:
+          type: string
         description:
           type: string
         fields:

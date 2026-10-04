@@ -390,7 +390,7 @@ POST /actions/sf_east:set_owner
 | Document | Where | Who owns the fields or the list |
 |---|---|---|
 | Integration type | `${project}/versions/${version}/integration_types/${name}` | The package. Secrets, variables, standard collections (and their fields), and actions (and their params) are lists on this document. A PUT that names a list replaces it. A name without `:` does not find a standard collection or a type action. |
-| Integration | `${project}/versions/${version}/integrations/${name}` | The project that connected. `type` is bare for a type this project declares, qualified for a dependency's. Custom collections and their fields are a list on this document. A bare `invoice__c` does not find that collection. |
+| Integration | `${project}/versions/${version}/integrations/${name}` | The project that connected. `type` is bare for a type this project declares, qualified for a dependency's. Custom collections and their fields are a list on this document. A custom collection may not reuse a name its type offers. A bare `invoice__c` does not find that collection. |
 
 Each type is its own document, so two types in one project may both offer `orders`. The lists do not collide, and a name without `:` does not find either.
 

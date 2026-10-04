@@ -265,6 +265,7 @@ label: BrickLink
 collections:
   - name: orders
     label: Order
+    label_plural: Orders
     description: BrickLink orders
     fields:
       - name: status
@@ -293,6 +294,7 @@ actions:
         let orders = &parsed.collections()[0];
         assert_eq!(orders.name(), "orders");
         assert_eq!(orders.label(), "Order");
+        assert_eq!(orders.label_plural(), "Orders");
         assert_eq!(orders.description(), "BrickLink orders");
         assert_eq!(orders.fields().len(), 1);
         let status = &orders.fields()[0];
