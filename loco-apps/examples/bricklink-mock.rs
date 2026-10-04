@@ -29,7 +29,7 @@
 //! (`A-12-3` for parts, `MF-4` for minifigs, `SET-2` for sets); about one lot in
 //! twenty has a malformed one.
 //! A big order sometimes comes in two batches, now and then with one lot on
-//! a line in each. A path outside `/orders` is a bare HTTP 404, so a wrong
+//! a line in each, and a few lines have `inventory_id: null`. A path outside `/orders` is a bare HTTP 404, so a wrong
 //! `base_url` fails the way it does against the fixture server.
 
 use std::collections::{HashMap, HashSet};
@@ -623,7 +623,7 @@ fn order_lines(rng: &mut Rng, lots: &[Lot], template: &Value) -> Vec<Vec<Value>>
             line(template, lot, quantity)
         })
         .collect();
-    if lines.len() > 12 && rng.chance(0.4) {
+    let mut batches = if lines.len() > 12 && rng.chance(0.4) {
         let split = lines.len() / 2;
         let (a, b) = lines.split_at(split);
         let (a, mut b) = (a.to_vec(), b.to_vec());
@@ -637,7 +637,16 @@ fn order_lines(rng: &mut Rng, lots: &[Lot], template: &Value) -> Vec<Vec<Value>>
         vec![a, b]
     } else {
         vec![lines]
+    };
+    // Now and then a line comes back with no inventory id, as the fixture's
+    // last line does. The source names it by position (`{order}-{batch}-x{n}`).
+    if rng.chance(0.06) {
+        let last = batches.last_mut().and_then(|batch| batch.last_mut());
+        if let Some(line) = last {
+            line["inventory_id"] = Value::Null;
+        }
     }
+    batches
 }
 
 /// `n` draws from `pool`; a lot drawn twice is one line.
@@ -844,12 +853,19 @@ mod tests {
                 b.as_array()
                     .unwrap()
                     .iter()
-                    .map(|l| l["inventory_id"].as_u64().unwrap())
+                    .filter_map(|l| l["inventory_id"].as_u64())
                     .collect()
             };
             batches.len() == 2 && !ids(&batches[0]).is_disjoint(&ids(&batches[1]))
         });
         assert!(repeated, "some lot is in two batches of one order");
+
+        let unnamed = lines.iter().filter(|l| l["inventory_id"].is_null()).count();
+        assert!(unnamed >= 1, "some line has no inventory id");
+        assert!(
+            unnamed * 20 < lines.len(),
+            "lines without an inventory id are rare"
+        );
     }
 
     #[test]

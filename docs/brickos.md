@@ -104,33 +104,50 @@ There is no BrickLink sandbox, and a store's API credentials need a registered s
 
 ```bash
 cargo run -p loco-apps --example bricklink-mock
-# BrickLink mock on http://127.0.0.1:3100: 65 orders (50 PENDING, 3 filed), 616 lines, 2026-10-03 seed 135
+# BrickLink mock on http://127.0.0.1:3100: 65 orders (50 PENDING, 3 filed), 506 lines, 2026-10-03 seed 135
 ```
 
 Flags: `--port` (default `3100`), `--seed` (default `135`), and `--date` (default `2026-10-03`), as in `cargo run -p loco-apps --example bricklink-mock -- --seed 7`. The same seed and date serve the same day on every run.
 
 It answers the three calls the source makes: `GET /orders?direction=in` (with `status`, comma-separated, and a leading `-` excludes), `GET /orders/{id}`, and `GET /orders/{id}/items`. It accepts any `Authorization: OAuth …` header and does not check the signature. The signer is unit-tested, and the `bricklink` Hurl suite checks signatures on the wire. Each request is logged to stderr.
 
-The day has 50 `PENDING` orders, six `PAID`, four `PACKED`, two `SHIPPED`, and three filed `COMPLETED` orders. `GET /orders/{id}` answers a filed order; the list leaves it out, as BrickLink does. Lines are parts, sets, and minifigs drawn from one store inventory, so a lot and its bin recur across orders. Quantities run from 1 to several hundred, so both scale-weighed and hand-counted lines are there. A lot's `remarks` is its bin: `A-12-3` (aisle, shelf, bin) for a part, `MF-4` for a minifig, and `SET-2` for a set. About one lot in twenty has a malformed remark, such as `A12-3`, `C-1-2-3`, `see blue drawer`, or an empty one. A big order sometimes arrives in two batches, now and then with the same lot on a line in each. The source keeps both lines. A path outside `/orders` is a bare HTTP 404, so a `base_url` with a stray path fails loudly instead of returning no orders.
+The day has 50 `PENDING` orders, six `PAID`, four `PACKED`, two `SHIPPED`, and three filed `COMPLETED` orders. `GET /orders/{id}` answers a filed order; the list leaves it out, as BrickLink does. Lines are parts, sets, and minifigs drawn from one store inventory, so a lot and its bin recur across orders. Quantities run from 1 to several hundred, so both scale-weighed and hand-counted lines are there. A lot's `remarks` is its bin: `A-12-3` (aisle, shelf, bin) for a part, `MF-4` for a minifig, and `SET-2` for a set. About one lot in twenty has a malformed remark, such as `A12-3`, `C-1-2-3`, `see blue drawer`, or an empty one. A big order sometimes arrives in two batches, now and then with the same lot on a line in each. The source keeps both lines. A few lines have `inventory_id: null`, which the source names by position (`{order_id}-{batch}-x{position}`). A path outside `/orders` is a bare HTTP 404, so a `base_url` with a stray path fails loudly instead of returning no orders.
 
 It is a Rust example rather than a script so it needs nothing new: axum, tokio, and chrono are already `loco-apps` dependencies. It builds every body from the fixture files the Hurl suite serves (`loco-apps/tests/fixtures/bricklink/`), with values replaced, and replacing a key the fixture lacks panics. CI compiles it under clippy and `cargo test` runs its tests, including one that its orders and lines have exactly the fixture's keys. The mock and the fixture cannot drift apart in shape.
 
 ### Pointing a dataset at it
 
-The store's version must depend on `loco/bricklink@1.0.0`. `PUT /schema/.../manifest` refuses that dependency for a writer who cannot read `loco/bricklink`, until projects can be marked installable. So write the manifest in the live store and restart the server:
-
-```yaml
-# loco-apps/schemas/instances/{account}/{project}/versions/{version}/manifest.yaml
-dependencies:
-  - loco/bricklink@1.0.0
-```
-
-The server needs `LOCO_SECRET_KEY` (`openssl rand -base64 32`) to store secrets. Set `base_url` first, so no request reaches the real store API, which is the default. Then set the four secrets. They are required, so the source refuses to run without them, and any value works against the mock:
+The commands below use `$ACCOUNT` and `$PROJECT` for the store project, with its `dev` dataset and `dev` site, and `$TOKEN` for a session of a developer on it:
 
 ```bash
-V=http://localhost:3000/config/variable/alice/brocks/dev
-S=http://localhost:3000/config/secret/alice/brocks/dev
+ACCOUNT=alice PROJECT=shop
+API=http://localhost:3000
 H=(-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json')
+```
+
+If the project does not exist yet, create it. That bootstraps version `0.0.1-dev`, the `dev` dataset, and the `dev` site that pins them:
+
+```bash
+curl -X POST "${H[@]}" $API/config/project -d '{"name":"'$PROJECT'","label":"Shop","description":"","account":"'$ACCOUNT'"}'
+```
+
+The version the site pins must depend on `loco/bricklink@1.0.0`. `PUT /schema/.../manifest` refuses that dependency for a writer who cannot read `loco/bricklink`, until projects can be marked installable. So edit the manifest in the live store, then restart the server. **Add** `loco/bricklink@1.0.0` to the `dependencies` list and keep everything else in the file: other dependencies, and `public_permission_sets`. Replacing the file would drop them, and a site that served `public` would stop doing so without saying why. Create the file only if the version has none.
+
+```yaml
+# loco-apps/schemas/instances/$ACCOUNT/$PROJECT/versions/0.0.1-dev/manifest.yaml
+dependencies:
+  # …the entries already here…
+  - loco/bricklink@1.0.0
+public_permission_sets: …unchanged…
+```
+
+A freshly created project's manifest has `dependencies: []`. Replace the `[]` with the one-entry list, and leave the other lines as they are.
+
+The server needs `LOCO_SECRET_KEY` (`openssl rand -base64 32`) to store secrets. Keep the same key across restarts: secrets stored under one key cannot be decrypted with another. Set `base_url` first, so no request reaches the real store API, which is the default. Then set the four secrets. They are required, so the source refuses to run without them, and any value works against the mock:
+
+```bash
+V=$API/config/variable/$ACCOUNT/$PROJECT/dev
+S=$API/config/secret/$ACCOUNT/$PROJECT/dev
 curl -X PUT "${H[@]}" "$V/loco%2Fbricklink.store:base_url" -d '{"value":"http://127.0.0.1:3100"}'
 for name in consumer_key consumer_secret token_value token_secret; do
   curl -X PUT "${H[@]}" "$S/loco%2Fbricklink.store:$name" -d '{"value":"mock"}'
@@ -140,16 +157,16 @@ done
 Then read the generated orders through the site, and their lines with an `order_id` filter. `order_items` has no unfiltered list:
 
 ```bash
-curl "${H[@]}" -H 'X-Project-Id: alice/brocks' -H 'X-Site-Id: dev' \
-  http://localhost:3000/data/query -d '{"queries":{
+curl "${H[@]}" -H "X-Project-Id: $ACCOUNT/$PROJECT" -H 'X-Site-Id: dev' \
+  $API/data/query -d '{"queries":{
     "pending":{"collection":"loco/bricklink.store:orders",
                "where":{"field":"loco/bricklink.status","op":"eq","value":"PENDING"},
                "limit":100},
     "lines":{"collection":"loco/bricklink.store:order_items",
-             "where":{"field":"loco/bricklink.order_id","op":"in","value":["29480774","29480778"]}}}}'
+             "where":{"field":"loco/bricklink.order_id","op":"in","value":["29480774","29480797"]}}}}'
 ```
 
-To use the real store, set the four secrets to its credentials and delete `base_url` (`DELETE $V/loco%2Fbricklink.store:base_url`), so it falls back to the default. Use a different dataset for that, and keep the mock on `dev`. No code changes.
+Keep the mock on `dev`. For the real store, use the dataset it reads. Set the four secrets there to the store's credentials, and leave `base_url` unset so the default applies. If you set it, delete it (`DELETE $API/config/variable/$ACCOUNT/$PROJECT/{dataset}/loco%2Fbricklink.store:base_url`). No code changes.
 
 ## Non-goals
 
