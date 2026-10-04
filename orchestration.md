@@ -69,6 +69,8 @@ A **term** is one orchestrator sitting the chair until Ben ends it or asks someo
 
 OpenAI, if added later, is a third vendor with a third GitHub App. Same rules: reviewer is not the implementer.
 
+**Single-vendor fallback.** When one vendor is out of usage, Ben may say so and run a term with one vendor in every role. The invariant above is suspended for that term, in so many words from Ben, not inferred. GitHub still refuses self-approval: an App cannot approve a PR it opened. So the implementer opens the PR as its bot, a **separate, fresh** reviewer pane of the same vendor reviews it in full and posts a `--comment` review that says "would approve" or lists the changes it requires, and **Ben** gives the approving review and merges. Without a second vendor, keep reviewer prompts at least as pointed as usual: name the security and fidelity questions explicitly.
+
 ## Cycle
 
 Independent issues stay serial unless Ben says the plan budget can take it **and** they do not share files. When Ben authorizes it, two implementers in parallel work: name each one's files in the other's prompt, and rebase whichever PR opens second onto `main` before review. Dependent follow-up is the exception: once the parent PR is open (step 5), spawn the next issue in the chain without waiting for review or merge.
