@@ -193,64 +193,30 @@ mod generated_tests {
         assert!(m.public_permission_sets().is_empty());
     }
 
-    /// Nested integration paths are their own templates. An ordinary
-    /// collection, field, or action does not match them, and they do not
-    /// match an ordinary path of the same name.
+    /// An integration type and an integration are their own templates. An
+    /// ordinary collection path does not load as either, and neither loads
+    /// as the other.
     #[test]
     fn integration_paths_do_not_match_ordinary_types() {
         let project = "ben/crm";
         let version = "0.0.1-dev";
 
-        let type_collection = TypeCollection::to_path(project, version, "bricklink", "orders");
-        assert_eq!(
-            type_collection,
-            "ben/crm/versions/0.0.1-dev/integration_types/bricklink/collections/orders"
-        );
-        assert!(Collection::from_path(&type_collection).is_none());
-        assert!(TypeCollection::from_path(&type_collection).is_some());
-        let ordinary = Collection::to_path(project, version, "orders");
-        assert!(TypeCollection::from_path(&ordinary).is_none());
-        assert!(Collection::from_path(&ordinary).is_some());
-
-        let type_field = TypeField::to_path(project, version, "bricklink", "orders", "status");
-        assert!(Field::from_path(&type_field).is_none());
-        assert_eq!(
-            TypeField::from_path(&type_field)
-                .unwrap()
-                .get("integration_type")
-                .unwrap(),
-            "bricklink"
-        );
-        let ordinary_field = Field::to_path(project, version, "orders", "status");
-        assert!(TypeField::from_path(&ordinary_field).is_none());
-
-        let type_action = TypeAction::to_path(project, version, "bricklink", "set_status");
-        assert!(Action::from_path(&type_action).is_none());
-        assert!(TypeAction::from_path(&type_action).is_some());
-        let other_orders = TypeCollection::to_path(project, version, "warehouse", "orders");
-        assert_ne!(type_collection, other_orders);
-
-        let custom = IntegrationCollection::to_path(project, version, "store", "invoice");
-        assert_eq!(
-            custom,
-            "ben/crm/versions/0.0.1-dev/integrations/store/collections/invoice"
-        );
-        assert!(Collection::from_path(&custom).is_none());
-        assert!(TypeCollection::from_path(&custom).is_none());
-        assert!(IntegrationCollection::from_path(&custom).is_some());
-
-        let custom_field =
-            IntegrationField::to_path(project, version, "store", "invoice", "amount");
-        assert!(Field::from_path(&custom_field).is_none());
-        assert!(TypeField::from_path(&custom_field).is_none());
-        assert!(IntegrationField::from_path(&custom_field).is_some());
-
         let integration = Integration::to_path(project, version, "store");
         let integration_type = IntegrationType::to_path(project, version, "bricklink");
+        assert_eq!(integration, "ben/crm/versions/0.0.1-dev/integrations/store");
+        assert_eq!(
+            integration_type,
+            "ben/crm/versions/0.0.1-dev/integration_types/bricklink"
+        );
         assert!(Integration::from_path(&integration_type).is_none());
         assert!(IntegrationType::from_path(&integration).is_none());
+        assert!(Collection::from_path(&integration).is_none());
+        assert!(Action::from_path(&integration_type).is_none());
         assert!(Integration::from_path(&integration).is_some());
         assert!(IntegrationType::from_path(&integration_type).is_some());
+        let ordinary = Collection::to_path(project, version, "orders");
+        assert!(Integration::from_path(&ordinary).is_none());
+        assert!(IntegrationType::from_path(&ordinary).is_none());
 
         let vars = std::collections::HashMap::from([
             ("project".into(), "alice/pkg".into()),
@@ -269,5 +235,85 @@ mod generated_tests {
             parsed.variables()[0].default(),
             "https://api.bricklink.com/api/store/v1"
         );
+
+        let integration_vars = std::collections::HashMap::from([
+            ("project".into(), "alice/shop".into()),
+            ("version".into(), "0.0.1-dev".into()),
+            ("name".into(), "sf_east".into()),
+        ]);
+        let connection = Integration::from_yaml(
+            "label: East\ntype: alice/pkg.bricklink\ncollections:\n  - name: invoice\n    label: Invoice\n    fields:\n      - name: amount\n        type: string\n        label: Amount\n",
+            &integration_vars,
+        )
+        .unwrap();
+        assert_eq!(connection.r#type(), "alice/pkg.bricklink");
+        assert_eq!(connection.collections()[0].name(), "invoice");
+        assert_eq!(connection.collections()[0].fields()[0].r#type(), "string");
+    }
+
+    /// Three levels of object-holding-list: collections → fields → options.
+    /// Codegen rejects a list directly inside a list, and this is not that.
+    #[test]
+    fn integration_type_inline_collections_round_trip_through_from_yaml() {
+        let vars = std::collections::HashMap::from([
+            ("project".into(), "alice/pkg".into()),
+            ("version".into(), "0.0.1-dev".into()),
+            ("name".into(), "bricklink".into()),
+        ]);
+        let yaml = r#"
+label: BrickLink
+collections:
+  - name: orders
+    label: Order
+    description: BrickLink orders
+    fields:
+      - name: status
+        type: string
+        label: Status
+        description: Order status
+        required: true
+        options:
+          - value: paid
+            label: Paid
+actions:
+  - name: set_status
+    label: Set status
+    description: Sets one order's status
+    params:
+      - name: order_id
+        type: string
+        label: Order
+        required: true
+        options:
+          - value: "29471234"
+            label: One order
+"#;
+        let parsed = IntegrationType::from_yaml(yaml, &vars).unwrap();
+        assert_eq!(parsed.collections().len(), 1);
+        let orders = &parsed.collections()[0];
+        assert_eq!(orders.name(), "orders");
+        assert_eq!(orders.label(), "Order");
+        assert_eq!(orders.description(), "BrickLink orders");
+        assert_eq!(orders.fields().len(), 1);
+        let status = &orders.fields()[0];
+        assert_eq!(status.name(), "status");
+        assert_eq!(status.r#type(), "string");
+        assert_eq!(status.label(), "Status");
+        assert_eq!(status.description(), "Order status");
+        assert!(status.required());
+        assert_eq!(status.options().len(), 1);
+        assert_eq!(status.options()[0].value(), "paid");
+        assert_eq!(status.options()[0].label(), "Paid");
+        assert_eq!(parsed.actions().len(), 1);
+        let action = &parsed.actions()[0];
+        assert_eq!(action.name(), "set_status");
+        assert_eq!(action.params().len(), 1);
+        assert_eq!(action.params()[0].name(), "order_id");
+        assert_eq!(action.params()[0].options()[0].value(), "29471234");
+
+        let again = serde_yaml::to_string(&parsed).unwrap();
+        let round = IntegrationType::from_yaml(&again, &vars).unwrap();
+        assert_eq!(round.collections(), parsed.collections());
+        assert_eq!(round.actions(), parsed.actions());
     }
 }

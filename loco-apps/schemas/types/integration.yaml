@@ -1,4 +1,4 @@
-description: "One connection of an integration type. `type` is bare when this project declares the type, and {account}/{project}.{name} when a dependency does."
+description: "One connection of an integration type. `type` is bare when this project declares the type, and {account}/{project}.{name} when a dependency does. Custom collections are inline."
 pathTemplate: "${project}/versions/${version}/integrations/${name}"
 properties:
   project:
@@ -18,3 +18,44 @@ properties:
   # Not a slug: a dependency's type is `{account}/{project}.{name}`.
   type:
     type: string
+  # Custom collections. The object is the one `integration_type` declares.
+  # A PUT that names `collections` replaces the list. A name the type already
+  # offers is a 400.
+  collections:
+    type: list
+    items:
+      type: object
+      name: integration_collection
+      properties:
+        name:
+          type: slug
+        label:
+          type: string
+        description:
+          type: string
+        fields:
+          type: list
+          items:
+            type: object
+            name: integration_field
+            properties:
+              name:
+                type: slug
+              type:
+                type: string
+              label:
+                type: string
+              description:
+                type: string
+              required:
+                type: boolean
+              options:
+                type: list
+                items:
+                  type: object
+                  name: integration_field_option
+                  properties:
+                    value:
+                      type: string
+                    label:
+                      type: string

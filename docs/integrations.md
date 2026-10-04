@@ -19,7 +19,7 @@ A package that wraps an outside system (BrickLink, Salesforce) serves its collec
 An integration type declares:
 
 - The secrets and variables every connection of this type needs. A variable may have a default. A secret has no default and no value. The list is inline on the type document. A consumer sees it and cannot add to it, the same rule as an action's `params`, and version copy copies the document.
-- The standard collections it offers, and the actions it offers, as documents under the type. A consumer cannot add those either. A name without `:` does not find them.
+- The standard collections it offers, and the actions it offers, as lists on the type document. A collection carries its fields. An action carries its params. A consumer cannot add those either. A name without `:` does not find them.
 
 ## Live, not synced
 
@@ -70,7 +70,7 @@ Parse is a property of the string. Resolve is a property of the version. Nothing
 
 1. If the string contains `/`, split on the first `.` into `project` and `local`. Otherwise `project` is self and `local` is the whole string. A project that is not self or a **direct** dependency is not found.
 2. If `local` contains `:`, split on the first `:` into `integration` and `name`. Each side must pass `collection_name_ok`. Otherwise `local` is `name` and there is no integration segment.
-3. With an integration segment: that project must declare an integration of that name, and `name` must be a collection or action document under its type, or a custom collection that integration declares. The type's project must be self or a direct dependency on the version that declares the integration.
+3. With an integration segment: that project must declare an integration of that name, and `name` must be a collection or action the type declares, or a custom collection that integration declares. The type's project must be self or a direct dependency on the version that declares the integration.
 4. With no integration segment, look up an ordinary collection or action on that project, at the ordinary paths. A standard collection or a type action is not on those paths, so a name without `:` does not find it. `loco/bricklink.orders` and `acme/salesforce.account` are not found. `loco/bricklink.store:orders` and `sf_east:account` are step 3.
 
 ### `/data` and `/actions`
@@ -152,47 +152,79 @@ variables:
     label: API base URL
     required: true
     default: "https://api.bricklink.com/api/store/v1"
+collections:
+  - name: orders
+    label: Order
+    description: BrickLink orders
+    fields:
+      - name: status
+        type: string
+        label: Status
+      - name: buyer
+        type: string
+        label: Buyer
+      - name: date
+        type: string
+        label: Date
+      - name: totals
+        type: string
+        label: Totals
+  - name: order_items
+    label: Order item
+    description: Lines on one BrickLink order
+    fields:
+      - name: item_no
+        type: string
+        label: Item
+      - name: item_type
+        type: string
+        label: Item type
+      - name: color_id
+        type: string
+        label: Color id
+      - name: color_name
+        type: string
+        label: Color
+      - name: condition
+        type: string
+        label: Condition
+      - name: qty
+        type: string
+        label: Quantity
+      - name: remarks
+        type: string
+        label: Remarks
+      - name: inventory_id
+        type: string
+        label: Inventory
+      - name: order_id
+        type: string
+        label: Order
+actions:
+  - name: set_status
+    label: Set status
+    description: Sets one order's status. The order id is the BrickLink order id.
+    params:
+      - name: order_id
+        type: string
+        label: Order
+        required: true
+      - name: status
+        type: string
+        label: Status
+        required: true
 ```
 
-The integration. `type` is bare because the type is this project's. The name `store` is the package's choice. Any other name would do.
+`orders` is a standard collection on that list. A name without `:` does not find it. The address is `loco/bricklink.store:orders`. The record id is the BrickLink order id, so the id is not also a field. `date` is the API's timestamp. `order_items.order_id` is the parent order. Fields belong to the type's owner.
+
+Reading orders is the collection, not `set_status`. [#104](https://github.com/loco-hq/loco/issues/104) does not have to ship `set_status`; the action is on the type so the action address is visible. Params are the action's, as today.
+
+The integration. `type` is bare because the type is this project's. The name `store` is the package's choice. Any other name would do. This integration declares no custom collection.
 
 ```yaml
 # loco/bricklink  versions/1.0.0/integrations/store.yaml
 label: BrickLink
 type: bricklink
-```
-
-A standard collection. It lives under the type. A name without `:` does not find it. The address is `loco/bricklink.store:orders`. The record id is the BrickLink order id, so the id is not also a field. `order_items` is the same kind of document, under the same type: `item_no`, `item_type`, `color_id`, `color_name`, `condition`, `qty`, `remarks`, `inventory_id`, and `order_id` (the parent order). Fields belong to the type's owner.
-
-```yaml
-# loco/bricklink  versions/1.0.0/integration_types/bricklink/collections/orders.yaml
-label: Order
-label_plural: Orders
-```
-
-```yaml
-# loco/bricklink  versions/1.0.0/integration_types/bricklink/fields/orders/status.yaml
-type: string
-label: Status
-```
-
-The other order fields are `buyer` (string), `date` (string, the API's timestamp), and `totals` (string).
-
-An action the type offers. Reading orders is the collection, not this action. [#104](https://github.com/loco-hq/loco/issues/104) does not have to ship `set_status`; the block is here so the action address is visible. Params are the action's, as today.
-
-```yaml
-# loco/bricklink  versions/1.0.0/integration_types/bricklink/actions/set_status.yaml
-label: Set status
-description: Sets one order's status. The order id is the BrickLink order id.
-params:
-  - name: order_id
-    type: string
-    label: Order
-    required: true
-  - name: status
-    type: string
-    label: Status
-    required: true
 ```
 
 The handler is registered against `(loco/bricklink, bricklink, set_status)`. Type actions register under the type. Ordinary actions keep `(project, name)`. The source is registered against `(loco/bricklink, bricklink)`. A run of `loco/bricklink.store:set_status` binds `store`, then calls that handler with that connection.
@@ -261,12 +293,41 @@ variables:
   - name: instance_url
     label: Instance URL
     required: true
+collections:
+  - name: account
+    label: Account
+    description: Salesforce Account
+    fields:
+      - name: name
+        type: string
+        label: Name
+actions:
+  - name: set_owner
+    label: Set owner
+    description: Sets the owner of one Account. Runs against the integration in the address.
+    params:
+      - name: account_id
+        type: string
+        label: Account
+        required: true
+      - name: owner_id
+        type: string
+        label: Owner
+        required: true
 ```
 
 ```yaml
 # ben/sync  versions/1.0.0/integrations/sf_east.yaml
 label: Salesforce East
 type: acme/salesforce.salesforce
+collections:
+  - name: invoice__c
+    label: Invoice
+    description: A custom object on the East org
+    fields:
+      - name: amount
+        type: string
+        label: Amount
 ```
 
 ```yaml
@@ -275,27 +336,9 @@ label: Salesforce West
 type: acme/salesforce.salesforce
 ```
 
-Standard `account` lives under the type and is addressed twice, as `sf_east:account` and `sf_west:account`. `acme/salesforce.account` has no `:`, so it is not found. Fields of `account` belong to `acme/salesforce`.
+Standard `account` is on the type and is addressed twice, as `sf_east:account` and `sf_west:account`. `acme/salesforce.account` has no `:`, so it is not found. Fields of `account` belong to `acme/salesforce`.
 
-```yaml
-# acme/salesforce  versions/1.0.0/integration_types/salesforce/collections/account.yaml
-label: Account
-label_plural: Accounts
-```
-
-East has a custom object. It is a collection document under the integration, not a collection of the type, and not an ordinary collection named `invoice__c` (that name, bare, is a different address and a different document).
-
-```yaml
-# ben/sync  versions/1.0.0/integrations/sf_east/collections/invoice__c.yaml
-label: Invoice
-label_plural: Invoices
-```
-
-```yaml
-# ben/sync  versions/1.0.0/integrations/sf_east/fields/invoice__c/amount.yaml
-type: string
-label: Amount
-```
+East's `invoice__c` is a custom collection on that integration, not a collection of the type, and not an ordinary collection named `invoice__c` (that name, bare, is a different address).
 
 `sf_west:invoice__c` does not resolve. West did not declare it. The type does not offer it.
 
@@ -332,21 +375,6 @@ Compare the two orgs in one batch. Each query is authorized on its own. They are
 }
 ```
 
-```yaml
-# acme/salesforce  versions/1.0.0/integration_types/salesforce/actions/set_owner.yaml
-label: Set owner
-description: Sets the owner of one Account. Runs against the integration in the address.
-params:
-  - name: account_id
-    type: string
-    label: Account
-    required: true
-  - name: owner_id
-    type: string
-    label: Owner
-    required: true
-```
-
 ```
 GET  /data/sf_east:account/list
 GET  /data/sf_west:account/list
@@ -361,20 +389,18 @@ POST /actions/sf_east:set_owner
 
 | Document | Where | Who owns the fields or the list |
 |---|---|---|
-| Integration type | `${project}/versions/${version}/integration_types/${name}` | The package. Secrets and variables are inline. |
-| Standard collection, its fields, its actions | `.../integration_types/${type}/collections/${name}`, `.../fields/${collection}/${name}`, `.../actions/${name}` | The type's owner. A name without `:` does not find these. |
-| Integration | `${project}/versions/${version}/integrations/${name}` | The project that connected. `type` is bare for a type this project declares, qualified for a dependency's. |
-| Custom collection and its fields | `.../integrations/${integration}/collections/${name}` and `.../integrations/${integration}/fields/${collection}/${name}` | The integration's owner. A bare `invoice__c` does not find this document. |
+| Integration type | `${project}/versions/${version}/integration_types/${name}` | The package. Secrets, variables, standard collections (and their fields), and actions (and their params) are lists on this document. A PUT that names a list replaces it. A name without `:` does not find a standard collection or a type action. |
+| Integration | `${project}/versions/${version}/integrations/${name}` | The project that connected. `type` is bare for a type this project declares, qualified for a dependency's. Custom collections and their fields are a list on this document. A bare `invoice__c` does not find that collection. |
 
-Each type has its own directory, so two types in one project may both offer `orders`. The files do not collide, and a name without `:` does not find either.
+Each type is its own document, so two types in one project may both offer `orders`. The lists do not collide, and a name without `:` does not find either.
 
 Hard-coded path segments stay plural. `project` and `version` are template variables and stay out of the YAML body, as elsewhere.
 
-Writes are `/schema` and draft-only. Version copy copies the type directory (the type document, its collections, fields, and actions) and each integration directory (the integration and its custom collections and fields), along with the ordinary collections and actions it already copies. It does not copy datasets, records, or values.
+Writes are `/schema` and draft-only. Version copy copies the type document (its inline collections, fields, and actions) and the integration document (its inline custom collections and fields), along with the ordinary collections and actions it already copies. It does not copy datasets, records, or values.
 
-An installer cannot declare a custom collection on a dependency's integration. They declare their own integration, and the custom collection lives under that.
+An installer cannot write a collection onto a dependency's integration document. They declare their own integration, and the custom collection is a list on that document.
 
-Deleting an integration on a draft cascades its custom collections and fields (`delete_by_prefix`). A grant that names `sf_east:account` goes inert, the same as a grant on a deleted collection. Value rows stay. `DELETE` still removes a row without looking the declaration up. The value key carries neither version nor type, so re-declaring `sf_east` with another type reuses any rows whose declaration names match.
+Deleting an integration on a draft removes that document, and the custom collections on it go with it. A grant that names `sf_east:account` goes inert, the same as a grant on a deleted collection. Value rows stay. `DELETE` still removes a row without looking the declaration up. The value key carries neither version nor type, so re-declaring `sf_east` with another type reuses any rows whose declaration names match.
 
 Dynamic discovery is later. A type may offer a describe hook that **proposes** collection and field declarations into a draft. Someone publishes the draft. The remote system does not change a published version, and it does not change what a name resolves to on read. Until that hook exists, a custom object is written by hand, as `invoice__c` is above.
 
@@ -460,7 +486,7 @@ Storage, gates, and purge order are unchanged ([#101](https://github.com/loco-hq
 
 [#104](https://github.com/loco-hq/loco/issues/104) stays the BrickLink package. It is edited in place when this document is accepted. It does not stay a sync into the lake.
 
-- Seed package `loco/bricklink`, published version `1.0.0`: the integration type, an integration named `store`, and live collections `orders` and `order_items` with their fields and the example action under `integration_types/bricklink/`. Callers address `loco/bricklink.store:orders` and `loco/bricklink.store:order_items`.
+- Seed package `loco/bricklink`, published version `1.0.0`: the integration type (inline `orders` and `order_items`, their fields, and the example action) and an integration named `store`. Callers address `loco/bricklink.store:orders` and `loco/bricklink.store:order_items`.
 - The four OAuth secrets, required, and `base_url` defaulting to the store API. CI sets `base_url` on the fixture dataset. No live BrickLink call in CI.
 - The OAuth 1.0a signer is unit-tested against a known-good signature.
 - A store that depends on `loco/bricklink@1.0.0` and has the four secrets set reads `loco%2Fbricklink.store:orders` and `loco%2Fbricklink.store:order_items` through `/data` and `/data/query`. There is no `sync_orders`, and no "skip item calls for unchanged orders," because nothing is cached.
@@ -476,7 +502,7 @@ Storage, gates, and purge order are unchanged ([#101](https://github.com/loco-hq
 
 Not filed here. File these from the merged document. One shippable change each. #104 is an edit of the existing issue, not a fifth one. #117, #120, the cache, and the describe hook are not in this list.
 
-1. **Add integration type and integration declarations on a version.** The documents and paths above, inline secrets and variables, standard collections, fields, and actions under the type, custom collections and their fields under the integration, draft delete of an integration, version copy of the declarations. The source registry is keyed by owning project and type name. Type actions register under the type, `(project, type, name)`; ordinary actions keep `(project, name)`. Both start empty in the production binary. Blocked by nothing in this list. Loose version-level secret and variable documents stay; this issue does not delete the #100 types.
+1. **Add integration type and integration declarations on a version.** The two documents and paths above. Secrets, variables, standard collections, fields, and actions are lists on the type. Custom collections and their fields are a list on the integration. Draft delete of an integration, version copy of the declarations. The source registry is keyed by owning project and type name. Type actions register under the type, `(project, type, name)`; ordinary actions keep `(project, name)`. Both start empty in the production binary. Blocked by nothing in this list. Loose version-level secret and variable documents stay; this issue does not delete the #100 types.
 
 2. **Resolve integration addresses.** The parse in `split` and in grant matching, both on the first `.`, one path segment on `/data` and `/actions`, `/data/query`, and grant matching against the address. A name with `:` addresses a connection. A name without `:` is always an ordinary lake collection or action. Collection and action lists are one row per address, with `project`, `integration`, `name`, and `owner`. Depends on issue 1.
 
