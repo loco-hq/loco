@@ -7,8 +7,9 @@
 //!
 //! Both registries are empty in the production binary. There is no source
 //! trait yet: [`RegisteredSource`] is a placeholder until `CollectionSource`
-//! exists. Type-action handlers are not dispatched here; resolving
-//! `{integration}:{name}` is a later issue.
+//! exists. A resolved type action is 501. Dispatch waits until a handler
+//! receives the connection it was called for, rather than the type project's
+//! loose secrets.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -47,7 +48,8 @@ type TypeActionFuture =
     Pin<Box<dyn Future<Output = Result<serde_json::Value, ActionFailure>> + Send>>;
 
 trait TypeActionHandler: Send + Sync {
-    /// Stored for a later dispatch. Address routing is not this issue.
+    /// Stored until a handler receives the connection it was called for.
+    /// A resolved type action is 501 and does not call this.
     #[allow(dead_code)]
     fn call(&self, ctx: ActionContext) -> TypeActionFuture;
 }

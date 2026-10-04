@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::auth::AuthUser;
 use crate::http::authz::{forbidden, DataVerb};
 use crate::http::paths::collection_key;
+use crate::http::version_schema::{CollectionAddress, CollectionAddressKind};
 use crate::server::AppState;
 use crate::validation::{validate_record, validate_records, ValidationMode, ValidationReport};
 
@@ -22,27 +23,17 @@ struct CollectionPathParams {
     name: String,
 }
 
-/// A `SiteScope` plus a validated collection from the request path's `{name}`.
-/// Use this for data routes scoped to a single collection — it pre-resolves
-/// `collection_key` so handlers don't repeat the validation dance.
+/// A `SiteScope` plus the collection address from the request path's `{name}`.
 ///
-/// `{name}` is bare for the site's own collection, or a dependency's written
-/// qualified and percent-encoded as one segment:
-/// `/data/acme%2Fcrm.contacts/list`. The router matches on the raw path, so
-/// the `%2F` never splits the segment; `Path` decodes it.
+/// `{name}` is one percent-encoded segment: bare for the site's own
+/// collection, `{account}/{project}.{local}` for a dependency's, and
+/// `{integration}:{name}` inside `local` for a connection.
+/// `/data/acme%2Fcrm.contacts/list`, `/data/sf_east:account/list`. The router
+/// matches on the raw path, so the `%2F` never splits the segment; `Path`
+/// decodes it. `%3A` decodes to the same `:` the segment may contain as-is.
 pub struct CollectionScope {
     pub site: SiteScope,
-    /// Lake `collection` column — `{owner_project}.{name}`. See
-    /// [`collection_key`].
-    pub collection_key: String,
-    /// Bare collection name (e.g. "account"), even when the request named it
-    /// qualified — needed for schema lookups where `collection_key` is the
-    /// wrong shape.
-    pub collection_name: String,
-    /// Project that owns the resolved collection: this site's project, or a
-    /// direct dependency's. Resolved once in the extractor, since a qualified
-    /// grant (`{project}.{name}`) and the lake key both need it.
-    pub collection_project: String,
+    pub address: CollectionAddress,
 }
 
 impl CollectionScope {
@@ -63,9 +54,33 @@ impl CollectionScope {
         self.site.site.version()
     }
 
+    /// Lake key for an ordinary collection. An integration address has no
+    /// lake collection until a source exists (#125); callers answer 501
+    /// instead of reading the lake. An ambiguous address has none either:
+    /// both documents share the name, so the caller answers 409.
+    pub fn lake_key(&self) -> Option<String> {
+        match self.address.kind {
+            CollectionAddressKind::Ordinary => {
+                Some(collection_key(&self.address.owner, &self.address.name))
+            }
+            CollectionAddressKind::Standard { .. }
+            | CollectionAddressKind::Custom
+            | CollectionAddressKind::Ambiguous => None,
+        }
+    }
+
+    /// How a client names this address from the site's version: bare for the
+    /// running project, `{project}.{local}` for a dependency.
+    pub fn canonical(&self) -> String {
+        self.site
+            .schema
+            .reference(&self.address.project, &self.address.local)
+    }
+
     /// Validate a single record's fields against this collection's schema.
     /// Thin adapter over [`validate_record`] — keeps the validator pure and
-    /// gives handlers a one-line call site.
+    /// gives handlers a one-line call site. Integration addresses do not
+    /// reach this: a data verb returns 501 before validation.
     pub fn validate(
         &self,
         fields: &HashMap<String, Value>,
@@ -73,8 +88,8 @@ impl CollectionScope {
     ) -> ValidationReport {
         validate_record(
             &self.site.schema,
-            &self.collection_project,
-            &self.collection_name,
+            &self.address.owner,
+            &self.address.name,
             fields,
             mode,
         )
@@ -88,8 +103,8 @@ impl CollectionScope {
     {
         validate_records(
             &self.site.schema,
-            &self.collection_project,
-            &self.collection_name,
+            &self.address.owner,
+            &self.address.name,
             records,
             mode,
             None,
@@ -98,15 +113,17 @@ impl CollectionScope {
 
     fn public_allowed(&self, verb: DataVerb) -> bool {
         self.site
-            .public_allowed(&self.collection_name, &self.collection_project, verb)
+            .public_allowed(&self.address.local, &self.address.project, verb)
     }
 
     /// List/get: members with data access, or anyone when a stacked set
-    /// grants `read` on this collection.
+    /// grants `read` on this address. The grant names the local
+    /// (`sf_east:account` or `orders`) and the address root, not the type
+    /// that owns the fields.
     pub fn require_can_read_data(&self) -> Result<(), Response> {
         if self
             .site
-            .may_read_collection(&self.collection_name, &self.collection_project)?
+            .may_read_collection(&self.address.local, &self.address.project)?
         {
             Ok(())
         } else {
@@ -154,14 +171,7 @@ impl FromRequestParts<Arc<AppState>> for CollectionScope {
     ) -> Result<Self, Self::Rejection> {
         let site = SiteScope::from_request_parts(parts, state).await?;
         let CollectionPathParams { name } = read_path_params(parts, state).await?;
-        let collection = site.require_collection(&name)?;
-        let collection_project = collection.project().to_string();
-        let collection_name = collection.name().to_string();
-        Ok(CollectionScope {
-            collection_key: collection_key(&collection_project, &collection_name),
-            collection_name,
-            collection_project,
-            site,
-        })
+        let address = site.require_collection(&name)?;
+        Ok(CollectionScope { address, site })
     }
 }

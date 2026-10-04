@@ -22,7 +22,9 @@ use crate::http::response::{
     error_response, error_response_with_diagnostics, validation_error_response, ApiResponse,
 };
 use crate::http::scope::SiteScope;
+use crate::http::version_schema::{ActionAddressKind, AddressResolution};
 use crate::server::AppState;
+use crate::validation::validate_type_action_input;
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::get;
@@ -43,17 +45,26 @@ pub async fn list_actions(scope: SiteScope) -> Response {
     if let Err(resp) = require_read(&scope) {
         return resp;
     }
-    ApiResponse::success(scope.schema.actions()).into_response()
+    let rows: Vec<_> = scope
+        .schema
+        .action_addresses()
+        .iter()
+        .map(|address| address.listing_row())
+        .collect();
+    ApiResponse::success(rows).into_response()
 }
 
 pub async fn get_action(scope: SiteScope, Path(name): Path<String>) -> Response {
-    let Some(action) = scope.schema.action(&name) else {
-        return error_response(StatusCode::NOT_FOUND, &format!("action not found: {name}"));
+    let action = match scope.schema.action_address(&name) {
+        AddressResolution::Resolved(action) => action,
+        AddressResolution::Missing => {
+            return error_response(StatusCode::NOT_FOUND, &format!("action not found: {name}"));
+        }
     };
     if let Err(resp) = require_read(&scope) {
         return resp;
     }
-    ApiResponse::success(action).into_response()
+    ApiResponse::success(action.listing_row()).into_response()
 }
 
 #[derive(Deserialize)]
@@ -74,13 +85,33 @@ async fn run_action(
             return error_response(StatusCode::BAD_REQUEST, &rejection.body_text());
         }
     };
-    // Unknown before the write check, matching the collection extractor:
-    // a public caller learns the name is missing, not that they are refused.
-    if scope.schema.action(&name).is_none() {
-        return error_response(StatusCode::NOT_FOUND, &format!("action not found: {name}"));
-    }
+    // Unknown before the write check, matching `/data`: a public caller
+    // learns the address does not resolve, not that they are refused. An
+    // action address is never ambiguous.
+    let address = match scope.schema.action_address(&name) {
+        AddressResolution::Resolved(address) => address,
+        AddressResolution::Missing => {
+            return error_response(StatusCode::NOT_FOUND, &format!("action not found: {name}"));
+        }
+    };
     if let Err(resp) = scope.require_can_write_data() {
         return resp;
+    }
+    if let ActionAddressKind::Type {
+        type_project,
+        type_name,
+        action,
+    } = &address.kind
+    {
+        let action_ref = scope.schema.reference(&address.project, &address.local);
+        return run_type_action(
+            &scope,
+            &action_ref,
+            type_project,
+            type_name,
+            action,
+            &body.input,
+        );
     }
     let dataset_id = scope.dataset_id();
     match dispatch(
@@ -114,6 +145,31 @@ async fn run_action(
         Dispatch::Done(value) => ApiResponse::success(value).into_response(),
         Dispatch::Failed(failure) => failure_response(failure),
     }
+}
+
+/// A type action. Resolve and the access check already happened. Input is
+/// validated, then 501. The type-action registry is not called and no
+/// [`crate::actions::ActionContext`] is built: a handler would read the type
+/// project's loose secrets, and integration code reads only the connection
+/// it was called for.
+fn run_type_action(
+    scope: &SiteScope,
+    action_ref: &str,
+    type_project: &str,
+    type_name: &str,
+    action: &crate::IntegrationAction,
+    input: &Map<String, serde_json::Value>,
+) -> Response {
+    if let Err(report) = validate_type_action_input(&scope.schema, action_ref, action, input) {
+        return validation_error_response(report.diagnostics);
+    }
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        &format!(
+            "no handler for action {type_project}.{type_name}.{}",
+            action.name()
+        ),
+    )
 }
 
 fn failure_response(failure: ActionFailure) -> Response {

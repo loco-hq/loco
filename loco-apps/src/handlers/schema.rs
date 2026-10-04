@@ -142,7 +142,13 @@ pub async fn create_collection(scope: VersionScope, Json(input): Json<Collection
 }
 
 pub async fn list_collections(scope: VersionReadScope) -> Response {
-    ApiResponse::success(scope.schema.collections()).into_response()
+    let rows: Vec<_> = scope
+        .schema
+        .collection_addresses()
+        .iter()
+        .map(|address| address.listing_row())
+        .collect();
+    ApiResponse::success(rows).into_response()
 }
 
 pub async fn get_collection(

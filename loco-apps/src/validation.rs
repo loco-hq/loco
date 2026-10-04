@@ -15,7 +15,7 @@ use serde::Serialize;
 use loco_lake::Value;
 
 use crate::http::version_schema::VersionSchema;
-use crate::Action;
+use crate::{Action, IntegrationAction, IntegrationActionParam};
 
 /// Stable string identifiers for the `kind` field on diagnostics. Clients can
 /// switch on these. Using string constants (not an enum) keeps the set open
@@ -399,7 +399,44 @@ pub fn validate_action_input(
                 .collect(),
         })
         .collect();
+    validate_param_specs(schema, &action_ref, &specs, input)
+}
 
+/// Validate `input` against a type action's params. `action_ref` is the
+/// address the caller wrote (`sf_east:set_owner`, or qualified). The same
+/// walk and diagnostic kinds as [`validate_action_input`].
+pub fn validate_type_action_input(
+    schema: &VersionSchema,
+    action_ref: &str,
+    action: &IntegrationAction,
+    input: &serde_json::Map<String, serde_json::Value>,
+) -> Result<HashMap<String, Value>, ValidationReport> {
+    let specs = type_action_specs(action.params());
+    validate_param_specs(schema, action_ref, &specs, input)
+}
+
+fn type_action_specs(params: &[IntegrationActionParam]) -> Vec<ScalarSpec<'_>> {
+    params
+        .iter()
+        .map(|param| ScalarSpec {
+            name: param.name(),
+            ty: param.r#type(),
+            required: param.required,
+            options: param
+                .options()
+                .iter()
+                .map(|option| option.value())
+                .collect(),
+        })
+        .collect()
+}
+
+fn validate_param_specs(
+    schema: &VersionSchema,
+    action_ref: &str,
+    specs: &[ScalarSpec<'_>],
+    input: &serde_json::Map<String, serde_json::Value>,
+) -> Result<HashMap<String, Value>, ValidationReport> {
     let mut scalars = HashMap::new();
     let mut non_scalars = Vec::new();
     for (name, value) in input {
@@ -412,7 +449,7 @@ pub fn validate_action_input(
     }
 
     let report = check_scalars(
-        &specs,
+        specs,
         &scalars,
         &non_scalars,
         ValidationMode::Create,

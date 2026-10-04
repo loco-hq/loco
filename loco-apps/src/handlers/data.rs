@@ -14,6 +14,7 @@ use crate::http::response::{
     error_response, lake_error_to_response, validation_error_response, ApiResponse,
 };
 use crate::http::scope::{CollectionScope, RecordScope, SiteScope};
+use crate::http::version_schema::{ambiguous_address_message, CollectionAddressKind};
 use crate::query::{self as q, Plan};
 use crate::server::AppState;
 use crate::validation::ValidationMode;
@@ -38,6 +39,10 @@ pub async fn add(
     if let Err(resp) = scope.require_can_create_data() {
         return resp;
     }
+    let key = match routed(&scope) {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
     let report = scope.validate(&fields, ValidationMode::Create);
     if report.has_errors() {
         return validation_error_response(report.diagnostics);
@@ -47,10 +52,7 @@ pub async fn add(
         user: scope.user().username.clone(),
         fields,
     };
-    match state
-        .data_adapter
-        .insert(&scope.dataset_id(), &scope.collection_key, req)
-    {
+    match state.data_adapter.insert(&scope.dataset_id(), &key, req) {
         Ok(rec) => (StatusCode::CREATED, ApiResponse::success(rec)).into_response(),
         Err(e) => lake_error_to_response(e),
     }
@@ -60,10 +62,11 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
     if let Err(resp) = scope.require_can_read_data() {
         return resp;
     }
-    match state
-        .data_adapter
-        .list(&scope.dataset_id(), &scope.collection_key)
-    {
+    let key = match routed(&scope) {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
+    match state.data_adapter.list(&scope.dataset_id(), &key) {
         Ok(records) => {
             let report = scope.validate_records(
                 records.iter().map(|r| (r.id.as_str(), &r.fields)),
@@ -76,17 +79,20 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
 }
 
 /// The collection's fields in the site's pinned version — the same list, order,
-/// and shape as `/schema/{user}/{project}/{version}/field/{collection}/list`,
-/// but the version comes from the site, so a hosted frontend never has to be
-/// told which version it runs on. Readable by whoever may read the records.
+/// and shape as the matching schema field list (ordinary fields, the type's
+/// fields, or the custom collection's fields), but the version comes from the
+/// site, so a hosted frontend never has to be told which version it runs on.
+/// Readable by whoever may read the records. This is metadata, not a lake
+/// verb, so an unambiguous integration address returns its fields rather
+/// than 501. An ambiguous address is 409 after that same read check.
 pub async fn fields(scope: CollectionScope) -> Response {
     if let Err(resp) = scope.require_can_read_data() {
         return resp;
     }
-    let fields = scope
-        .site
-        .schema
-        .fields_of(&scope.collection_project, &scope.collection_name);
+    if matches!(scope.address.kind, CollectionAddressKind::Ambiguous) {
+        return ambiguous_collection(&scope);
+    }
+    let fields = scope.site.schema.address_fields(&scope.address);
     ApiResponse::success(fields).into_response()
 }
 
@@ -94,10 +100,11 @@ pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Resp
     if let Err(resp) = scope.collection.require_can_read_data() {
         return resp;
     }
-    match state
-        .data_adapter
-        .get(&scope.dataset_id(), scope.collection_key(), &scope.id)
-    {
+    let key = match routed(&scope.collection) {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
+    match state.data_adapter.get(&scope.dataset_id(), &key, &scope.id) {
         Ok(Some(record)) => {
             let report = scope.validate(&record.fields, ValidationMode::Read);
             ApiResponse::success_with_diagnostics(record, report.diagnostics).into_response()
@@ -111,9 +118,13 @@ pub async fn delete(scope: RecordScope, State(state): State<Arc<AppState>>) -> R
     if let Err(resp) = scope.collection.require_can_delete_data() {
         return resp;
     }
+    let key = match routed(&scope.collection) {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
     match state
         .data_adapter
-        .delete(&scope.dataset_id(), scope.collection_key(), &scope.id)
+        .delete(&scope.dataset_id(), &key, &scope.id)
     {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => lake_error_to_response(e),
@@ -128,6 +139,10 @@ pub async fn update(
     if let Err(resp) = scope.collection.require_can_update_data() {
         return resp;
     }
+    let key = match routed(&scope.collection) {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
     let report = scope.validate(&fields, ValidationMode::Update);
     if report.has_errors() {
         return validation_error_response(report.diagnostics);
@@ -137,12 +152,10 @@ pub async fn update(
         user: scope.user().username.clone(),
         fields,
     };
-    match state.data_adapter.update(
-        &scope.dataset_id(),
-        scope.collection_key(),
-        &scope.id,
-        patch,
-    ) {
+    match state
+        .data_adapter
+        .update(&scope.dataset_id(), &key, &scope.id, patch)
+    {
         Ok(rec) => ApiResponse::success(rec).into_response(),
         Err(e) => lake_error_to_response(e),
     }
@@ -209,6 +222,8 @@ pub async fn query(
 
 /// One query → a plan, or the diagnostics that stop it. The outer `Err` is a
 /// site-level failure (the membership lookup), which fails the whole request.
+/// An unknown collection fails inside `target`, before the grant. An
+/// ambiguous address and a missing source are reported after it.
 fn plan_one(
     scope: &SiteScope,
     name: &str,
@@ -218,12 +233,71 @@ fn plan_one(
         Ok(target) => target,
         Err(d) => return Ok(Err(vec![d])),
     };
-    if !scope.may_read_collection(&target.name, &target.project)? {
+    if !scope.may_read_collection(&target.local, &target.address_project)? {
+        let named = if target.integration.is_some() {
+            scope
+                .schema
+                .reference(&target.address_project, &target.local)
+        } else {
+            target.key()
+        };
         return Ok(Err(vec![q::Diagnostic::error(
             q::kind::FORBIDDEN,
             Some(name.to_string()),
-            format!("no read grant on {}", target.key()),
+            format!("no read grant on {named}"),
+        )]));
+    }
+    // The address resolved and the caller may read it. A collision names
+    // both documents; a single integration collection has no source yet
+    // (#125). Neither is a lake read, and neither is an unknown collection.
+    if target.ambiguous {
+        let address = scope
+            .schema
+            .reference(&target.address_project, &target.local);
+        return Ok(Err(vec![q::Diagnostic::error(
+            q::kind::AMBIGUOUS_ADDRESS,
+            Some(name.to_string()),
+            ambiguous_address_message(&address),
+        )]));
+    }
+    if target.integration.is_some() {
+        let address = scope
+            .schema
+            .reference(&target.address_project, &target.local);
+        return Ok(Err(vec![q::Diagnostic::error(
+            q::kind::NO_SOURCE,
+            Some(name.to_string()),
+            format!("no source for collection {address}"),
         )]));
     }
     Ok(q::plan(&scope.schema, name, raw, target))
+}
+
+/// Lake key after the access check, or the response that replaces the lake
+/// read. Ambiguous is 409. An unambiguous integration address is 501.
+fn routed(scope: &CollectionScope) -> Result<String, Response> {
+    if matches!(scope.address.kind, CollectionAddressKind::Ambiguous) {
+        return Err(ambiguous_collection(scope));
+    }
+    scope.lake_key().ok_or_else(|| no_source(scope))
+}
+
+/// 409 after auth. The address resolved to `project` and `local`, and both
+/// documents share the name, so neither is read.
+fn ambiguous_collection(scope: &CollectionScope) -> Response {
+    error_response(
+        StatusCode::CONFLICT,
+        &ambiguous_address_message(&scope.canonical()),
+    )
+}
+
+/// 501 after auth. The address resolved, so this is not 404. The request is
+/// well formed, so this is not 400. The process is not missing a key, so
+/// this is not 503. A lake read would look like an empty collection. A
+/// declared action with no handler is the same status.
+fn no_source(scope: &CollectionScope) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        &format!("no source for collection {}", scope.canonical()),
+    )
 }

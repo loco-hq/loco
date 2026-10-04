@@ -69,15 +69,23 @@ pub enum DataVerb {
 }
 
 /// Whether a grant written in a permission set owned by `set_project` names
-/// the collection `collection_name` owned by `collection_project`.
+/// the address whose local is `collection_name` and whose root is
+/// `collection_project`.
 ///
-/// A bare grant means the set's own project's collection — the rule every
-/// bare name follows ("Name resolution" in CLAUDE.md), applied from where the
-/// grant is written. So a consumer's set granting `contacts` opens only the
+/// `collection_name` is the address local: `contacts`, `foo.bar`, or
+/// `sf_east:account`. `collection_project` is the address root — who owns
+/// the ordinary collection, or who declared the integration — not the type
+/// owner that holds the fields.
+///
+/// A bare grant means the set's own project — the rule every bare name
+/// follows ("Name resolution" in CLAUDE.md), applied from where the grant is
+/// written. So a consumer's set granting `contacts` opens only the
 /// consumer's `contacts`, never a dependency's of the same name; and a set a
 /// dependency ships, once a consumer opts into it, opens the dependency's
 /// collections and never the consumer's. A qualified grant
-/// (`{account}/{project}.{name}`) names its owner exactly.
+/// (`{account}/{project}.{local}`) names that project exactly. The split is
+/// the first `.`, so `acme/crm.foo.bar` is project `acme/crm` and local
+/// `foo.bar`. A bare `account` grant does not open `sf_east:account`.
 pub fn collection_grant_matches(
     grant: &str,
     set_project: &str,
@@ -343,6 +351,52 @@ mod tests {
             "alice/testapp",
             "guestbook",
             "loco/core"
+        ));
+    }
+
+    #[test]
+    fn first_dot_and_integration_local_match_the_address_root() {
+        assert!(collection_grant_matches(
+            "acme/crm.foo.bar",
+            "ben/sync",
+            "foo.bar",
+            "acme/crm",
+        ));
+        assert!(!collection_grant_matches(
+            "acme/crm.foo.bar",
+            "ben/sync",
+            "bar",
+            "acme/crm.foo",
+        ));
+        assert!(collection_grant_matches(
+            "sf_east:account",
+            "ben/sync",
+            "sf_east:account",
+            "ben/sync",
+        ));
+        assert!(!collection_grant_matches(
+            "account",
+            "ben/sync",
+            "sf_east:account",
+            "ben/sync",
+        ));
+        assert!(collection_grant_matches(
+            "ben/sync.sf_east:account",
+            "alice/shop",
+            "sf_east:account",
+            "ben/sync",
+        ));
+        assert!(!collection_grant_matches(
+            "ben/sync.sf_east:account",
+            "alice/shop",
+            "account",
+            "acme/salesforce",
+        ));
+        assert!(!collection_grant_matches(
+            "sf_east:account",
+            "ben/sync",
+            "sf_west:account",
+            "ben/sync",
         ));
     }
 }

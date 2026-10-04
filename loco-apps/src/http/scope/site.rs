@@ -8,9 +8,9 @@ use axum::response::Response;
 use crate::auth::{session_or_public, AuthSession, AuthUser, ProjectRole, PUBLIC_USERNAME};
 use crate::http::authz::{forbidden, public_may, DataVerb};
 use crate::http::response::error_response;
-use crate::http::version_schema::VersionSchema;
+use crate::http::version_schema::{AddressResolution, CollectionAddress, VersionSchema};
 use crate::server::AppState;
-use crate::{Collection, PermissionSet, Site};
+use crate::{PermissionSet, Site};
 
 use super::helpers::{read_project_id, read_site_id};
 use super::project::ProjectScope;
@@ -47,7 +47,7 @@ impl SiteScope {
         format!("{}/{}", self.project.project_id(), ds)
     }
 
-    /// The collection `name` refers to in this site's pinned version.
+    /// The collection address `name` refers to in this site's pinned version.
     ///
     /// Resolving through the site's `VersionSchema` rather than the global
     /// `SchemaStore` is what keeps existence agreeing with validation. A prefix
@@ -57,16 +57,20 @@ impl SiteScope {
     /// unauthenticated read. The scoped view sees only what the site pins.
     ///
     /// `name` follows the rule in CLAUDE.md ("Name resolution"): bare is this
-    /// project's collection, `{account}/{project}.{name}` a direct
-    /// dependency's. A transitive or unknown project is a 404 like any other
-    /// missing collection.
-    pub fn require_collection(&self, name: &str) -> Result<Arc<Collection>, Response> {
-        self.schema.collection(name).ok_or_else(|| {
-            error_response(
+    /// project's collection, `{account}/{project}.{local}` a direct
+    /// dependency's. `local` may be `{integration}:{name}`. A name with no
+    /// `:` is an ordinary collection. A transitive or unknown project is a
+    /// 404 like any other missing collection, before auth. An address that
+    /// names both a standard collection and a custom collection still
+    /// resolves: the handler answers 409 after its access check.
+    pub fn require_collection(&self, name: &str) -> Result<CollectionAddress, Response> {
+        match self.schema.collection_address(name) {
+            AddressResolution::Resolved(address) => Ok(address),
+            AddressResolution::Missing => Err(error_response(
                 StatusCode::NOT_FOUND,
                 &format!("unknown collection: {name}"),
-            )
-        })
+            )),
+        }
     }
 
     // --- Authz checks ---
@@ -158,8 +162,8 @@ impl SiteScope {
         if self.has_data_access()? {
             return Ok(true);
         }
-        for collection in self.schema.collections() {
-            if self.may_read_collection(collection.name(), collection.project())? {
+        for address in self.schema.collection_addresses() {
+            if self.may_read_collection(&address.local, &address.project)? {
                 return Ok(true);
             }
         }

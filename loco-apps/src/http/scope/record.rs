@@ -33,8 +33,8 @@ impl RecordScope {
         self.collection.dataset_id()
     }
 
-    pub fn collection_key(&self) -> &str {
-        &self.collection.collection_key
+    pub fn lake_key(&self) -> Option<String> {
+        self.collection.lake_key()
     }
 
     pub fn user(&self) -> &AuthUser {

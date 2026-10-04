@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use loco_schema_runtime::{Error, SchemaInstance};
 
 use crate::http::names::{check_slug, check_version};
-use crate::http::version_schema::{check_dependencies, parse_dependency};
+use crate::http::version_schema::{check_address_collisions, check_dependencies, parse_dependency};
 use crate::{
     Bundle, Dataset, DatasetUpdate, Manifest, Project, ProjectUpdate, SchemaStore, Site, SiteUpdate,
 };
@@ -683,6 +683,10 @@ impl ProjectConfig {
     /// for a dependency the source names, which the copier can already read
     /// in the source manifest.
     ///
+    /// A dependency type that offers a name one of this version's integrations
+    /// declares as custom is refused the same way a manifest write refuses it.
+    /// A refusal leaves nothing: the check runs before any instance is copied.
+    ///
     /// `to` must be a valid version name; `from` need only exist, since a
     /// version loaded from disk may predate the charset.
     pub fn copy_version(&self, from: &str, to: &str) -> Result<Arc<Manifest>, ConfigError> {
@@ -701,6 +705,13 @@ impl ProjectConfig {
             &self.project_id(),
             source_manifest.dependencies(),
             |_, _| true,
+        )
+        .map_err(ConfigError::InvalidDependency)?;
+        check_address_collisions(
+            &self.store,
+            &self.project_id(),
+            from,
+            source_manifest.dependencies(),
         )
         .map_err(ConfigError::InvalidDependency)?;
         // `FileTreePersistence::write_tree` is a whole-tree replace, so unlike
