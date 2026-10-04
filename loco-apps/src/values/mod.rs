@@ -12,10 +12,12 @@
 //! resolve a bare name that contains `$`. The lake key of a real collection
 //! is `{owner}.{name}`, never the literal `$secrets` or `$variables`.
 //!
-//! The record id is the canonical declaration reference: bare when it
-//! belongs to this project, `{account}/{project}.{name}` for a dependency.
-//! A qualified name for this project is stored as the bare name. The lake
-//! stores that string as text, so `/` and `.` need no encoding.
+//! The record id of a loose declaration is the canonical reference: bare when
+//! it belongs to this project, `{account}/{project}.{name}` for a dependency.
+//! A qualified name for this project is stored as the bare name. A connection
+//! value is `{qualified integration}:{name}` (`sf_east:token`,
+//! `alice/pkg.store:consumer_key`). The lake stores that string as text, so
+//! `/`, `.`, and `:` need no encoding.
 
 mod lake;
 mod seal;
