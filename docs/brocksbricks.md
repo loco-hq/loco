@@ -29,42 +29,66 @@ There is no date type. A timestamp is an ISO 8601 string in UTC (`2026-10-05T08:
 
 ## Running it locally
 
-The `brocksbricks` org account is not created at boot, like `brickos` ([`brickos.md`](brickos.md)). The project loads anyway and logs one warning. Whoever creates the org owns it, and an org owner is a developer on every project under it.
+A seed lands in the store only when a server boots and finds the project missing. A server that was already running before this project was committed does not have `brocksbricks/orders`. Run the recipe against its own server in a fresh `LOCO_ROOT`. That leaves the repo-root dev database (`./loco.db`) and the live store (`loco-apps/schemas/instances/`) untouched.
 
-1. Log in. Seeded `alice` has password `password`.
+The server runs on port 3200, because [#135](https://github.com/loco-hq/loco/issues/135)'s mock listens on 3100.
+
+1. Make the root once. Copy in the two seed accounts, and generate a secret key into a file. Restarts read the same key, so stored secrets still decrypt.
 
    ```bash
-   TOKEN=$(curl -s localhost:3000/auth/login -H 'Content-Type: application/json' \
+   ROOT=${TMPDIR:-/tmp}/loco-brocksbricks
+   mkdir -p "$ROOT/schemas/seed"
+   cp -R loco-apps/schemas/seed/loco loco-apps/schemas/seed/brocksbricks "$ROOT/schemas/seed/"
+   openssl rand -base64 32 > "$ROOT/secret.key"
+   ```
+
+2. Start the server, now and after every restart. The database goes to `$ROOT/loco.db`, and the seeded `alice` and `bob` go to `$ROOT/auth/`.
+
+   ```bash
+   ROOT=${TMPDIR:-/tmp}/loco-brocksbricks
+   LOCO_ROOT="$ROOT" PORT=3200 LOCO_SECRET_KEY=$(cat "$ROOT/secret.key") cargo run -p loco-apps
+   ```
+
+   In another shell, set the origin that every later step uses:
+
+   ```bash
+   API=http://localhost:3200
+   ```
+
+3. Log in. `alice` has password `password`.
+
+   ```bash
+   TOKEN=$(curl -s $API/auth/login -H 'Content-Type: application/json' \
      -d '{"username":"alice","password":"password"}' | jq -r .data.token)
    ```
 
-2. Create the org.
+4. Create the org. The `brocksbricks` org account is not created at boot, just like `brickos` ([`brickos.md`](brickos.md)). Until it exists, the project loads anyway and logs one warning. Whoever creates the org owns it, and an org owner is a developer on every project under it.
 
    ```bash
-   curl -s localhost:3000/config/org -H "Authorization: Bearer $TOKEN" \
+   curl -s $API/config/org -H "Authorization: Bearer $TOKEN" \
      -H 'Content-Type: application/json' -d '{"handle":"brocksbricks"}'
    ```
 
-3. Point the store at an API and set its credentials on the `dev` dataset. Set `base_url` first, so that nothing reaches the real store API by accident. Until the store has real credentials, point it at the local mock once [#135](https://github.com/loco-hq/loco/issues/135) lands; the mock accepts any credentials, so any four values do. Secret writes need `LOCO_SECRET_KEY` on the server (`openssl rand -base64 32`).
+5. Point the store at an API, then set its credentials on the `dev` dataset. Set `base_url` first, so nothing reaches the real store API by accident. Until the store has real credentials, use the local mock at `http://127.0.0.1:3100`, once #135 lands. The mock accepts any credentials, so any four values will do.
 
    ```bash
-   V=localhost:3000/config/variable/brocksbricks/orders/dev
-   S=localhost:3000/config/secret/brocksbricks/orders/dev
+   V=$API/config/variable/brocksbricks/orders/dev
+   S=$API/config/secret/brocksbricks/orders/dev
    curl -s -X PUT "$V/loco%2Fbricklink.store:base_url" -H "Authorization: Bearer $TOKEN" \
-     -H 'Content-Type: application/json' -d '{"value":"<the mock URL>"}'
+     -H 'Content-Type: application/json' -d '{"value":"http://127.0.0.1:3100"}'
    for name in consumer_key consumer_secret token_value token_secret; do
      curl -s -X PUT "$S/loco%2Fbricklink.store:$name" -H "Authorization: Bearer $TOKEN" \
-       -H 'Content-Type: application/json' -d '{"value":"…"}'
+       -H 'Content-Type: application/json' -d '{"value":"placeholder"}'
    done
    ```
 
    `GET $S/list` shows which secrets are set. It never shows their values.
 
-4. Read orders through the `dev` site:
+6. Read orders through the `dev` site:
 
    ```bash
-   curl -s localhost:3000/data/loco%2Fbricklink.store:orders/list \
+   curl -s $API/data/loco%2Fbricklink.store:orders/list \
      -H "Authorization: Bearer $TOKEN" -H 'X-Project-Id: brocksbricks/orders' -H 'X-Site-Id: dev'
    ```
 
-Studio shows the project for `alice` once the org exists.
+To start over, stop the server and `rm -rf "$ROOT"`.

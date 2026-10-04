@@ -145,6 +145,60 @@ Content-Type: application/json
 {"pull_run_id": "{{run_id}}", "pick_line_id": "{{line_id}}", "bl_order_id": "29471234", "order_item_id": "29471234-1-901", "inventory_id": "901", "qty": 200}
 HTTP 201
 
+# A second scale line earlier on the walk, and a hand line earlier still, so
+# the scale view below has an order to get right and a line to leave out.
+POST http://127.0.0.1:{{port}}/data/pick_line/add
+Authorization: Bearer {{token}}
+X-Project-Id: brocksbricks/orders
+X-Site-Id: dev
+Content-Type: application/json
+{"pull_run_id": "{{run_id}}", "station": "scale", "item_no": "3002", "item_type": "PART", "color_id": 1, "condition": "N", "location_code": "A-00-1", "walk_order": 10, "qty": 80}
+HTTP 201
+
+POST http://127.0.0.1:{{port}}/data/pick_line/add
+Authorization: Bearer {{token}}
+X-Project-Id: brocksbricks/orders
+X-Site-Id: dev
+Content-Type: application/json
+{"pull_run_id": "{{run_id}}", "station": "hand", "item_no": "3004", "item_type": "PART", "color_id": 1, "condition": "N", "location_code": "A-00-0", "walk_order": 5, "qty": 4}
+HTTP 201
+
+# #106's scale view in one batch: the run's scale lines in walk order, and the
+# run's whole per-order split by pull_run_id alone.
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: brocksbricks/orders
+X-Site-Id: dev
+Content-Type: application/json
+{
+  "queries": {
+    "scale": {
+      "collection": "pick_line",
+      "where": { "and": [
+        { "field": "pull_run_id", "op": "eq", "value": "{{run_id}}" },
+        { "field": "station", "op": "eq", "value": "scale" }
+      ] },
+      "order": [{ "field": "walk_order" }]
+    },
+    "split": {
+      "collection": "pick_allocation",
+      "where": { "field": "pull_run_id", "op": "eq", "value": "{{run_id}}" }
+    }
+  }
+}
+HTTP 200
+[Asserts]
+jsonpath "$.data.scale.error" not exists
+jsonpath "$.data.scale.records" count == 2
+jsonpath "$.data.scale.records[0].fields.walk_order" == 10
+jsonpath "$.data.scale.records[1].fields.walk_order" == 40
+jsonpath "$.data.scale.records[1].id" == "{{line_id}}"
+jsonpath "$.data.split.error" not exists
+jsonpath "$.data.split.records" count == 1
+jsonpath "$.data.split.records[0].fields.pick_line_id" == "{{line_id}}"
+jsonpath "$.data.split.records[0].fields.bl_order_id" == "29471234"
+jsonpath "$.data.split.records[0].fields.qty" == 200
+
 # A station is one of three; a typo is not a fourth route.
 POST http://127.0.0.1:{{port}}/data/pick_line/add
 Authorization: Bearer {{token}}
