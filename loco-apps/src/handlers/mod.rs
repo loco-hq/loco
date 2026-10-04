@@ -4,5 +4,6 @@ pub mod bundle;
 pub mod config;
 pub mod data;
 pub mod hosting;
+pub mod integrations;
 pub mod schema;
 pub mod values;

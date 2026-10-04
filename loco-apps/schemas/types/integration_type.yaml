@@ -1,0 +1,134 @@
+description: "A kind of connection a package version offers. Secrets, variables, standard collections, and actions are inline, the way an action's params are."
+pathTemplate: "${project}/versions/${version}/integration_types/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+  description:
+    type: string
+  # Written with the type. A PUT that names `secrets` replaces the list.
+  # A consumer sees it and cannot add to it. A secret has no default and no
+  # value — a body carrying either is a 400.
+  secrets:
+    type: list
+    items:
+      type: object
+      name: integration_secret
+      properties:
+        # A slug, unique on this type across secrets and variables.
+        name:
+          type: slug
+        label:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+  # Same list rule as `secrets`. A variable may set `default` (empty means
+  # none). A secret and a variable of one name on this type are a 400.
+  variables:
+    type: list
+    items:
+      type: object
+      name: integration_variable
+      properties:
+        name:
+          type: slug
+        label:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+        default:
+          type: string
+  # Standard collections and their fields. A PUT that names `collections`
+  # replaces the list. The same object is an integration's custom collections.
+  collections:
+    type: list
+    items:
+      type: object
+      name: integration_collection
+      properties:
+        name:
+          type: slug
+        label:
+          type: string
+        label_plural:
+          type: string
+        description:
+          type: string
+        fields:
+          type: list
+          items:
+            type: object
+            name: integration_field
+            properties:
+              name:
+                type: slug
+              type:
+                type: string
+              label:
+                type: string
+              description:
+                type: string
+              required:
+                type: boolean
+              options:
+                type: list
+                items:
+                  type: object
+                  name: integration_field_option
+                  properties:
+                    value:
+                      type: string
+                    label:
+                      type: string
+  # Actions the type offers. A PUT that names `actions` replaces the list.
+  actions:
+    type: list
+    items:
+      type: object
+      name: integration_action
+      properties:
+        name:
+          type: slug
+        label:
+          type: string
+        description:
+          type: string
+        params:
+          type: list
+          items:
+            type: object
+            name: integration_action_param
+            properties:
+              name:
+                type: slug
+              type:
+                type: string
+              label:
+                type: string
+              description:
+                type: string
+              required:
+                type: boolean
+              options:
+                type: list
+                items:
+                  type: object
+                  name: integration_action_param_option
+                  properties:
+                    value:
+                      type: string
+                    label:
+                      type: string

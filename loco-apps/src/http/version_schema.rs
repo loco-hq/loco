@@ -24,7 +24,7 @@
 //! - [`VersionSchema::new_read_only`] — read-only. Used by `SiteScope` (data
 //!   routes) and `VersionReadScope` (GET `/schema`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, MutexGuard};
 
 use crate::http::authz::is_draft_version;
@@ -32,8 +32,10 @@ use crate::http::project_config::lock_pins;
 use crate::validation::FIELD_TYPES;
 use crate::{
     Action, ActionParam, ActionUpdate, Bundle, Collection, CollectionUpdate, Field, FieldUpdate,
-    Fieldset, FieldsetUpdate, Manifest, ManifestUpdate, PermissionSet, PermissionSetUpdate,
-    SchemaStore, Secret, SecretUpdate, Variable, VariableUpdate,
+    Fieldset, FieldsetUpdate, Integration, IntegrationAction, IntegrationCollection,
+    IntegrationSecret, IntegrationType, IntegrationTypeUpdate, IntegrationUpdate,
+    IntegrationVariable, Manifest, ManifestUpdate, PermissionSet, PermissionSetUpdate, SchemaStore,
+    Secret, SecretUpdate, Variable, VariableUpdate,
 };
 
 /// Name of the fieldset auto-created when a collection is created. The boolean
@@ -933,6 +935,203 @@ impl VersionSchema {
         Ok(self.store.actions().delete(&key)?)
     }
 
+    // --- Integration types and integrations ---
+    //
+    // Standard collections, their fields, and the type's actions are lists on
+    // the type document. Custom collections and their fields are a list on
+    // the integration document. A consumer cannot add to a dependency's
+    // document: the path name is this version's document, and a qualified
+    // name that is not one of its documents is not found. Name and shape
+    // checks run after `write_guard`, so a published version reports that it
+    // is read-only first.
+
+    /// Every integration type visible to this version, across self + direct
+    /// deps. Each carries its `project`, like [`Self::collections`].
+    pub fn integration_types(&self) -> Vec<Arc<IntegrationType>> {
+        self.dependencies
+            .iter()
+            .flat_map(|(project_id, version)| {
+                let prefix = format!("{project_id}/versions/{version}/integration_types/");
+                self.store
+                    .integration_types()
+                    .list(&prefix)
+                    .into_iter()
+                    .map(|(_, item)| item)
+            })
+            .collect()
+    }
+
+    /// The integration type `name` names: this project's for a bare name, a
+    /// direct dependency's for `{account}/{project}.{name}`.
+    pub fn integration_type(&self, name: &str) -> Option<Arc<IntegrationType>> {
+        let (project, bare) = self.split(name);
+        self.integration_type_at(project, bare)
+    }
+
+    fn integration_type_at(&self, project: &str, name: &str) -> Option<Arc<IntegrationType>> {
+        let version = self.visible_version(project)?;
+        self.store
+            .integration_types()
+            .get(&IntegrationType::to_path(project, version, name))
+    }
+
+    pub fn create_integration_type(
+        &self,
+        mut input: IntegrationType,
+    ) -> Result<Arc<IntegrationType>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        require_slug_name("integration type", &input.name)?;
+        check_integration_type_document(&input)?;
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.integration_types().create(input)?)
+    }
+
+    /// A list the patch names replaces that list. The stored document, with
+    /// the patch applied, is checked as a whole. Omitting a list leaves it.
+    pub fn update_integration_type(
+        &self,
+        name: &str,
+        patch: IntegrationTypeUpdate,
+    ) -> Result<Arc<IntegrationType>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = IntegrationType::to_path(&self.project_id, &self.version, name);
+        if let Some(current) = self.store.integration_types().get(&key) {
+            let mut next = (*current).clone();
+            patch.apply(&mut next);
+            check_integration_type_document(&next)?;
+        }
+        Ok(self.store.integration_types().update(&key, patch)?)
+    }
+
+    /// Deletes the type. Its collections, fields, and actions are on the
+    /// document, so they go with it. A missing type is not found.
+    pub fn delete_integration_type(&self, name: &str) -> Result<(), VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = IntegrationType::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.integration_types().delete(&key)?)
+    }
+
+    /// Every integration visible to this version, across self + direct deps.
+    pub fn integrations(&self) -> Vec<Arc<Integration>> {
+        self.dependencies
+            .iter()
+            .flat_map(|(project_id, version)| {
+                let prefix = format!("{project_id}/versions/{version}/integrations/");
+                self.store
+                    .integrations()
+                    .list(&prefix)
+                    .into_iter()
+                    .map(|(_, item)| item)
+            })
+            .collect()
+    }
+
+    /// The integration `name` names: this project's for a bare name, a direct
+    /// dependency's for `{account}/{project}.{name}`.
+    pub fn integration(&self, name: &str) -> Option<Arc<Integration>> {
+        let (project, bare) = self.split(name);
+        self.integration_at(project, bare)
+    }
+
+    fn integration_at(&self, project: &str, name: &str) -> Option<Arc<Integration>> {
+        let version = self.visible_version(project)?;
+        self.store
+            .integrations()
+            .get(&Integration::to_path(project, version, name))
+    }
+
+    /// Stores `type` in canonical form: bare when this version declares it,
+    /// `{account}/{project}.{name}` when a direct dependency does.
+    pub fn create_integration(
+        &self,
+        mut input: Integration,
+    ) -> Result<Arc<Integration>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        require_slug_name("integration", &input.name)?;
+        input.r#type = self.canonical_type_ref(&input.r#type)?;
+        self.check_integration_document(&input)?;
+        input.project = self.project_id.clone();
+        input.version = self.version.clone();
+        Ok(self.store.integrations().create(input)?)
+    }
+
+    /// A patch that names `type` is stored in the same canonical form as
+    /// [`Self::create_integration`]. A list the patch names replaces that
+    /// list. The path name is this version's document, not a dependency's.
+    pub fn update_integration(
+        &self,
+        name: &str,
+        mut patch: IntegrationUpdate,
+    ) -> Result<Arc<Integration>, VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        if let Some(ty) = patch.r#type.clone() {
+            patch.r#type = Some(self.canonical_type_ref(&ty)?);
+        }
+        let key = Integration::to_path(&self.project_id, &self.version, name);
+        if let Some(current) = self.store.integrations().get(&key) {
+            let mut next = (*current).clone();
+            patch.apply(&mut next);
+            self.check_integration_document(&next)?;
+        }
+        Ok(self.store.integrations().update(&key, patch)?)
+    }
+
+    /// Deletes the integration. Its custom collections and fields are on the
+    /// document, so they go with it. Secret and variable values are not this
+    /// document and stay.
+    pub fn delete_integration(&self, name: &str) -> Result<(), VersionSchemaError> {
+        let _pins = self.write_guard()?;
+        let key = Integration::to_path(&self.project_id, &self.version, name);
+        Ok(self.store.integrations().delete(&key)?)
+    }
+
+    /// `type_ref` as this version should store it. Empty is refused. A type
+    /// this version does not see — missing, or not a direct dependency — is
+    /// the same refusal.
+    fn canonical_type_ref(&self, type_ref: &str) -> Result<String, VersionSchemaError> {
+        if type_ref.is_empty() {
+            return Err(VersionSchemaError::InvalidDeclaration(
+                "integration type is required".into(),
+            ));
+        }
+        let (project, bare) = self.split(type_ref);
+        require_slug_name("integration type", bare)?;
+        if self.integration_type_at(project, bare).is_none() {
+            return Err(VersionSchemaError::InvalidDeclaration(format!(
+                "integration type '{type_ref}' is not declared"
+            )));
+        }
+        Ok(self.reference(project, bare))
+    }
+
+    /// Custom collection names must not be names the integration's type
+    /// already offers. The type reference is the canonical one.
+    fn check_integration_document(&self, input: &Integration) -> Result<(), VersionSchemaError> {
+        check_inline_collections(input.collections())?;
+        let (project, bare) = self.split(input.r#type());
+        let Some(ty) = self.integration_type_at(project, bare) else {
+            return Err(VersionSchemaError::InvalidDeclaration(format!(
+                "integration type '{}' is not declared",
+                input.r#type()
+            )));
+        };
+        for collection in input.collections() {
+            if ty
+                .collections()
+                .iter()
+                .any(|offered| offered.name() == collection.name())
+            {
+                return Err(VersionSchemaError::InvalidDeclaration(format!(
+                    "collection '{}' is already offered by integration type '{}'",
+                    collection.name(),
+                    input.r#type()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// A secret and a variable of one bare name in this version would make a
     /// later lookup ambiguous. The other store is only read, and that read
     /// lock drops before this store's `create` takes its writer. `PINS`,
@@ -1146,27 +1345,170 @@ fn check_field_type(ty: &str) -> Result<(), VersionSchemaError> {
 /// only: an action loaded from disk is left as it is, and a version copy
 /// does not run this again.
 fn check_action_params(params: &[ActionParam]) -> Result<(), VersionSchemaError> {
+    check_param_decls(
+        params
+            .iter()
+            .map(|param| (param.name(), param.r#type(), !param.options().is_empty())),
+    )
+}
+
+fn check_param_decls<'a>(
+    params: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
+) -> Result<(), VersionSchemaError> {
     let mut seen = HashSet::new();
-    for param in params {
-        if !param_name_ok(param.name()) {
+    for (name, ty, has_options) in params {
+        if !param_name_ok(name) {
             return Err(VersionSchemaError::InvalidName(format!(
-                "param name {:?} must be a slug: one or more of a-z, 0-9, '_', '.', and '-'",
-                param.name()
+                "param name {name:?} must be a slug: one or more of a-z, 0-9, '_', '.', and '-'"
             )));
         }
-        if !seen.insert(param.name()) {
+        if !seen.insert(name) {
             return Err(VersionSchemaError::InvalidName(format!(
-                "param name '{}' is declared more than once",
-                param.name()
+                "param name '{name}' is declared more than once"
             )));
         }
-        check_field_type(param.r#type())?;
-        if param.r#type() != "string" && !param.options().is_empty() {
+        check_field_type(ty)?;
+        if ty != "string" && has_options {
             return Err(VersionSchemaError::InvalidDeclaration(format!(
-                "param '{}' declares options, which are only meaningful for type string",
-                param.name()
+                "param '{name}' declares options, which are only meaningful for type string"
             )));
         }
+    }
+    Ok(())
+}
+
+fn require_slug_name(kind: &str, name: &str) -> Result<(), VersionSchemaError> {
+    if collection_name_ok(name) {
+        Ok(())
+    } else {
+        Err(VersionSchemaError::InvalidName(format!(
+            "{kind} name {name:?} must be 1 or more of a-z, 0-9, '_', '.', and '-'; '$' is reserved"
+        )))
+    }
+}
+
+/// A secret inside an integration type's `secrets` list is a declaration.
+/// `default` and `value` on one of those objects are refused. A missing
+/// `secrets`, or a `secrets` that is not an array (`null` included), is left
+/// for the deserializer: `null` means the stored list stays.
+pub fn reject_integration_secret_values(
+    body: &serde_json::Value,
+) -> Result<(), VersionSchemaError> {
+    let Some(secrets) = body.get("secrets").and_then(|value| value.as_array()) else {
+        return Ok(());
+    };
+    for secret in secrets {
+        let Some(obj) = secret.as_object() else {
+            continue;
+        };
+        let present: Vec<&str> = ["default", "value"]
+            .into_iter()
+            .filter(|key| obj.contains_key(*key))
+            .collect();
+        if present.is_empty() {
+            continue;
+        }
+        let name = obj
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let listed = present
+            .iter()
+            .map(|key| format!("'{key}'"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        return Err(VersionSchemaError::InvalidDeclaration(format!(
+            "a secret declares a name, not a value: remove {listed} on secret '{name}'"
+        )));
+    }
+    Ok(())
+}
+
+/// Names are unique within each list and across both. A shared name uses the
+/// same message as a version-level secret and variable. These lists are not
+/// checked against the version's loose secrets.
+fn check_connection_declarations<'a>(
+    secrets: &'a [IntegrationSecret],
+    variables: &'a [IntegrationVariable],
+) -> Result<(), VersionSchemaError> {
+    let mut seen: HashMap<&'a str, &'a str> = HashMap::new();
+    for secret in secrets {
+        note_connection_name(&mut seen, "secret", secret.name())?;
+    }
+    for variable in variables {
+        note_connection_name(&mut seen, "variable", variable.name())?;
+    }
+    Ok(())
+}
+
+fn note_connection_name<'a>(
+    seen: &mut HashMap<&'a str, &'a str>,
+    kind: &'a str,
+    name: &'a str,
+) -> Result<(), VersionSchemaError> {
+    require_slug_name(kind, name)?;
+    match seen.insert(name, kind) {
+        Some(previous) if previous == kind => Err(VersionSchemaError::InvalidName(format!(
+            "{kind} name '{name}' is declared more than once"
+        ))),
+        Some(_) => Err(VersionSchemaError::InvalidDeclaration(format!(
+            "secret and variable share the name '{name}'"
+        ))),
+        None => Ok(()),
+    }
+}
+
+fn check_integration_type_document(input: &IntegrationType) -> Result<(), VersionSchemaError> {
+    check_connection_declarations(input.secrets(), input.variables())?;
+    check_inline_collections(input.collections())?;
+    check_inline_actions(input.actions())
+}
+
+fn check_inline_collections(
+    collections: &[IntegrationCollection],
+) -> Result<(), VersionSchemaError> {
+    let mut names = HashSet::new();
+    for collection in collections {
+        reject_duplicate_slug("collection", collection.name(), &mut names)?;
+        let mut fields = HashSet::new();
+        for field in collection.fields() {
+            reject_duplicate_slug("field", field.name(), &mut fields)?;
+            check_field_type(field.r#type())?;
+            if field.r#type() != "string" && !field.options().is_empty() {
+                return Err(VersionSchemaError::InvalidDeclaration(format!(
+                    "field '{}' declares options, which are only meaningful for type string",
+                    field.name()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_inline_actions(actions: &[IntegrationAction]) -> Result<(), VersionSchemaError> {
+    let mut names = HashSet::new();
+    for action in actions {
+        reject_duplicate_slug("action", action.name(), &mut names)?;
+        check_param_decls(
+            action
+                .params()
+                .iter()
+                .map(|param| (param.name(), param.r#type(), !param.options().is_empty())),
+        )?;
+    }
+    Ok(())
+}
+
+fn reject_duplicate_slug<'a>(
+    kind: &str,
+    name: &'a str,
+    seen: &mut HashSet<&'a str>,
+) -> Result<(), VersionSchemaError> {
+    require_slug_name(kind, name)?;
+    if !seen.insert(name) {
+        return Err(VersionSchemaError::InvalidName(format!(
+            "{kind} name '{name}' is declared more than once"
+        )));
     }
     Ok(())
 }
@@ -1256,6 +1598,7 @@ fn direct_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{IntegrationActionParam, IntegrationField};
     use std::sync::Barrier;
 
     const PROJECT: &str = "ben/crm";
@@ -1553,6 +1896,352 @@ mod tests {
         schema.delete_collection("task").unwrap();
         assert!(!store.fieldsets().has(&fieldset_key));
         assert!(!store.collections().has(&collection_key));
+    }
+
+    fn integration_type(name: &str) -> IntegrationType {
+        IntegrationType {
+            name: name.to_string(),
+            label: name.to_string(),
+            secrets: vec![IntegrationSecret {
+                name: "consumer_key".into(),
+                label: "Consumer key".into(),
+                required: true,
+                ..IntegrationSecret::default()
+            }],
+            variables: vec![IntegrationVariable {
+                name: "base_url".into(),
+                default: "https://api.bricklink.com/api/store/v1".into(),
+                ..Default::default()
+            }],
+            ..IntegrationType::default()
+        }
+    }
+
+    #[test]
+    fn integration_secret_body_rejects_default_and_value() {
+        let err = reject_integration_secret_values(&serde_json::json!({
+            "secrets": [{"name": "consumer_key", "value": "x"}]
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("'value'"), "{err}");
+        assert!(err.to_string().contains("consumer_key"), "{err}");
+        let err = reject_integration_secret_values(&serde_json::json!({
+            "secrets": [{"name": "token", "default": "x", "value": null}]
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("'default' and 'value'"), "{err}");
+        assert!(reject_integration_secret_values(&serde_json::json!({"secrets": null})).is_ok());
+        assert!(reject_integration_secret_values(&serde_json::json!({"label": "x"})).is_ok());
+    }
+
+    /// Two types may each offer `orders` and `set_status` on their own
+    /// documents. Deleting one type leaves the other. Deleting an integration
+    /// removes the custom collections that were on it. A qualified self type
+    /// reference is stored bare. A reload keeps these documents out of the
+    /// ordinary collection and action stores.
+    #[test]
+    fn integration_declarations_round_trip_and_delete_cascades() {
+        let (dir, store) = draft_schema();
+        let schema = VersionSchema::new(store.clone(), PROJECT, VERSION);
+        schema
+            .create_integration_type(integration_type("bricklink"))
+            .unwrap();
+        schema
+            .create_integration_type(integration_type("warehouse"))
+            .unwrap();
+        schema
+            .update_integration_type(
+                "bricklink",
+                IntegrationTypeUpdate {
+                    collections: Some(vec![orders_collection("BrickLink orders")]),
+                    actions: Some(vec![status_action("Set status")]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        schema
+            .update_integration_type(
+                "warehouse",
+                IntegrationTypeUpdate {
+                    collections: Some(vec![orders_collection("Warehouse orders")]),
+                    actions: Some(vec![status_action("Warehouse status")]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            schema.integration_type("bricklink").unwrap().secrets()[0].name(),
+            "consumer_key"
+        );
+
+        let err = schema
+            .update_integration_type(
+                "bricklink",
+                IntegrationTypeUpdate {
+                    collections: Some(vec![orders_collection("One"), orders_collection("Two")]),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, VersionSchemaError::InvalidName(ref msg) if msg.contains("orders")),
+            "{err}"
+        );
+        assert_eq!(
+            schema.integration_type("bricklink").unwrap().collections()[0].label(),
+            "BrickLink orders"
+        );
+
+        let stored = schema
+            .create_integration(Integration {
+                name: "store".into(),
+                r#type: format!("{PROJECT}.bricklink"),
+                label: "Store".into(),
+                collections: vec![IntegrationCollection {
+                    name: "invoice".into(),
+                    label: "Invoice".into(),
+                    fields: vec![IntegrationField {
+                        name: "amount".into(),
+                        r#type: "string".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(stored.r#type(), "bricklink");
+        assert_eq!(stored.collections()[0].fields()[0].name(), "amount");
+
+        let err = schema
+            .update_integration(
+                "store",
+                IntegrationUpdate {
+                    collections: Some(vec![orders_collection("Stolen")]),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        let VersionSchemaError::InvalidDeclaration(msg) = &err else {
+            panic!("expected a collision, got {err}");
+        };
+        assert!(msg.contains("orders"), "{msg}");
+        assert!(msg.contains("bricklink"), "{msg}");
+        assert_eq!(
+            schema.integration("store").unwrap().collections()[0].name(),
+            "invoice"
+        );
+
+        schema.create_collection(collection("orders")).unwrap();
+        assert_eq!(schema.collections().len(), 1);
+        assert_eq!(
+            schema.integration_type("warehouse").unwrap().collections()[0].label(),
+            "Warehouse orders"
+        );
+        assert_eq!(
+            schema.integration_type("bricklink").unwrap().actions()[0].label(),
+            "Set status"
+        );
+
+        let reloaded = SchemaStore::load(dir.path()).unwrap();
+        let prefix = format!("{PROJECT}/versions/{VERSION}/");
+        assert_eq!(reloaded.collections().list(&prefix).len(), 1);
+        assert_eq!(reloaded.integration_types().list(&prefix).len(), 2);
+        assert_eq!(reloaded.integrations().list(&prefix).len(), 1);
+        assert!(reloaded.fields().list(&prefix).is_empty());
+        assert!(reloaded.actions().list(&prefix).is_empty());
+
+        schema.delete_integration("store").unwrap();
+        assert!(schema.integration("store").is_none());
+        assert_eq!(store.integrations().list(&prefix).len(), 0);
+
+        schema.delete_integration_type("bricklink").unwrap();
+        assert!(schema.integration_type("bricklink").is_none());
+        assert_eq!(
+            schema.integration_type("warehouse").unwrap().collections()[0].label(),
+            "Warehouse orders"
+        );
+        assert_eq!(
+            schema.integration_type("warehouse").unwrap().actions()[0].label(),
+            "Warehouse status"
+        );
+        assert!(schema.collection("orders").is_some());
+    }
+
+    /// An installer may declare its own integration of a dependency's type,
+    /// including a custom collection. A collection the type already offers is
+    /// refused, naming both. Writing the dependency's integration or type by
+    /// its qualified name does not modify that document.
+    #[test]
+    fn installer_cannot_declare_on_a_dependency_integration() {
+        let (_dir, store) = draft_schema();
+        store
+            .manifests()
+            .create(Manifest::new(
+                "alice/pkg".into(),
+                VERSION.into(),
+                Vec::new(),
+                Vec::new(),
+            ))
+            .unwrap();
+        store
+            .manifests()
+            .create(Manifest::new(
+                "alice/shop".into(),
+                VERSION.into(),
+                vec!["alice/pkg@0.0.1-dev".into()],
+                Vec::new(),
+            ))
+            .unwrap();
+
+        let pkg = VersionSchema::new(store.clone(), "alice/pkg", VERSION);
+        pkg.create_integration_type(IntegrationType {
+            collections: vec![IntegrationCollection {
+                name: "account".into(),
+                label: "Account".into(),
+                ..Default::default()
+            }],
+            ..integration_type("salesforce")
+        })
+        .unwrap();
+        pkg.create_integration(Integration {
+            name: "store".into(),
+            r#type: "salesforce".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let shop = VersionSchema::new(store.clone(), "alice/shop", VERSION);
+        let err = shop
+            .update_integration_type(
+                "alice/pkg.salesforce",
+                IntegrationTypeUpdate {
+                    collections: Some(vec![orders_collection("Stolen")]),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                VersionSchemaError::Schema(loco_schema_runtime::Error::NotFound(_))
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            pkg.integration_type("salesforce").unwrap().collections()[0].name(),
+            "account"
+        );
+
+        let err = shop
+            .update_integration(
+                "alice/pkg.store",
+                IntegrationUpdate {
+                    collections: Some(vec![IntegrationCollection {
+                        name: "invoice".into(),
+                        label: "Stolen".into(),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, VersionSchemaError::Schema(loco_schema_runtime::Error::NotFound(ref key)) if key.contains("alice/pkg.store")),
+            "{err}"
+        );
+        assert!(pkg.integration("store").unwrap().collections().is_empty());
+
+        let err = shop
+            .create_integration(Integration {
+                name: "sf_east".into(),
+                r#type: "alice/pkg.salesforce".into(),
+                collections: vec![IntegrationCollection {
+                    name: "account".into(),
+                    label: "Account".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap_err();
+        let VersionSchemaError::InvalidDeclaration(msg) = &err else {
+            panic!("expected a collision, got {err}");
+        };
+        assert!(msg.contains("account"), "{msg}");
+        assert!(msg.contains("alice/pkg.salesforce"), "{msg}");
+
+        let created = shop
+            .create_integration(Integration {
+                name: "sf_east".into(),
+                r#type: "alice/pkg.salesforce".into(),
+                collections: vec![IntegrationCollection {
+                    name: "invoice".into(),
+                    label: "Invoice".into(),
+                    fields: vec![IntegrationField {
+                        name: "amount".into(),
+                        r#type: "integer".into(),
+                        options: vec![crate::IntegrationFieldOption {
+                            value: "1".into(),
+                            label: "One".into(),
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(
+            matches!(created, VersionSchemaError::InvalidDeclaration(ref msg) if msg.contains("amount")),
+            "{created}"
+        );
+
+        let created = shop
+            .create_integration(Integration {
+                name: "sf_east".into(),
+                r#type: "alice/pkg.salesforce".into(),
+                collections: vec![IntegrationCollection {
+                    name: "invoice".into(),
+                    label: "Invoice".into(),
+                    fields: vec![IntegrationField {
+                        name: "amount".into(),
+                        r#type: "string".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(created.r#type(), "alice/pkg.salesforce");
+        assert_eq!(created.collections()[0].name(), "invoice");
+        assert!(pkg.integration("store").unwrap().collections().is_empty());
+    }
+
+    fn orders_collection(label: &str) -> IntegrationCollection {
+        IntegrationCollection {
+            name: "orders".into(),
+            label: label.into(),
+            fields: vec![IntegrationField {
+                name: "status".into(),
+                r#type: "string".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn status_action(label: &str) -> IntegrationAction {
+        IntegrationAction {
+            name: "set_status".into(),
+            label: label.into(),
+            params: vec![IntegrationActionParam {
+                name: "order_id".into(),
+                r#type: "string".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
 }
 

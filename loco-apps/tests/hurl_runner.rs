@@ -177,6 +177,11 @@ fn suite_schema_declarations() {
 }
 
 #[test]
+fn suite_integrations() {
+    run_suite(&suites_dir().join("integrations"));
+}
+
+#[test]
 fn suite_actions() {
     // Fixture handlers are registered here, not in the library and not in
     // the server binary. `build_app` keeps an empty registry. `pull`'s

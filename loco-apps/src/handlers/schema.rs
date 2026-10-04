@@ -102,6 +102,7 @@ pub fn router() -> Router<Arc<AppState>> {
         // The bundle is schema too: a version's file tree, written the same
         // way its YAML is. Its own module because the body is a zip, not JSON.
         .merge(crate::handlers::bundle::routes())
+        .merge(crate::handlers::integrations::routes())
 }
 
 pub async fn get_manifest(scope: VersionReadScope) -> Response {
