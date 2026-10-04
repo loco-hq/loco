@@ -191,7 +191,7 @@ params:
     required: true
 ```
 
-The handler is registered against `(loco/bricklink, set_status)`. The source is registered against `(loco/bricklink, bricklink)`. A run of `loco/bricklink.set_status` binds the free integration first, then calls that handler with that connection.
+The handler is registered against `(loco/bricklink, bricklink, set_status)`. Type actions register under the type. Ordinary actions keep `(project, name)`. The source is registered against `(loco/bricklink, bricklink)`. A run of `loco/bricklink.set_status` binds the free integration first, then calls that handler with that connection.
 
 Dataset `dev` on `brocksbricks/orders`. The value name is the qualified integration, then `:`, then the declaration name. The integration's own name stays in the value key when the collection address drops it. Four secrets:
 
@@ -351,7 +351,7 @@ POST /actions/sf_east:set_owner
 {"input": {"account_id": "001…", "owner_id": "005…"}}
 ```
 
-`set_owner` is registered against `(acme/salesforce, set_owner)` and runs with East's connection only. It cannot read West's secrets, and West's source is not part of the call. Moving a record from one org to the other is two requests from the caller: a read of one address and a write of the other. An ordinary action on `ben/sync` is not called for either integration, so it does not receive either connection.
+`set_owner` is registered against `(acme/salesforce, salesforce, set_owner)` and runs with East's connection only. It cannot read West's secrets, and West's source is not part of the call. Moving a record from one org to the other is two requests from the caller: a read of one address and a write of the other. An ordinary action on `ben/sync` is not called for either integration, so it does not receive either connection.
 
 ## Declarations and values
 
@@ -360,7 +360,7 @@ POST /actions/sf_east:set_owner
 | Integration type | `${project}/versions/${version}/integration_types/${name}` | The package. Secrets and variables are inline. |
 | Standard collection, its fields, its actions | `.../integration_types/${type}/collections/${name}`, `.../fields/${collection}/${name}`, `.../actions/${name}` | The type's owner. A name with no `:` does not find these, except through the root mount. |
 | Integration | `${project}/versions/${version}/integrations/${name}` | The project that connected. `type` is bare for a type this project declares, qualified for a dependency's. |
-| Custom collection and its fields | `.../integrations/${integration}/collections/${name}` and `.../integrations/${integration}/fields/${name}/…` | The integration's owner. A bare `invoice__c` does not find this document. |
+| Custom collection and its fields | `.../integrations/${integration}/collections/${name}` and `.../integrations/${integration}/fields/${collection}/${name}` | The integration's owner. A bare `invoice__c` does not find this document. |
 
 Each type has its own directory, so two types in one project may both offer `orders`. The files do not collide, and a name with no `:` still does not find either, unless one of them is the root mount.
 
@@ -472,9 +472,9 @@ Storage, gates, and purge order are unchanged ([#101](https://github.com/loco-hq
 
 Not filed here. File these from the merged document. One shippable change each. #104 is an edit of the existing issue, not a fifth one. #117, #120, the cache, and the describe hook are not in this list.
 
-1. **Add integration type and integration declarations on a version.** The documents and paths above, inline secrets and variables, standard collections, fields, and actions under the type, custom collections and their fields under the integration, the root-mount uniqueness check, draft delete of an integration, version copy of the declarations. A code registry keyed by owning project and type name, empty in the production binary. Blocked by nothing in this list. The loose-secret question is settled in issue 4, not by deleting the #100 types in this issue.
+1. **Add integration type and integration declarations on a version.** The documents and paths above, inline secrets and variables, standard collections, fields, and actions under the type, custom collections and their fields under the integration, the root-mount uniqueness 400 (checked on both writes), draft delete of an integration, version copy of the declarations. The source registry is keyed by owning project and type name. Type actions register under the type, `(project, type, name)`; ordinary actions keep `(project, name)`. Both start empty in the production binary. Blocked by nothing in this list. The loose-secret question is settled in issue 4, not by deleting the #100 types in this issue.
 
-2. **Resolve integration addresses.** The parse in `split` and in grant matching, both on the first `.`, one path segment on `/data` and `/actions`, `/data/query`, and grant matching against the address. A name with no `:` finds a standard collection only through the root mount. The 400 when a root-mounted type's name equals an ordinary collection or action name, checked on both writes. Listing rows are the open question; close it in this issue. The recommendation below is the proposal. Depends on issue 1.
+2. **Resolve integration addresses.** The parse in `split` and in grant matching, both on the first `.`, one path segment on `/data` and `/actions`, `/data/query`, and grant matching against the address. A name with no `:` finds a standard collection only through the root mount. Listing rows are the open question; close it in this issue. The recommendation below is the proposal. Depends on issue 1.
 
 3. **Route `/data` through `CollectionSource`.** The async trait, the connection argument, capability declaration, the lake implementation, upstream ids, and an error (never a widened result) for a verb or a filter the source does not declare. `/data` and `/data/query` call the trait. The read and write path keeps the seam in the diagram: sidecar merge and cache are not implemented. Depends on issues 1 and 2.
 
