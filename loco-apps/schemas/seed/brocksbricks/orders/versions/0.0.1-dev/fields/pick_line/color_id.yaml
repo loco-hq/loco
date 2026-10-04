@@ -1,0 +1,3 @@
+type: "integer"
+label: "Color id"
+required: true

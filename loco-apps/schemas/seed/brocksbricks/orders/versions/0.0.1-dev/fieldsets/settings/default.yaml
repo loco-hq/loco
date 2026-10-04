@@ -1,0 +1,4 @@
+label: "Default"
+fields:
+  - scale_threshold
+auto_add: true

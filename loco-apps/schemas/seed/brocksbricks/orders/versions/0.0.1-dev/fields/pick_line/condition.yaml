@@ -1,0 +1,8 @@
+type: "string"
+label: "Condition"
+required: true
+options:
+  - value: "N"
+    label: "New"
+  - value: "U"
+    label: "Used"

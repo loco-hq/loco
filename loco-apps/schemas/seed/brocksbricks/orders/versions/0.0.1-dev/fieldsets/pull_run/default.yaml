@@ -1,0 +1,6 @@
+label: "Default"
+fields:
+  - label
+  - created_at
+  - status
+auto_add: true

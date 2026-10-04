@@ -1,0 +1,9 @@
+label: "Default"
+fields:
+  - pull_run_id
+  - pick_line_id
+  - bl_order_id
+  - order_item_id
+  - inventory_id
+  - qty
+auto_add: true

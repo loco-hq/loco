@@ -1027,6 +1027,16 @@ fn suite_brickos_inventory() {
 }
 
 #[test]
+fn suite_brocksbricks_orders() {
+    // The store's manifest depends on loco/bricklink@1.0.0, so the loco seed
+    // account comes along.
+    run_suite_over_seed(
+        &suites_dir().join("brocksbricks_orders"),
+        &["brocksbricks", "loco"],
+    );
+}
+
+#[test]
 fn suite_seed_store() {
     let tmp = run_suite_over_seed(&suites_dir().join("seed_store"), &["brickos"]);
     let seed = tmp.path().join("schemas/seed");
