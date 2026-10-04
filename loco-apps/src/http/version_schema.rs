@@ -27,6 +27,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, MutexGuard};
 
+use serde::Serialize;
+
 use crate::http::authz::is_draft_version;
 use crate::http::project_config::lock_pins;
 use crate::validation::FIELD_TYPES;
@@ -113,6 +115,192 @@ pub struct VersionSchema {
     /// qualified (`acme/crm.public_contacts`).
     public_permission_sets: Vec<String>,
     read_only: bool,
+}
+
+/// One collection a caller can address. Ordinary lake collections stay one
+/// row per document. A standard collection is one row per integration that
+/// exposes it. `project` is the address root (who declared the integration,
+/// or who owns the ordinary collection). `owner` is who owns the fields.
+#[derive(Debug, Clone)]
+pub struct CollectionAddress {
+    pub project: String,
+    pub version: String,
+    /// `sf_east:account`, or the bare collection name when there is no integration.
+    pub local: String,
+    pub integration: Option<String>,
+    pub name: String,
+    pub owner: String,
+    pub label: String,
+    pub label_plural: String,
+    pub kind: CollectionAddressKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum CollectionAddressKind {
+    Ordinary,
+    Standard {
+        type_project: String,
+        type_version: String,
+        type_name: String,
+    },
+    Custom,
+    /// Both the type and the integration declare this name. `project` and
+    /// `local` are the address; neither document is chosen. `lake_key` is
+    /// `None`, and the handler answers 409 after the access check.
+    Ambiguous,
+}
+
+/// Wire row for `GET /schema/.../collection/list`. Ordinary rows keep the
+/// collection document's fields and add `owner`. `integration` is omitted
+/// when the address is an ordinary collection.
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionListingRow {
+    pub project: String,
+    pub version: String,
+    pub name: String,
+    pub label: String,
+    pub label_plural: String,
+    pub owner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration: Option<String>,
+}
+
+/// One action a caller can address. Same columns as a collection address.
+/// `owner` is the type's project for a type action, and the action's project
+/// for an ordinary action. An action is resolved or missing, never ambiguous.
+#[derive(Debug, Clone)]
+pub struct ActionAddress {
+    pub project: String,
+    pub version: String,
+    pub local: String,
+    pub integration: Option<String>,
+    pub name: String,
+    pub owner: String,
+    pub label: String,
+    pub description: String,
+    pub params: serde_json::Value,
+    pub kind: ActionAddressKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum ActionAddressKind {
+    Ordinary,
+    Type {
+        type_project: String,
+        type_name: String,
+        action: Arc<IntegrationAction>,
+    },
+}
+
+/// Wire row for `GET /actions` and `GET /actions/{name}`. Params stay in
+/// declared order. `integration` is omitted on an ordinary action.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActionListingRow {
+    pub project: String,
+    pub version: String,
+    pub name: String,
+    pub label: String,
+    pub description: String,
+    pub owner: String,
+    pub params: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration: Option<String>,
+}
+
+impl CollectionAddress {
+    fn ordinary(collection: Arc<Collection>) -> Self {
+        Self {
+            project: collection.project().to_string(),
+            version: collection.version().to_string(),
+            local: collection.name().to_string(),
+            integration: None,
+            name: collection.name().to_string(),
+            owner: collection.project().to_string(),
+            label: collection.label().to_string(),
+            label_plural: collection.label_plural().to_string(),
+            kind: CollectionAddressKind::Ordinary,
+        }
+    }
+
+    /// A collision. The address root and the local are known. Labels stay
+    /// empty because neither document is the one this address names.
+    fn ambiguous(project: &str, version: &str, integration: &str, name: &str) -> Self {
+        Self {
+            project: project.to_string(),
+            version: version.to_string(),
+            local: format!("{integration}:{name}"),
+            integration: Some(integration.to_string()),
+            name: name.to_string(),
+            owner: project.to_string(),
+            label: String::new(),
+            label_plural: String::new(),
+            kind: CollectionAddressKind::Ambiguous,
+        }
+    }
+
+    pub fn listing_row(&self) -> CollectionListingRow {
+        CollectionListingRow {
+            project: self.project.clone(),
+            version: self.version.clone(),
+            name: self.name.clone(),
+            label: self.label.clone(),
+            label_plural: self.label_plural.clone(),
+            owner: self.owner.clone(),
+            integration: self.integration.clone(),
+        }
+    }
+}
+
+/// A name resolved to one address, or it did not. A collection both the type
+/// and the integration declare is [`CollectionAddressKind::Ambiguous`]: the
+/// address resolved, and the data handler reports that after the access
+/// check. An action is resolved or missing, and never ambiguous.
+#[derive(Debug)]
+pub enum AddressResolution<T> {
+    Resolved(T),
+    Missing,
+}
+
+/// Read-path refusal. `name` is the address the caller wrote, qualified or bare.
+pub(crate) fn ambiguous_address_message(name: &str) -> String {
+    format!("ambiguous address {name}: the type offers it and the integration declares it")
+}
+
+/// Write-path refusal. Names the type document and the integration document.
+fn address_collision(integration: &str, name: &str, type_ref: &str) -> String {
+    format!(
+        "ambiguous address {integration}:{name}: type '{type_ref}' offers collection '{name}' and integration '{integration}' declares it"
+    )
+}
+
+impl ActionAddress {
+    fn ordinary(action: Arc<Action>) -> Self {
+        Self {
+            project: action.project().to_string(),
+            version: action.version().to_string(),
+            local: action.name().to_string(),
+            integration: None,
+            name: action.name().to_string(),
+            owner: action.project().to_string(),
+            label: action.label().to_string(),
+            description: action.description().to_string(),
+            params: json_value(action.params()),
+            kind: ActionAddressKind::Ordinary,
+        }
+    }
+
+    pub fn listing_row(&self) -> ActionListingRow {
+        ActionListingRow {
+            project: self.project.clone(),
+            version: self.version.clone(),
+            name: self.name.clone(),
+            label: self.label.clone(),
+            description: self.description.clone(),
+            owner: self.owner.clone(),
+            params: self.params.clone(),
+            integration: self.integration.clone(),
+        }
+    }
 }
 
 impl VersionSchema {
@@ -270,6 +458,114 @@ impl VersionSchema {
         self.store
             .collections()
             .get(&Collection::to_path(project, version, name))
+    }
+
+    /// The collection address `name` names.
+    ///
+    /// Parse is a property of the string ([`parse_address`]): the first `.`
+    /// separates a project id from `local`, and the first `:` inside `local`
+    /// addresses an integration. A name with no `:` is an ordinary collection
+    /// only — it does not reach a standard or custom collection. A name with
+    /// `:` never falls through to an ordinary collection.
+    ///
+    /// Resolve is a property of this version. The integration's type is
+    /// resolved from the version that declares the integration, so a caller
+    /// that does not depend on the type's project can still address
+    /// `ben/sync.sf_east:account` when `ben/sync` depends on that type. One
+    /// address names one document. Both a standard collection and a custom
+    /// collection is a resolved [`CollectionAddressKind::Ambiguous`]: `project`
+    /// and `local` are set, and neither document is chosen.
+    pub fn collection_address(&self, name: &str) -> AddressResolution<CollectionAddress> {
+        let parsed = parse_address(name);
+        let Some((project, version)) = self.address_root(parsed.project) else {
+            return AddressResolution::Missing;
+        };
+        if let Some(integration) = parsed.integration {
+            if !collection_name_ok(integration) || !collection_name_ok(parsed.name) {
+                return AddressResolution::Missing;
+            }
+            self.integration_collection_address(project, version, integration, parsed.name)
+        } else {
+            match self.collection_in(project, parsed.name) {
+                Some(collection) => {
+                    AddressResolution::Resolved(CollectionAddress::ordinary(collection))
+                }
+                None => AddressResolution::Missing,
+            }
+        }
+    }
+
+    /// One row per address this version shows. Ordinary collections come
+    /// first, in [`Self::collections`] order, then each visible project's
+    /// integrations by name. A standard collection is one row per integration.
+    /// Custom collections of that integration follow. A name both sides
+    /// declare is omitted: the listing must not pick one.
+    pub fn collection_addresses(&self) -> Vec<CollectionAddress> {
+        let mut out: Vec<CollectionAddress> = self
+            .collections()
+            .into_iter()
+            .map(CollectionAddress::ordinary)
+            .collect();
+        for (project, version) in &self.dependencies {
+            let view = self.view_of(project, version);
+            for integration in view.integrations_on(project, version) {
+                out.extend(view.collection_addresses_of(&integration));
+            }
+        }
+        out
+    }
+
+    /// Fields of a resolved address, in the shape of that collection's field
+    /// list. A standard collection's fields are the type document's, read
+    /// from the declaring version's view, which may see a type this caller
+    /// does not depend on. A custom collection's fields are the integration
+    /// document's. An ambiguous address has none: the data handler answers
+    /// 409 before asking.
+    pub fn address_fields(&self, address: &CollectionAddress) -> serde_json::Value {
+        let value = match &address.kind {
+            CollectionAddressKind::Ordinary => {
+                json_value(self.fields_of(&address.owner, &address.name))
+            }
+            CollectionAddressKind::Standard {
+                type_project,
+                type_name,
+                ..
+            } => {
+                let view = self.view_of(&address.project, &address.version);
+                match view
+                    .integration_type_at(type_project, type_name)
+                    .and_then(|ty| {
+                        ty.collections()
+                            .iter()
+                            .find(|collection| collection.name() == address.name)
+                            .map(|collection| json_value(collection.fields()))
+                    }) {
+                    Some(fields) => fields,
+                    None => serde_json::Value::Array(Vec::new()),
+                }
+            }
+            CollectionAddressKind::Custom => {
+                let view = self.view_of(&address.project, &address.version);
+                let integration = address.integration.as_deref().unwrap_or("");
+                match view
+                    .integration_at(&address.project, integration)
+                    .and_then(|doc| {
+                        doc.collections()
+                            .iter()
+                            .find(|collection| collection.name() == address.name)
+                            .map(|collection| json_value(collection.fields()))
+                    }) {
+                    Some(fields) => fields,
+                    None => serde_json::Value::Array(Vec::new()),
+                }
+            }
+            CollectionAddressKind::Ambiguous => serde_json::Value::Array(Vec::new()),
+        };
+        if value.is_array() {
+            value
+        } else {
+            serde_json::Value::Array(Vec::new())
+        }
     }
 
     /// The field `name` that `project` declares on the collection
@@ -529,6 +825,12 @@ impl VersionSchema {
                 declared(dep) || may_read(project)
             })
             .map_err(VersionSchemaError::InvalidDependency)?;
+            // The new list, against the store. This view still has the old
+            // dependencies. A bare type is this version's own and is checked
+            // when its collections list is written. A dependency this list
+            // drops has no standard side.
+            check_address_collisions(&self.store, &self.project_id, &self.version, deps)
+                .map_err(VersionSchemaError::InvalidDeclaration)?;
         }
         Ok(self.store.manifests().update(&key, patch)?)
     }
@@ -906,6 +1208,50 @@ impl VersionSchema {
             .get(&Action::to_path(project, version, bare))
     }
 
+    /// The action address `name` names. The same parse as
+    /// [`Self::collection_address`]. A name with no `:` is an ordinary action.
+    /// A name with `:` is a type action on that integration's type document.
+    /// There are no custom actions, so an action address is resolved or
+    /// missing. A collection collision on the same string does not change that.
+    pub fn action_address(&self, name: &str) -> AddressResolution<ActionAddress> {
+        let parsed = parse_address(name);
+        let Some((project, version)) = self.address_root(parsed.project) else {
+            return AddressResolution::Missing;
+        };
+        if let Some(integration) = parsed.integration {
+            if !collection_name_ok(integration) || !collection_name_ok(parsed.name) {
+                return AddressResolution::Missing;
+            }
+            match self.integration_action_address(project, version, integration, parsed.name) {
+                Some(action) => AddressResolution::Resolved(action),
+                None => AddressResolution::Missing,
+            }
+        } else {
+            match self.action_in(project, version, parsed.name) {
+                Some(action) => AddressResolution::Resolved(ActionAddress::ordinary(action)),
+                None => AddressResolution::Missing,
+            }
+        }
+    }
+
+    /// One row per action address. Ordinary actions come first, in
+    /// [`Self::actions`] order, then type actions, one row per integration
+    /// that exposes them.
+    pub fn action_addresses(&self) -> Vec<ActionAddress> {
+        let mut out: Vec<ActionAddress> = self
+            .actions()
+            .into_iter()
+            .map(ActionAddress::ordinary)
+            .collect();
+        for (project, version) in &self.dependencies {
+            let view = self.view_of(project, version);
+            for integration in view.integrations_on(project, version) {
+                out.extend(view.action_addresses_of(&integration));
+            }
+        }
+        out
+    }
+
     pub fn create_action(&self, mut input: Action) -> Result<Arc<Action>, VersionSchemaError> {
         check_action_params(input.params())?;
         let _pins = self.write_guard()?;
@@ -982,6 +1328,7 @@ impl VersionSchema {
         let _pins = self.write_guard()?;
         require_slug_name("integration type", &input.name)?;
         check_integration_type_document(&input)?;
+        self.reject_standard_collection_collisions(&input.name, input.collections())?;
         input.project = self.project_id.clone();
         input.version = self.version.clone();
         Ok(self.store.integration_types().create(input)?)
@@ -1000,6 +1347,13 @@ impl VersionSchema {
             let mut next = (*current).clone();
             patch.apply(&mut next);
             check_integration_type_document(&next)?;
+            // Omitting `collections` leaves the stored list and does not
+            // re-check it. Naming the list, including a re-send of a list
+            // that already collides, refuses the first custom name an
+            // integration of this type in this version already declares.
+            if patch.collections.is_some() {
+                self.reject_standard_collection_collisions(name, next.collections())?;
+            }
         }
         Ok(self.store.integration_types().update(&key, patch)?)
     }
@@ -1070,9 +1424,18 @@ impl VersionSchema {
         }
         let key = Integration::to_path(&self.project_id, &self.version, name);
         if let Some(current) = self.store.integrations().get(&key) {
-            let mut next = (*current).clone();
-            patch.apply(&mut next);
-            self.check_integration_document(&next)?;
+            // A label-only write, and a re-send of the stored type, leave a
+            // collision that was planted past this check for the read path.
+            // Naming `collections`, or changing the canonical type, re-checks.
+            let type_changed = patch
+                .r#type
+                .as_ref()
+                .is_some_and(|ty| ty != current.r#type());
+            if patch.collections.is_some() || type_changed {
+                let mut next = (*current).clone();
+                patch.apply(&mut next);
+                self.check_integration_document(&next)?;
+            }
         }
         Ok(self.store.integrations().update(&key, patch)?)
     }
@@ -1116,16 +1479,18 @@ impl VersionSchema {
                 input.r#type()
             )));
         };
-        for collection in input.collections() {
+        let mut names: Vec<&str> = input.collections().iter().map(|c| c.name()).collect();
+        names.sort();
+        for name in names {
             if ty
                 .collections()
                 .iter()
-                .any(|offered| offered.name() == collection.name())
+                .any(|offered| offered.name() == name)
             {
-                return Err(VersionSchemaError::InvalidDeclaration(format!(
-                    "collection '{}' is already offered by integration type '{}'",
-                    collection.name(),
-                    input.r#type()
+                return Err(VersionSchemaError::InvalidDeclaration(address_collision(
+                    input.name(),
+                    name,
+                    input.r#type(),
                 )));
             }
         }
@@ -1250,6 +1615,265 @@ impl VersionSchema {
             });
         }
     }
+
+    /// `(project, version)` the address is rooted in. `None` when a named
+    /// project is not self or a direct dependency. A bare address uses this
+    /// version.
+    fn address_root<'a>(&'a self, project: Option<&str>) -> Option<(&'a str, &'a str)> {
+        match project {
+            Some(project) => self
+                .dependencies
+                .iter()
+                .find(|(id, _)| id == project)
+                .map(|(id, version)| (id.as_str(), version.as_str())),
+            None => Some((self.project_id.as_str(), self.version.as_str())),
+        }
+    }
+
+    /// This view when `(project, version)` is the one it was built for, and
+    /// a read-only view of that version otherwise. The declaring version is
+    /// what sees the integration's type.
+    fn view_of(&self, project: &str, version: &str) -> VersionSchema {
+        if project == self.project_id && version == self.version {
+            self.clone()
+        } else {
+            VersionSchema::new_read_only(Arc::clone(&self.store), project, version)
+        }
+    }
+
+    fn action_in(&self, project: &str, version: &str, name: &str) -> Option<Arc<Action>> {
+        self.store
+            .actions()
+            .get(&Action::to_path(project, version, name))
+    }
+
+    /// Integrations declared on this one version, by name. Not
+    /// [`Self::integrations`], which spans the view's dependencies.
+    fn integrations_on(&self, project: &str, version: &str) -> Vec<Arc<Integration>> {
+        let prefix = format!("{project}/versions/{version}/integrations/");
+        let mut items = self.store.integrations().list(&prefix);
+        items.sort_by(|(_, a), (_, b)| a.name().cmp(b.name()));
+        items.into_iter().map(|(_, item)| item).collect()
+    }
+
+    fn integration_collection_address(
+        &self,
+        project: &str,
+        version: &str,
+        integration: &str,
+        name: &str,
+    ) -> AddressResolution<CollectionAddress> {
+        let view = self.view_of(project, version);
+        let Some(integration_doc) = view.integration_at(project, integration) else {
+            return AddressResolution::Missing;
+        };
+        let standard =
+            view.standard_collection_address(&integration_doc, project, version, integration, name);
+        let custom = integration_doc
+            .collections()
+            .iter()
+            .find(|collection| collection.name() == name)
+            .map(|custom| CollectionAddress {
+                project: project.to_string(),
+                version: version.to_string(),
+                local: format!("{integration}:{name}"),
+                integration: Some(integration.to_string()),
+                name: name.to_string(),
+                owner: project.to_string(),
+                label: custom.label().to_string(),
+                label_plural: custom.label_plural().to_string(),
+                kind: CollectionAddressKind::Custom,
+            });
+        match (standard, custom) {
+            (Some(_), Some(_)) => AddressResolution::Resolved(CollectionAddress::ambiguous(
+                project,
+                version,
+                integration,
+                name,
+            )),
+            (Some(address), None) => AddressResolution::Resolved(address),
+            (None, Some(address)) => AddressResolution::Resolved(address),
+            (None, None) => AddressResolution::Missing,
+        }
+    }
+
+    /// The type's collection, when this integration's type offers `name`.
+    /// The type is resolved on `self`, which is the declaring version's view.
+    /// The collection is an entry on the type document, not its own store.
+    fn standard_collection_address(
+        &self,
+        integration_doc: &Integration,
+        project: &str,
+        version: &str,
+        integration: &str,
+        name: &str,
+    ) -> Option<CollectionAddress> {
+        let ty = self.integration_type(integration_doc.r#type())?;
+        let collection = ty.collections().iter().find(|item| item.name() == name)?;
+        Some(CollectionAddress {
+            project: project.to_string(),
+            version: version.to_string(),
+            local: format!("{integration}:{name}"),
+            integration: Some(integration.to_string()),
+            name: name.to_string(),
+            owner: ty.project().to_string(),
+            label: collection.label().to_string(),
+            label_plural: collection.label_plural().to_string(),
+            kind: CollectionAddressKind::Standard {
+                type_project: ty.project().to_string(),
+                type_version: ty.version().to_string(),
+                type_name: ty.name().to_string(),
+            },
+        })
+    }
+
+    fn collection_addresses_of(&self, integration: &Integration) -> Vec<CollectionAddress> {
+        let project = integration.project();
+        let version = integration.version();
+        let integration_name = integration.name();
+        let mut standards = Vec::new();
+        if let Some(ty) = self.integration_type(integration.r#type()) {
+            for collection in ty.collections() {
+                if let Some(address) = self.standard_collection_address(
+                    integration,
+                    project,
+                    version,
+                    integration_name,
+                    collection.name(),
+                ) {
+                    standards.push(address);
+                }
+            }
+        }
+        let customs: Vec<CollectionAddress> = integration
+            .collections()
+            .iter()
+            .map(|collection| CollectionAddress {
+                project: project.to_string(),
+                version: version.to_string(),
+                local: format!("{integration_name}:{}", collection.name()),
+                integration: Some(integration_name.to_string()),
+                name: collection.name().to_string(),
+                owner: project.to_string(),
+                label: collection.label().to_string(),
+                label_plural: collection.label_plural().to_string(),
+                kind: CollectionAddressKind::Custom,
+            })
+            .collect();
+        let standard_names: HashSet<String> = standards
+            .iter()
+            .map(|address| address.name.clone())
+            .collect();
+        let custom_names: HashSet<String> =
+            customs.iter().map(|address| address.name.clone()).collect();
+        let mut out = Vec::new();
+        out.extend(
+            standards
+                .into_iter()
+                .filter(|address| !custom_names.contains(&address.name)),
+        );
+        out.extend(
+            customs
+                .into_iter()
+                .filter(|address| !standard_names.contains(&address.name)),
+        );
+        out
+    }
+
+    fn integration_action_address(
+        &self,
+        project: &str,
+        version: &str,
+        integration: &str,
+        name: &str,
+    ) -> Option<ActionAddress> {
+        let view = self.view_of(project, version);
+        let integration_doc = view.integration_at(project, integration)?;
+        view.type_action_address(&integration_doc, project, version, integration, name)
+    }
+
+    fn type_action_address(
+        &self,
+        integration_doc: &Integration,
+        project: &str,
+        version: &str,
+        integration: &str,
+        name: &str,
+    ) -> Option<ActionAddress> {
+        let ty = self.integration_type(integration_doc.r#type())?;
+        let action = ty.actions().iter().find(|item| item.name() == name)?;
+        Some(ActionAddress {
+            project: project.to_string(),
+            version: version.to_string(),
+            local: format!("{integration}:{name}"),
+            integration: Some(integration.to_string()),
+            name: name.to_string(),
+            owner: ty.project().to_string(),
+            label: action.label().to_string(),
+            description: action.description().to_string(),
+            params: json_value(action.params()),
+            kind: ActionAddressKind::Type {
+                type_project: ty.project().to_string(),
+                type_name: ty.name().to_string(),
+                action: Arc::new(action.clone()),
+            },
+        })
+    }
+
+    fn action_addresses_of(&self, integration: &Integration) -> Vec<ActionAddress> {
+        let Some(ty) = self.integration_type(integration.r#type()) else {
+            return Vec::new();
+        };
+        let project = integration.project();
+        let version = integration.version();
+        let integration_name = integration.name();
+        ty.actions()
+            .iter()
+            .filter_map(|action| {
+                self.type_action_address(
+                    integration,
+                    project,
+                    version,
+                    integration_name,
+                    action.name(),
+                )
+            })
+            .collect()
+    }
+
+    /// A standard collection this version is about to store, when an
+    /// integration of this type in this version already declares that name
+    /// as custom. `type_name` is this version's own type. A different
+    /// project's integration is the read-fail-closed case, not this check.
+    fn reject_standard_collection_collisions(
+        &self,
+        type_name: &str,
+        collections: &[IntegrationCollection],
+    ) -> Result<(), VersionSchemaError> {
+        let offered: HashSet<&str> = collections.iter().map(|c| c.name()).collect();
+        if offered.is_empty() {
+            return Ok(());
+        }
+        let type_ref = self.reference(&self.project_id, type_name);
+        for integration in self.integrations_on(&self.project_id, &self.version) {
+            let (owner, bare) = self.split(integration.r#type());
+            if owner != self.project_id || bare != type_name {
+                continue;
+            }
+            let mut names: Vec<&str> = integration.collections().iter().map(|c| c.name()).collect();
+            names.sort();
+            for name in names {
+                if offered.contains(name) {
+                    return Err(VersionSchemaError::InvalidDeclaration(address_collision(
+                        integration.name(),
+                        name,
+                        &type_ref,
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Collection names are the slug charset (`[a-z0-9_.-]+`). `$` is outside
@@ -1266,13 +1890,53 @@ pub fn unknown_version(project_id: &str, version: &str) -> String {
     format!("unknown version: {project_id}@{version}")
 }
 
-/// `{account}/{project}.{name}` → `(project, name)`. `None` for a bare name —
-/// one with no `/`, since every project id has one and no name does.
+/// `{account}/{project}.{local}` → `(project, local)`. `None` for a bare name
+/// — one with no `/`, since every project id has one and no name does — and
+/// for a string that has a `/` but no `.`.
+///
+/// The split is the first `.`. A project id contains no `.`, so `local` may
+/// (`acme/crm.foo.bar` is project `acme/crm`, name `foo.bar`). The last `.`
+/// would read that as project `acme/crm.foo`.
 pub fn split_qualified(name: &str) -> Option<(&str, &str)> {
     if !name.contains('/') {
         return None;
     }
-    name.rsplit_once('.')
+    name.split_once('.')
+}
+
+/// An address string, before it is resolved against a version.
+///
+/// `project` is `None` when the string has no `{account}/{project}.` prefix
+/// (the caller treats that as self). `integration` is `None` when `local`
+/// has no `:`. A second `:` stays in `name`; [`collection_name_ok`] then
+/// rejects it.
+pub struct ParsedAddress<'a> {
+    pub project: Option<&'a str>,
+    pub integration: Option<&'a str>,
+    pub name: &'a str,
+}
+
+pub fn parse_address(name: &str) -> ParsedAddress<'_> {
+    let (project, local) = match split_qualified(name) {
+        Some((project, local)) => (Some(project), local),
+        None => (None, name),
+    };
+    match local.split_once(':') {
+        Some((integration, name)) => ParsedAddress {
+            project,
+            integration: Some(integration),
+            name,
+        },
+        None => ParsedAddress {
+            project,
+            integration: None,
+            name: local,
+        },
+    }
+}
+
+fn json_value(value: impl Serialize) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or_else(|_| serde_json::Value::Array(Vec::new()))
 }
 
 /// The `auto_add` fieldsets `project` declares on `collection` in `version`.
@@ -1570,6 +2234,66 @@ pub(crate) fn check_dependencies(
             return Err(format!(
                 "dependency {dep:?} names version {dep_version} of {dep_project}, which does not exist"
             ));
+        }
+    }
+    Ok(())
+}
+
+/// Why `deps` would make an address on `project_id`'s `version` name two
+/// documents, or `Ok` when it would not.
+///
+/// For each integration this version declares whose type is a dependency
+/// (`{account}/{project}.{name}`), look at that dependency version's type
+/// document. A name this integration also declares as custom is a collision.
+/// A bare type is this version's own and is checked when the type's
+/// collections list is written. A dependency the new list drops has no
+/// standard side here, so it is not a collision.
+///
+/// Callers hold `PINS` and have already accepted `deps` with
+/// [`check_dependencies`]. This only reads.
+pub(crate) fn check_address_collisions(
+    store: &SchemaStore,
+    project_id: &str,
+    version: &str,
+    deps: &[String],
+) -> Result<(), String> {
+    let mut dep_version = HashMap::new();
+    for dep in deps {
+        if let Some((project, dep_version_name)) = parse_dependency(dep) {
+            dep_version.insert(project, dep_version_name);
+        }
+    }
+    let prefix = format!("{project_id}/versions/{version}/integrations/");
+    let mut integrations = store.integrations().list(&prefix);
+    integrations.sort_by(|(_, a), (_, b)| a.name().cmp(b.name()));
+    for (_, integration) in integrations {
+        let Some((type_project, type_name)) = split_qualified(integration.r#type()) else {
+            continue;
+        };
+        let Some(type_version) = dep_version.get(type_project) else {
+            continue;
+        };
+        let Some(ty) = store.integration_types().get(&IntegrationType::to_path(
+            type_project,
+            type_version,
+            type_name,
+        )) else {
+            continue;
+        };
+        let offered: HashSet<&str> = ty.collections().iter().map(|c| c.name()).collect();
+        if offered.is_empty() {
+            continue;
+        }
+        let mut names: Vec<&str> = integration.collections().iter().map(|c| c.name()).collect();
+        names.sort();
+        for name in names {
+            if offered.contains(name) {
+                return Err(address_collision(
+                    integration.name(),
+                    name,
+                    integration.r#type(),
+                ));
+            }
         }
     }
     Ok(())
@@ -2242,6 +2966,725 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    fn inline_collection(name: &str, label: &str, label_plural: &str) -> IntegrationCollection {
+        IntegrationCollection {
+            name: name.into(),
+            label: label.into(),
+            label_plural: label_plural.into(),
+            ..Default::default()
+        }
+    }
+
+    fn account_with_status() -> IntegrationCollection {
+        IntegrationCollection {
+            name: "account".into(),
+            label: "Account".into(),
+            label_plural: "Accounts".into(),
+            fields: vec![IntegrationField {
+                name: "status".into(),
+                r#type: "string".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn set_owner_action() -> IntegrationAction {
+        IntegrationAction {
+            name: "set_owner".into(),
+            label: "Set owner".into(),
+            params: vec![IntegrationActionParam {
+                name: "owner_id".into(),
+                r#type: "string".into(),
+                required: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn split_qualified_uses_the_first_dot() {
+        assert_eq!(
+            split_qualified("acme/crm.foo.bar"),
+            Some(("acme/crm", "foo.bar"))
+        );
+        assert_eq!(
+            split_qualified("acme/crm.contacts"),
+            Some(("acme/crm", "contacts"))
+        );
+        assert_eq!(split_qualified("sf_east:account"), None);
+        assert_eq!(
+            split_qualified("ben/sync.sf_east:account"),
+            Some(("ben/sync", "sf_east:account"))
+        );
+        assert_eq!(split_qualified("acme/crm"), None);
+
+        let parsed = parse_address("ben/sync.sf_east:account");
+        assert_eq!(parsed.project, Some("ben/sync"));
+        assert_eq!(parsed.integration, Some("sf_east"));
+        assert_eq!(parsed.name, "account");
+        let parsed = parse_address("sf_east:account:extra");
+        assert_eq!(parsed.integration, Some("sf_east"));
+        assert_eq!(parsed.name, "account:extra");
+        let parsed = parse_address("orders");
+        assert_eq!(parsed.project, None);
+        assert_eq!(parsed.integration, None);
+        assert_eq!(parsed.name, "orders");
+    }
+
+    fn one_collection(schema: &VersionSchema, name: &str) -> Option<CollectionAddress> {
+        match schema.collection_address(name) {
+            AddressResolution::Resolved(address) => Some(address),
+            AddressResolution::Missing => None,
+        }
+    }
+
+    fn one_action(schema: &VersionSchema, name: &str) -> Option<ActionAddress> {
+        match schema.action_address(name) {
+            AddressResolution::Resolved(address) => Some(address),
+            AddressResolution::Missing => None,
+        }
+    }
+
+    fn manifests(store: &SchemaStore, projects: &[(&str, Vec<String>)]) {
+        for (project, deps) in projects {
+            store
+                .manifests()
+                .create(Manifest::new(
+                    (*project).into(),
+                    VERSION.into(),
+                    deps.clone(),
+                    Vec::new(),
+                ))
+                .unwrap();
+        }
+    }
+
+    /// Standard collections resolve through the integration's type document,
+    /// including when the caller does not depend on the type's project. A
+    /// custom collection is an entry on the integration document. A dotted
+    /// ordinary name splits on the first dot.
+    #[test]
+    fn integration_addresses_resolve_standard_custom_and_dotted_names() {
+        let (_dir, store) = draft_schema();
+        manifests(
+            &store,
+            &[
+                ("acme/salesforce", Vec::new()),
+                ("acme/crm", Vec::new()),
+                (
+                    "ben/sync",
+                    vec![
+                        "acme/salesforce@0.0.1-dev".to_string(),
+                        "acme/crm@0.0.1-dev".to_string(),
+                    ],
+                ),
+                ("alice/shop", vec!["ben/sync@0.0.1-dev".to_string()]),
+            ],
+        );
+
+        let salesforce = VersionSchema::new(store.clone(), "acme/salesforce", VERSION);
+        salesforce
+            .create_integration_type(IntegrationType {
+                name: "salesforce".into(),
+                label: "Salesforce".into(),
+                collections: vec![account_with_status()],
+                actions: vec![set_owner_action()],
+                ..IntegrationType::default()
+            })
+            .unwrap();
+        salesforce
+            .create_integration(Integration {
+                name: "prod".into(),
+                r#type: "salesforce".into(),
+                ..Integration::default()
+            })
+            .unwrap();
+        salesforce
+            .create_integration_type(IntegrationType {
+                name: "foo.bar".into(),
+                label: "Dotted".into(),
+                collections: vec![inline_collection("widget", "Widget", "Widgets")],
+                ..IntegrationType::default()
+            })
+            .unwrap();
+        let dotted = salesforce
+            .create_integration(Integration {
+                name: "dotted".into(),
+                r#type: "acme/salesforce.foo.bar".into(),
+                ..Integration::default()
+            })
+            .unwrap();
+        assert_eq!(dotted.r#type(), "foo.bar");
+
+        let crm = VersionSchema::new(store.clone(), "acme/crm", VERSION);
+        crm.create_collection(Collection {
+            name: "foo.bar".into(),
+            label: "Foo bar".into(),
+            ..Collection::default()
+        })
+        .unwrap();
+
+        let sync = VersionSchema::new(store.clone(), "ben/sync", VERSION);
+        sync.create_integration(Integration {
+            name: "sf_east".into(),
+            r#type: "acme/salesforce.salesforce".into(),
+            collections: vec![IntegrationCollection {
+                name: "invoice__c".into(),
+                label: "Invoice".into(),
+                fields: vec![IntegrationField {
+                    name: "amount".into(),
+                    r#type: "integer".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Integration::default()
+        })
+        .unwrap();
+        sync.create_integration(Integration {
+            name: "sf_west".into(),
+            r#type: "acme/salesforce.salesforce".into(),
+            ..Integration::default()
+        })
+        .unwrap();
+        let err = sync
+            .update_integration(
+                "sf_east",
+                IntegrationUpdate {
+                    collections: Some(vec![
+                        inline_collection("invoice__c", "Invoice", "Invoices"),
+                        inline_collection("account", "Custom account", "Custom accounts"),
+                    ]),
+                    ..IntegrationUpdate::default()
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "ambiguous address sf_east:account: type 'acme/salesforce.salesforce' offers collection 'account' and integration 'sf_east' declares it"
+        );
+        assert_eq!(
+            sync.integration("sf_east").unwrap().collections()[0].name(),
+            "invoice__c"
+        );
+        assert_eq!(sync.integration("sf_east").unwrap().collections().len(), 1);
+
+        let shop = VersionSchema::new_read_only(store, "alice/shop", VERSION);
+
+        assert_eq!(sync.collections().len(), 1);
+        assert!(one_collection(&sync, "account").is_none());
+        assert!(one_collection(&sync, "acme/salesforce.account").is_none());
+        assert!(sync.collection("sf_east:account").is_none());
+
+        let east = one_collection(&sync, "sf_east:account").unwrap();
+        assert_eq!(east.project, "ben/sync");
+        assert_eq!(east.owner, "acme/salesforce");
+        assert_eq!(east.name, "account");
+        assert_eq!(east.local, "sf_east:account");
+        assert_eq!(east.integration.as_deref(), Some("sf_east"));
+        assert_eq!(east.label, "Account");
+        assert_eq!(east.label_plural, "Accounts");
+        assert!(matches!(
+            east.kind,
+            CollectionAddressKind::Standard { ref type_name, .. } if type_name == "salesforce"
+        ));
+        let fields = sync.address_fields(&east);
+        assert_eq!(fields[0]["name"], "status");
+        assert_eq!(fields[0]["type"], "string");
+        assert!(fields[0].get("project").is_none());
+
+        assert!(one_collection(&sync, "sf_west:invoice__c").is_none());
+        let invoice = one_collection(&sync, "sf_east:invoice__c").unwrap();
+        assert_eq!(invoice.owner, "ben/sync");
+        assert!(matches!(invoice.kind, CollectionAddressKind::Custom));
+        let fields = sync.address_fields(&invoice);
+        assert_eq!(fields[0]["name"], "amount");
+        assert_eq!(fields[0]["type"], "integer");
+        assert!(fields[0].get("integration").is_none());
+
+        let prod = one_collection(&sync, "acme/salesforce.prod:account").unwrap();
+        assert_eq!(prod.project, "acme/salesforce");
+        assert_eq!(prod.owner, "acme/salesforce");
+        assert!(one_collection(&sync, "prod:account").is_none());
+
+        let nested = one_collection(&shop, "ben/sync.sf_east:account").unwrap();
+        assert_eq!(nested.project, "ben/sync");
+        assert_eq!(nested.owner, "acme/salesforce");
+        assert!(one_collection(&shop, "sf_east:account").is_none());
+        assert!(one_collection(&shop, "acme/salesforce.prod:account").is_none());
+
+        let dotted_collection = one_collection(&sync, "acme/crm.foo.bar").unwrap();
+        assert_eq!(dotted_collection.project, "acme/crm");
+        assert_eq!(dotted_collection.name, "foo.bar");
+        assert_eq!(dotted_collection.owner, "acme/crm");
+        assert!(dotted_collection.integration.is_none());
+        assert!(sync.collection("acme/crm.foo.bar").is_some());
+
+        assert!(one_collection(&sync, "sf_east:account:extra").is_none());
+        assert!(one_collection(&sync, "sf_east:").is_none());
+        assert!(one_collection(&sync, ":account").is_none());
+        assert!(one_collection(&sync, "SF_EAST:account").is_none());
+
+        let widget = one_collection(&sync, "acme/salesforce.dotted:widget").unwrap();
+        assert_eq!(widget.name, "widget");
+        assert_eq!(widget.owner, "acme/salesforce");
+
+        let bare = one_collection(&salesforce, "prod:account").unwrap();
+        let qualified = one_collection(&salesforce, "acme/salesforce.prod:account").unwrap();
+        assert_eq!(bare.local, qualified.local);
+        assert_eq!(bare.project, qualified.project);
+
+        let rows = sync.collection_addresses();
+        assert_eq!(rows[0].name, "foo.bar");
+        assert!(rows[0].integration.is_none());
+        let find = |integration: &str, name: &str| {
+            rows.iter()
+                .find(|row| row.integration.as_deref() == Some(integration) && row.name == name)
+                .unwrap()
+        };
+        let listed = find("sf_east", "account");
+        assert_eq!(listed.project, "ben/sync");
+        assert_eq!(listed.owner, "acme/salesforce");
+        assert_eq!(listed.label, "Account");
+        assert_eq!(listed.label_plural, "Accounts");
+        assert_eq!(find("sf_east", "invoice__c").owner, "ben/sync");
+        assert!(rows
+            .iter()
+            .any(|row| { row.integration.as_deref() == Some("sf_west") && row.name == "account" }));
+        assert!(!rows.iter().any(|row| {
+            row.integration.as_deref() == Some("sf_west") && row.name == "invoice__c"
+        }));
+        assert_eq!(find("prod", "account").project, "acme/salesforce");
+
+        let shop_rows = shop.collection_addresses();
+        assert!(shop_rows.iter().any(|row| {
+            row.project == "ben/sync"
+                && row.integration.as_deref() == Some("sf_east")
+                && row.name == "account"
+        }));
+        assert!(!shop_rows
+            .iter()
+            .any(|row| row.integration.as_deref() == Some("prod")));
+
+        let action = one_action(&sync, "sf_east:set_owner").unwrap();
+        assert_eq!(action.project, "ben/sync");
+        assert_eq!(action.owner, "acme/salesforce");
+        assert_eq!(action.name, "set_owner");
+        assert_eq!(action.params[0]["name"], "owner_id");
+        assert!(matches!(
+            action.kind,
+            ActionAddressKind::Type { ref type_project, ref type_name, .. }
+                if type_project == "acme/salesforce" && type_name == "salesforce"
+        ));
+        assert!(one_action(&sync, "set_owner").is_none());
+        assert!(sync.action("sf_east:set_owner").is_none());
+        let actions = sync.action_addresses();
+        assert!(actions.iter().any(|row| {
+            row.integration.as_deref() == Some("sf_west")
+                && row.name == "set_owner"
+                && row.project == "ben/sync"
+                && row.owner == "acme/salesforce"
+        }));
+    }
+
+    /// One address names one document. Writing a list that would make both
+    /// sides visible is 400 and stores nothing. A collision that gets onto
+    /// disk anyway resolves to neither document, and the listing omits both.
+    #[test]
+    fn address_collisions_are_refused_and_fail_closed() {
+        let (_dir, store) = draft_schema();
+        manifests(
+            &store,
+            &[
+                ("acme/salesforce", Vec::new()),
+                ("ben/sync", vec!["acme/salesforce@0.0.1-dev".to_string()]),
+                ("alice/shop", vec!["ben/sync@0.0.1-dev".to_string()]),
+            ],
+        );
+
+        let salesforce = VersionSchema::new(store.clone(), "acme/salesforce", VERSION);
+        salesforce
+            .create_integration_type(IntegrationType {
+                name: "salesforce".into(),
+                label: "Salesforce".into(),
+                collections: vec![account_with_status()],
+                actions: vec![set_owner_action()],
+                ..IntegrationType::default()
+            })
+            .unwrap();
+        salesforce
+            .create_integration_type(IntegrationType {
+                name: "crm".into(),
+                label: "CRM".into(),
+                ..IntegrationType::default()
+            })
+            .unwrap();
+        salesforce
+            .create_integration(Integration {
+                name: "prod".into(),
+                r#type: "salesforce".into(),
+                collections: vec![inline_collection("extra", "Extra", "Extras")],
+                ..Integration::default()
+            })
+            .unwrap();
+        // prod is type salesforce, not crm, so crm may offer the custom name.
+        salesforce
+            .update_integration_type(
+                "crm",
+                IntegrationTypeUpdate {
+                    collections: Some(vec![inline_collection("extra", "Extra", "Extras")]),
+                    ..IntegrationTypeUpdate::default()
+                },
+            )
+            .unwrap();
+
+        let same_version = salesforce
+            .update_integration_type(
+                "salesforce",
+                IntegrationTypeUpdate {
+                    collections: Some(vec![
+                        account_with_status(),
+                        inline_collection("extra", "Extra", "Extras"),
+                    ]),
+                    ..IntegrationTypeUpdate::default()
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            same_version,
+            "ambiguous address prod:extra: type 'salesforce' offers collection 'extra' and integration 'prod' declares it"
+        );
+        assert_eq!(
+            salesforce
+                .integration_type("salesforce")
+                .unwrap()
+                .collections()
+                .len(),
+            1
+        );
+        assert_eq!(
+            salesforce
+                .integration_type("salesforce")
+                .unwrap()
+                .collections()[0]
+                .name(),
+            "account"
+        );
+        // Re-sending the colliding list refuses again and still stores nothing.
+        let resent_type = salesforce
+            .update_integration_type(
+                "salesforce",
+                IntegrationTypeUpdate {
+                    collections: Some(vec![
+                        account_with_status(),
+                        inline_collection("extra", "Extra", "Extras"),
+                    ]),
+                    ..IntegrationTypeUpdate::default()
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert_eq!(resent_type, same_version);
+
+        let type_change = salesforce
+            .update_integration(
+                "prod",
+                IntegrationUpdate {
+                    r#type: Some("crm".into()),
+                    ..IntegrationUpdate::default()
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            type_change,
+            "ambiguous address prod:extra: type 'crm' offers collection 'extra' and integration 'prod' declares it"
+        );
+        assert_eq!(
+            salesforce.integration("prod").unwrap().r#type(),
+            "salesforce"
+        );
+        assert!(matches!(
+            salesforce.collection_address("prod:extra"),
+            AddressResolution::Resolved(ref address)
+                if matches!(address.kind, CollectionAddressKind::Custom)
+        ));
+
+        let sync = VersionSchema::new(store.clone(), "ben/sync", VERSION);
+        let created = sync
+            .create_integration(Integration {
+                name: "sf_bad".into(),
+                r#type: "acme/salesforce.salesforce".into(),
+                collections: vec![inline_collection("account", "Custom account", "Accounts")],
+                ..Integration::default()
+            })
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            created,
+            "ambiguous address sf_bad:account: type 'acme/salesforce.salesforce' offers collection 'account' and integration 'sf_bad' declares it"
+        );
+        assert!(sync.integration("sf_bad").is_none());
+        sync.create_integration(Integration {
+            name: "sf_east".into(),
+            r#type: "acme/salesforce.salesforce".into(),
+            collections: vec![inline_collection("invoice__c", "Invoice", "Invoices")],
+            ..Integration::default()
+        })
+        .unwrap();
+        let custom = sync
+            .update_integration(
+                "sf_east",
+                IntegrationUpdate {
+                    collections: Some(vec![
+                        inline_collection("invoice__c", "Invoice", "Invoices"),
+                        inline_collection("account", "Custom account", "Custom accounts"),
+                    ]),
+                    ..IntegrationUpdate::default()
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            custom,
+            "ambiguous address sf_east:account: type 'acme/salesforce.salesforce' offers collection 'account' and integration 'sf_east' declares it"
+        );
+        assert_eq!(sync.integration("sf_east").unwrap().collections().len(), 1);
+        assert!(matches!(
+            sync.collection_address("sf_east:invoice__c"),
+            AddressResolution::Resolved(_)
+        ));
+        assert!(matches!(
+            sync.action_address("sf_east:invoice__c"),
+            AddressResolution::Missing
+        ));
+
+        // A later dependency version offers the custom name. The manifest
+        // write is refused and the stored dependencies stay. The type
+        // document is written on the store: a published version refuses
+        // `/schema` writes.
+        store
+            .manifests()
+            .create(Manifest::new(
+                "acme/salesforce".into(),
+                "1.0.0".into(),
+                Vec::new(),
+                Vec::new(),
+            ))
+            .unwrap();
+        store
+            .integration_types()
+            .create(IntegrationType {
+                project: "acme/salesforce".into(),
+                version: "1.0.0".into(),
+                name: "salesforce".into(),
+                label: "Salesforce".into(),
+                collections: vec![inline_collection("invoice__c", "Invoice", "Invoices")],
+                ..IntegrationType::default()
+            })
+            .unwrap();
+        let bumped = sync
+            .update_manifest(
+                ManifestUpdate {
+                    dependencies: Some(vec!["acme/salesforce@1.0.0".into()]),
+                    ..ManifestUpdate::default()
+                },
+                |_| true,
+            )
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            bumped,
+            "ambiguous address sf_east:invoice__c: type 'acme/salesforce.salesforce' offers collection 'invoice__c' and integration 'sf_east' declares it"
+        );
+        assert_eq!(
+            sync.manifest().unwrap().dependencies(),
+            &["acme/salesforce@0.0.1-dev".to_string()]
+        );
+
+        // The pinned draft later gains the name. That write is on the other
+        // project, so it is stored. The collection address resolves with
+        // project and local, and picks neither document. The action of the
+        // same string is missing until the type declares one, and then it
+        // resolves: a collection collision does not make an action ambiguous.
+        // Naming `collections` replaces the list, so `account` is sent again.
+        salesforce
+            .update_integration_type(
+                "salesforce",
+                IntegrationTypeUpdate {
+                    collections: Some(vec![
+                        account_with_status(),
+                        inline_collection("invoice__c", "Invoice", "Invoices"),
+                    ]),
+                    ..IntegrationTypeUpdate::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            sync.collection_address("sf_east:invoice__c"),
+            AddressResolution::Resolved(ref address)
+                if address.project == "ben/sync"
+                    && address.local == "sf_east:invoice__c"
+                    && matches!(address.kind, CollectionAddressKind::Ambiguous)
+        ));
+        assert!(matches!(
+            sync.action_address("sf_east:invoice__c"),
+            AddressResolution::Missing
+        ));
+        salesforce
+            .update_integration_type(
+                "salesforce",
+                IntegrationTypeUpdate {
+                    actions: Some(vec![
+                        set_owner_action(),
+                        IntegrationAction {
+                            name: "invoice__c".into(),
+                            label: "Invoice".into(),
+                            ..IntegrationAction::default()
+                        },
+                    ]),
+                    ..IntegrationTypeUpdate::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            sync.action_address("sf_east:invoice__c"),
+            AddressResolution::Resolved(ref address)
+                if address.project == "ben/sync" && address.local == "sf_east:invoice__c"
+        ));
+        assert!(matches!(
+            sync.action_address("sf_east:set_owner"),
+            AddressResolution::Resolved(_)
+        ));
+        assert!(sync.collection_addresses().iter().all(|row| {
+            !(row.integration.as_deref() == Some("sf_east") && row.name == "invoice__c")
+        }));
+        assert!(sync
+            .collection_addresses()
+            .iter()
+            .any(|row| { row.integration.as_deref() == Some("sf_east") && row.name == "account" }));
+        let shop = VersionSchema::new_read_only(store.clone(), "alice/shop", VERSION);
+        assert!(matches!(
+            shop.collection_address("ben/sync.sf_east:invoice__c"),
+            AddressResolution::Resolved(ref address)
+                if address.project == "ben/sync"
+                    && address.local == "sf_east:invoice__c"
+                    && matches!(address.kind, CollectionAddressKind::Ambiguous)
+        ));
+
+        // Planted past the write check. A label-only write and a re-send of
+        // the stored type leave it. Naming the colliding list refuses it.
+        store
+            .integrations()
+            .create(Integration {
+                project: "ben/sync".into(),
+                version: VERSION.into(),
+                name: "sf_planted".into(),
+                r#type: "acme/salesforce.salesforce".into(),
+                collections: vec![inline_collection("account", "Planted", "Planted")],
+                ..Integration::default()
+            })
+            .unwrap();
+        sync.update_integration(
+            "sf_planted",
+            IntegrationUpdate {
+                label: Some("Planted east".into()),
+                ..IntegrationUpdate::default()
+            },
+        )
+        .unwrap();
+        sync.update_integration(
+            "sf_planted",
+            IntegrationUpdate {
+                r#type: Some("acme/salesforce.salesforce".into()),
+                ..IntegrationUpdate::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            sync.collection_address("sf_planted:account"),
+            AddressResolution::Resolved(ref address)
+                if matches!(address.kind, CollectionAddressKind::Ambiguous)
+        ));
+        let planted = sync
+            .update_integration(
+                "sf_planted",
+                IntegrationUpdate {
+                    collections: Some(vec![inline_collection("account", "Still", "Still")]),
+                    ..IntegrationUpdate::default()
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(planted.contains("sf_planted:account"), "{planted}");
+        assert_eq!(
+            sync.integration("sf_planted").unwrap().collections()[0].label(),
+            "Planted"
+        );
+
+        let config = crate::http::project_config::ProjectConfig::new(store.clone(), "ben", "sync");
+        let copied = config
+            .copy_version(VERSION, "1.0.0")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            copied,
+            "ambiguous address sf_east:invoice__c: type 'acme/salesforce.salesforce' offers collection 'invoice__c' and integration 'sf_east' declares it"
+        );
+        assert!(!store
+            .manifests()
+            .has(&Manifest::to_path("ben/sync", "1.0.0")));
+
+        let resent = sync
+            .update_manifest(
+                ManifestUpdate {
+                    dependencies: Some(vec!["acme/salesforce@0.0.1-dev".into()]),
+                    ..ManifestUpdate::default()
+                },
+                |_| true,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(resent.contains("sf_east:invoice__c"), "{resent}");
+        assert_eq!(
+            sync.manifest().unwrap().dependencies(),
+            &["acme/salesforce@0.0.1-dev".to_string()]
+        );
+
+        // A manifest write that does not set dependencies leaves the collision
+        // alone. Dropping the dependency removes the standard side.
+        sync.update_manifest(
+            ManifestUpdate {
+                public_permission_sets: Some(vec!["readers".into()]),
+                ..ManifestUpdate::default()
+            },
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(
+            sync.manifest().unwrap().public_permission_sets(),
+            &["readers".to_string()]
+        );
+        sync.update_manifest(
+            ManifestUpdate {
+                dependencies: Some(Vec::new()),
+                ..ManifestUpdate::default()
+            },
+            |_| true,
+        )
+        .unwrap();
+        let cleared = VersionSchema::new(store, "ben/sync", VERSION);
+        assert!(matches!(
+            cleared.collection_address("sf_east:invoice__c"),
+            AddressResolution::Resolved(ref address)
+                if matches!(address.kind, CollectionAddressKind::Custom)
+        ));
     }
 }
 

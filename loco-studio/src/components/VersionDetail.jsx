@@ -31,8 +31,11 @@ export default function VersionDetail() {
   if (isLoading) return <p>Loading...</p>;
 
   const ownNs = `${user}/${project}`;
-  const own = allCollections.filter((c) => c.project === ownNs && c.version === version);
-  const inherited = allCollections.filter((c) => c.project !== ownNs || c.version !== version);
+  // Integration rows (`store:orders`) are addresses, not schema documents
+  // Studio can open. Drop them until there is an integration view.
+  const collections = allCollections.filter((c) => !c.integration);
+  const own = collections.filter((c) => c.project === ownNs && c.version === version);
+  const inherited = collections.filter((c) => c.project !== ownNs || c.version !== version);
 
   return (
     <>

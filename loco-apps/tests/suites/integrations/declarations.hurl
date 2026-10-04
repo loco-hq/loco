@@ -409,7 +409,15 @@ GET http://127.0.0.1:{{port}}/schema/alice/pkg/1.0.0/collection/list
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
-jsonpath "$.data" count == 1
+jsonpath "$.data" count == 4
+jsonpath "$.data[0].name" == "orders"
+jsonpath "$.data[0].integration" not exists
+jsonpath "$.data[1].integration" == "store"
+jsonpath "$.data[1].name" == "orders"
+jsonpath "$.data[2].integration" == "store"
+jsonpath "$.data[2].name" == "order_items"
+jsonpath "$.data[3].integration" == "store"
+jsonpath "$.data[3].name" == "invoice"
 
 GET http://127.0.0.1:{{port}}/schema/alice/pkg/1.0.0/action/list
 Authorization: Bearer {{token}}

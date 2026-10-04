@@ -149,7 +149,7 @@ Persistence is `FileTreeFsAdapter` (`loco-schema-runtime`). Writes are whole-tre
 
 An `action` carries its input as `params`, an inline list of `action_param` objects (`name`, `type`, `label`, `description`, `required`, `options`). They are written with the action: a PUT that names `params` replaces the list, and there is no param route. On create and on that replacement, each `name` must be a slug (`[a-z0-9_.-]+`, one segment) and unique within the action, each `type` must pass the `FIELD_TYPES` check, and `options` are only meaningful for `string` — anything else is a 400 and nothing is stored. A consumer cannot add a param to a dependency's action, because the list lives on the owner's document.
 
-An integration type and an integration are separate schema types from ordinary collections, fields, and actions. The model is [`docs/integrations.md`](docs/integrations.md). A type at `integration_types/${name}` carries inline lists: `integration_secret` and `integration_variable` (a secret has no `default` and no `value`, a variable may set `default`, empty means none, and a shared name across the two lists is a 400), `collections` of `integration_collection` (each with `fields` of `integration_field`, and `options` of `integration_field_option`), and `actions` of `integration_action` (each with `params` of `integration_action_param`, the same shape as an ordinary action param). An integration at `integrations/${name}` names a type, bare or `{account}/{project}.{name}`, and carries custom collections in the same `integration_collection` list. A PUT that names a list replaces it. On create and on that replacement, names are slugs and unique within their list, field and param types pass `FIELD_TYPES`, and `options` are only meaningful for `string`. A custom collection may not reuse a name its type offers. A consumer cannot add to a dependency's type or integration: the path name is this version's document. Deleting either document removes the lists on it. Version copy carries both documents. Addressing `{integration}:{name}`, routing `/data` through a source, and storing values per integration are later issues and are not this layer.
+An integration type and an integration are separate schema types from ordinary collections, fields, and actions. The model is [`docs/integrations.md`](docs/integrations.md). A type at `integration_types/${name}` carries inline lists: `integration_secret` and `integration_variable` (a secret has no `default` and no `value`, a variable may set `default`, empty means none, and a shared name across the two lists is a 400), `collections` of `integration_collection` (each with `fields` of `integration_field`, and `options` of `integration_field_option`), and `actions` of `integration_action` (each with `params` of `integration_action_param`, the same shape as an ordinary action param). An integration at `integrations/${name}` names a type, bare or `{account}/{project}.{name}`, and carries custom collections in the same `integration_collection` list. A PUT that names a list replaces it. On create and on that replacement, names are slugs and unique within their list, field and param types pass `FIELD_TYPES`, and `options` are only meaningful for `string`. A custom collection may not reuse a name its type offers, and a type's collections list may not add a name an integration of that type in the same version already declares as custom. Either write is 400 naming both documents. A manifest dependency, including one a version copy carries, is refused the same way when a dependency type offers a custom name. A consumer cannot add to a dependency's type or integration: the path name is this version's document. Deleting either document removes the lists on it. Version copy carries both documents. Addressing `{integration}:{name}` is resolved on `/data`, `/actions`, `/data/query`, and grants. A data verb on an unambiguous integration collection is 501 `no source for collection {address}` until a source exists. An address both sides declare is 409 after that same access check. Routing through a source and storing values per integration are later issues and are not this layer.
 
 `secret` and `variable` declare named configuration a version needs (`label`, `description`, `required`). A variable may also set `default` (a string; empty means none). A secret has no `default` and no `value` — a body carrying either is a 400, because the declaration never holds the value. A secret and a variable may not share a name in one version.
 
@@ -199,12 +199,46 @@ be self or a **direct** dependency; anything else is not found (404 on `/schema`
 `/data`, `unknown_collection` / `unknown_field` in `/data/query`). No lookup walks the
 dependency list for a match, so two deps that share a name are both addressable.
 
+`split` / `split_qualified` cut on the first `.`. A project id contains no `.`, so the
+rest may: `acme/crm.foo.bar` is project `acme/crm`, name `foo.bar`. A `:` in that
+local addresses an integration (`sf_east:account`, `ben/sync.sf_east:account`). Both
+sides of the `:` must be collection names. A name with no `:` is an ordinary
+collection or action and never reaches a type's lists or an integration's custom
+collections. A name with `:` never falls through to an ordinary one. The integration's
+type is resolved from the version that declares the integration, which may depend on
+a type the caller does not itself depend on. Standard collections and type actions
+are entries on the type document. Custom collections are entries on the integration
+document.
+
 - **Collections** — `/schema/.../collection/{name}` and `/data/{collection}/…` take the
   qualified name percent-encoded as one segment: `/data/acme%2Fcrm.contacts/list`
   (`loco-client`'s `data('acme/crm.contacts')` encodes it). A qualified name for self
   equals the bare one. Records of a dependency's collection live in the site's dataset
   under the lake key `{owner_project}.{name}`. A name containing `$` does not resolve
-  (`$secrets`, `$variables`).
+  (`$secrets`, `$variables`). An integration address is the same one segment
+  (`/data/sf_east:account/list`, `/data/ben%2Fsync.sf_east:account/list`; `%3A` decodes
+  to the same `:`). It resolves to a standard collection on the integration's type
+  document, or a custom collection on the integration document. One address names one
+  document. A write that would leave both — a custom collection the type already
+  offers, a type change onto a custom name, a standard collection an integration of
+  that type in the same version already declares, or a manifest (including a version
+  copy) whose dependency type offers a custom name — is 400 naming both documents,
+  and stores nothing. Omitting the collections list, or re-sending the stored type
+  without naming collections, does not re-check. A collision already on disk resolves
+  with `project` and `local` and picks neither document, so there is no lake key.
+  `/data` answers 409 `ambiguous address {name}: the type offers it and the integration declares it`
+  after the same access check as 501, including `GET .../fields`. A caller
+  without a grant is 403. `/data/query` reports that sentence as
+  `ambiguous_address` after `forbidden`, beside `no_source`. The listing omits
+  both rows. An action address is resolved or missing and is not made
+  ambiguous by a collection of the same string. There is no lake row for an
+  unambiguous integration collection yet: list, get, add, update, and delete answer
+  501 `no source for collection {address}` after auth, and do not read the lake.
+  `{address}` is bare for the running project and `{project}.{local}` for a
+  dependency. `GET /data/{collection}/fields` is metadata and returns the inline
+  fields (name, type, label, description, required, options).
+  `/schema/.../collection/{address}` stays the ordinary document lookup, so
+  `sf_east:account` is not found there.
 - **Fields and fieldsets** belong to the collection's owner. `acme/crm.contacts` has the
   fields acme/crm declares on `contacts`; neither the running project nor another
   dependency adds to it by declaring fields under the same collection name. A fieldset
@@ -216,7 +250,13 @@ dependency list for a match, so two deps that share a name are both addressable.
   are the list on that action, so a consumer sees the owner's params and has no
   separate write that could add one. The handler registry is keyed by that owning
   project and the bare name, so a same-named declaration in another project does
-  not run this project's handler.
+  not run this project's handler. A `:` addresses a type action the same way
+  (`sf_east:set_owner`), read from that integration's type document. Input is
+  validated first, then 501 `no handler for action {type_project}.{type_name}.{name}`.
+  The type-action registry is not called and no handler context is built. The loose
+  version-level required-secret check does not run. A collection of the same string
+  does not make the action ambiguous. `/schema/.../action/{address}` stays the ordinary
+  action document and does not resolve the address. `GET /actions` does.
 - **Integration types and integrations** follow the same owner rule.
   `/schema/.../integration_type/{name}` and `/schema/.../integration/{name}` take a
   bare name for this version and a dependency's qualified and percent-encoded
@@ -224,8 +264,9 @@ dependency list for a match, so two deps that share a name are both addressable.
   type actions are lists on the type document. Custom collections and fields are
   a list on the integration document. A write uses the path name as this
   version's document, so a qualified name that is not one of its documents is
-  not found. An address `{integration}:{name}` is not resolved on `/data` or
-  `/actions` here.
+  not found. An address `{integration}:{name}` is resolved on `/data`,
+  `/actions`, `/data/query`, and grants, through the integration named before the
+  colon. The lists themselves stay on the type or the integration.
 - **Handler config** — `ActionContext::secret` and `variable` do not use `split`.
   They read the owning project's declarations (the registry key) and the values
   on the request's dataset. A bare name inside the handler is that package's
@@ -236,12 +277,24 @@ dependency list for a match, so two deps that share a name are both addressable.
 - **Grants** inside a permission set resolve from the set's own project
   (`collection_grant_matches`, `http/authz.rs`): a bare grant `contacts` in the
   consumer's set opens only the consumer's `contacts`, and in a set a dependency ships
-  only the dependency's. A qualified grant names its owner exactly.
-- **Listings** (`collection/list`, `permission_set/list`, `secret/list`,
-  `variable/list`, `action/list`, `integration_type/list`, `integration/list`) span self + direct deps and return each item's `project`,
-  from which a client builds the qualified name. A bare secret, variable, or action
-  name is this version's own; a dependency's is `loco/bricklink.consumer_key`.
-  An action's params are on the action, in the order the action declares them.
+  only the dependency's. A qualified grant names its owner exactly. The split is the
+  first `.`. The name compared is the address local (`sf_east:account` or `orders`)
+  and the project is the address root — who declared the integration, or who owns
+  the ordinary collection — not the type that owns the fields. A bare `account`
+  grant does not open `sf_east:account`. `sf_east:account` does not open
+  `sf_west:account`.
+- **Listings** (`permission_set/list`, `secret/list`, `variable/list`, `action/list`,
+  `integration_type/list`, `integration/list`) span self + direct deps and return each
+  item's `project`, from which a client builds the qualified name. A bare secret,
+  variable, or action name is this version's own; a dependency's is
+  `loco/bricklink.consumer_key`. An action's params are on the action, in the order
+  the action declares them. Schema `action/list` stays those ordinary action documents.
+  `collection/list` is one row per address: ordinary collections first, then each
+  integration's standard collections and its custom collections, in the document's
+  list order. A name both the type and the integration declare is omitted. Each row
+  has `project` (the address root), `name`, `owner` (who owns the fields),
+  `label_plural`, and `integration` (omitted on an ordinary collection). `GET /actions`
+  is the same shape for actions, including `params`.
 
 ### Fieldsets
 
@@ -268,8 +321,8 @@ Mounted in `server.rs`:
 
 | Prefix | Role |
 |--------|------|
-| `/data` | Record CRUD on `/data/{collection}/…` — bare for the site's own collection, a dependency's qualified and percent-encoded (`acme%2Fcrm.contacts`) — plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version — and `POST /data/query`, named batched reads with filters and cursors ([`docs/query.md`](docs/query.md)). Site-scoped via headers. Strict validation on write; diagnostics on read. |
-| `/actions` | Site-scoped, like `/data`. `GET /actions` and `GET /actions/{name}` return the pinned version's actions (self + direct deps) with their params, in the order the action declares them. `POST /actions/{name}` body `{"input":{…}}` validates that input and runs the handler registered for the action's owning project and bare name. See "Actions". |
+| `/data` | Record CRUD on `/data/{collection}/…` — one percent-encoded segment: bare for the site's own collection, a dependency's qualified (`acme%2Fcrm.contacts`), or `{integration}:{name}` (`sf_east:account`, `ben%2Fsync.sf_east:account`). An address that names both a standard collection and a custom collection is 409 `ambiguous address …` after the access check; a caller without a grant is 403. `GET /data/{collection}/fields` returns an unambiguous address's fields (ordinary, the type's, or the custom collection's) and is 409 for an ambiguous address after that read check. List, get, add, update, and delete on an unambiguous integration address are 501 `no source for collection {address}` after auth and do not read the lake. `POST /data/query` is named batched reads ([`docs/query.md`](docs/query.md)); an ambiguous address is `ambiguous_address` inside the 200 after `forbidden`, and an unambiguous integration collection the caller may read is `no_source` and is not planned. Site-scoped via headers. Strict validation on write; diagnostics on read. |
+| `/actions` | Site-scoped, like `/data`. `GET /actions` and `GET /actions/{name}` return one row per address (ordinary actions and `{integration}:{name}` type actions) with `project`, `name`, `owner`, `params`, and `integration` when the address names a connection. An action address is resolved or missing. `POST /actions/{name}` body `{"input":{…}}` validates that input. An ordinary action runs the handler registered for its owning project and bare name. A type action validates input, then is 501 `no handler for action {type_project}.{type_name}.{name}` without calling the registry. See "Actions". |
 | `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, permission sets, secrets, variables, actions, integration types, integrations, bundle). An action's params are part of the action document. A type's secrets, variables, and standard collections, fields, and actions are part of the type. An integration's custom collections and fields are part of the integration. See [`docs/integrations.md`](docs/integrations.md). |
 | `/config` | Unversioned project / dataset / site / version lifecycle, plus per-dataset secret and variable values (`/config/secret`, `/config/variable`). |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
@@ -294,8 +347,8 @@ Handlers sit on request extractors in `http/scope/`:
 - `VersionScope` — authenticated identity plus a **writable** `VersionSchema` for the path triple. Requires developer (or org owner) on the path project. Used by `/schema` writes.
 - `VersionReadScope` — read-only `VersionSchema` for GET `/schema`. Developer/editor on the path project (any version, no site headers). `public` (and authenticated non-members) on a site whose pinned version assigns at least one permission set to `public` (pinned version only; `X-Project-Id` + `X-Site-Id` required).
 - `ConfigProjectScope` / `ConfigMemberScope` / `ConfigUserScope` — `/config` routes. Project-targeted writes require developer. Secret and variable value reads (`ConfigMemberScope`) allow any project role. Project list/create/org do not need site headers.
-- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the pinned version's manifest assigns to `public` grants that verb on that collection. `GET /data/{collection}/fields` follows the read rule. It is how a hosted frontend reads field metadata (labels, `options`) without knowing its version: same list, order, and shape as `/schema/.../field/{collection}/list`, but the version comes from the site pin, so re-pinning the site changes the answer.
-- `POST /data/query` takes a bare `SiteScope` and authorizes each query on its own with `SiteScope::may_read_collection` (the same read rule); a denied or invalid query is an error result inside a 200, not a failed request. Parsing, strict name resolution, and cursors are in `src/query.rs`.
+- `CollectionScope` / `RecordScope` — `/data` routes. Authenticated writes need editor or developer. Token-less `public` may list/get/insert/update/delete when a permission set the pinned version's manifest assigns to `public` grants that verb on that address. The grant matches `(local, address root)`. `GET /data/{collection}/fields` follows the read rule and, for an unambiguous integration address, returns the standard or custom fields. It is how a hosted frontend reads field metadata (labels, `options`) without knowing its version: same list, order, and shape as the schema field list for that address, but the version comes from the site pin, so re-pinning the site changes the answer. An ambiguous address is 409 after that check. Data verbs on an unambiguous integration address return 501 after that check and do not validate or touch the lake.
+- `POST /data/query` takes a bare `SiteScope` and authorizes each query on its own with `SiteScope::may_read_collection` (the same read rule, on `(local, address root)`); a denied or invalid query is an error result inside a 200, not a failed request. An ambiguous address is `ambiguous_address` after that grant check, beside `no_source`. An unambiguous integration collection the caller may read is `no_source` and is not planned. Parsing, strict name resolution, and cursors are in `src/query.rs`.
 
 Membership: `org_members (org, identity, owner|member)` and `project_members (project, identity, developer|editor)`. Effective project access = org owner ∪ project role, plus implicit developer when the identity owns the person account (`alice` → `alice/*`).
 
@@ -305,7 +358,7 @@ Login (`POST /auth/login`) is global — it does not use `X-Site-Id` to find the
 
 Lives in `loco-apps/src/validation.rs`, not in the lake. Checks unknown fields, scalar type mismatches (`string` / `integer` / `float` / `boolean`), and a `string` value outside the field's `options` when it declares any (`invalid_option`; exact match on `value`, so `""` is rejected too). `Null` is allowed for any type that is not `required`. A field's `type` must be one of those four scalars (`FIELD_TYPES`): `/schema` field create and update reject anything else with a 400, and so does each param on an action create or on a PUT that replaces `params` — the same check, so the message still says `unknown field type`. Boot does not check, so a field YAML written earlier with another type (`list`) still loads, and its values pass. An action loaded from disk is likewise not re-checked, and a version copy does not re-check its params. A field with `required: true` must have a value on create: missing, `null`, or (for a `string`) `""` is `required`. `""` counts as blank because it is what a cleared text input sends. An update checks a required field only when the patch names it. Reads — `/data` get/list and `/data/query` — report a gap as a warning, never an error, so making a field required later does not break records written before; a query with `fields` checks only the fields it read.
 
-Action input uses that same walk (`validate_action_input`). The diagnostic `kind` is unchanged (`unknown_field`, `type_mismatch`, `invalid_option`, `required`). The message says `param` and names the action, where a record says `field` and names the collection. A JSON array or object is a `type_mismatch`: values are scalars.
+Action input uses that same walk (`validate_action_input`, and `validate_type_action_input` for a type action). The diagnostic `kind` is unchanged (`unknown_field`, `type_mismatch`, `invalid_option`, `required`). The message says `param` and names the action (`action 'sf_east:set_owner'` for an integration address), where a record says `field` and names the collection. A JSON array or object is a `type_mismatch`: values are scalars.
 
 ### Actions
 
@@ -319,9 +372,9 @@ The handler receives an owned `ActionContext`: the site's dataset id, the `DataA
 
 Handlers are async and run on the request task. `http()` is a process-wide `reqwest` client: 5s to connect, 30s for the whole call, and no proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or the OS settings). A redirect is followed only when the next URL keeps the same scheme, host, and port, at most ten times; the eleventh fails the call. `DataAdapter` calls stay synchronous on that task and finish without awaiting, so no lock is held across an `.await`. An upstream failure is 502 `upstream {status}: {message}`, where `status` is `0` when the call got no response. The message is returned to the caller verbatim, so a handler must not put secret material in it, or an upstream body that echoes the request. `From<reqwest::Error>` drops the URL reqwest would append. It is never 500. Reading a secret when `LOCO_SECRET_KEY` is missing or malformed is 503, the same answer as `PUT /config/secret`.
 
-Who may run: an authenticated editor or developer, via `require_can_write_data`. That is the refusal a `/data` add gives a caller who cannot write. Token-less `public` is never allowed, including when a public permission set grants `create` on a collection. An unknown name is 404 (`action not found: {name}`) before that check. A declared action with no handler is 501 `no handler for action {project}.{name}`.
+Who may run: an authenticated editor or developer, via `require_can_write_data`. That is the refusal a `/data` add gives a caller who cannot write. Token-less `public` is never allowed, including when a public permission set grants `create` on a collection. An unknown name is 404 (`action not found: {name}`) before that check. A declared ordinary action with no handler is 501 `no handler for action {project}.{name}`. A resolved type action is 501 `no handler for action {type_project}.{type_name}.{name}` after input validation. No handler context is built. An action address is never ambiguous.
 
-Handlers are registered in code against `(owning project, bare name)`. The production binary registers none: `build_app` uses an empty registry. A source registry (`SourceRegistry`, keyed by owning project and type name) and a type-action registry (`TypeActionRegistry`, keyed by owning project, type name, and action name) are the same: both empty in `build_app`, and neither is dispatched. The Hurl fixture handlers (`alice/fixture` / `echo`, and `alice/pkg` / `pull`) are registered by the test runner, so they are not in the server binary. `pull`'s upstream URL is a variable the installing dataset sets; the declaration's default points nowhere.
+Handlers are registered in code against `(owning project, bare name)`. The production binary registers none: `build_app` uses an empty registry. A source registry (`SourceRegistry`, keyed by owning project and type name) stays empty and is not dispatched: a data verb on an integration collection is 501 `no source for collection {address}`. A type-action registry (`TypeActionRegistry`, keyed by owning project, type name, and action name) is empty in `build_app` and is not dispatched. `POST /actions/{integration}:{name}` validates input, then returns that 501. It does not run the loose required-secret check. The Hurl fixture handlers (`alice/fixture` / `echo`, and `alice/pkg` / `pull`) are registered by the test runner, so they are not in the server binary. `pull`'s upstream URL is a variable the installing dataset sets; the declaration's default points nowhere.
 
 The lake has no transactions. A handler that fails after it has written leaves those writes in place. That partial failure is the contract: handlers must be safe to re-run, and a handler error should say what was already written. The handler maps that to 400 (bad input it found itself), 409 (conflict), 502 (upstream), 503 (`LOCO_SECRET_KEY`), or 500, with diagnostics when it has them — the same body shape as `/data`. Handlers update records by patch and never replace a record's `fields` wholesale, because an installer may have added fields the owning package's code does not know about (#117).
 

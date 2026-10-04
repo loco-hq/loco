@@ -6,8 +6,8 @@
 //! (`AppOptions::default`); the Hurl fixture handlers live in the test runner.
 //!
 //! Type actions are a different registry, keyed `(project, type, name)`.
-//! See [`crate::integrations::TypeActionRegistry`]. This one stays
-//! `(project, name)`.
+//! See [`crate::integrations::TypeActionRegistry`]. It is not dispatched.
+//! This one stays `(project, name)`.
 //!
 //! Handlers are async. Outbound HTTP uses [`reqwest`]'s async client, so the
 //! call awaits on the request task. [`DataAdapter`] stays synchronous and
@@ -164,6 +164,29 @@ pub struct ActionContext {
 }
 
 impl ActionContext {
+    /// Build the context a handler receives. `owner` is the registry project:
+    /// the action's project for an ordinary action, the type's project for a
+    /// type action.
+    pub(crate) fn new(
+        dataset_id: String,
+        deps: HandlerDeps,
+        schema: VersionSchema,
+        caller: AuthUser,
+        input: HashMap<String, Value>,
+        owner: String,
+    ) -> Self {
+        Self {
+            dataset_id,
+            data: deps.data,
+            schema,
+            caller,
+            input,
+            secrets: deps.secrets,
+            owner,
+            http: deps.http,
+        }
+    }
+
     /// The installing dataset's plaintext for the secret `name` this package
     /// declares.
     ///
@@ -328,16 +351,14 @@ pub async fn dispatch(
     if !missing.is_empty() {
         return Dispatch::MissingConfig(missing);
     }
-    let ctx = ActionContext {
-        dataset_id: dataset_id.to_string(),
-        data: deps.data,
-        schema: schema.clone(),
-        caller: caller.clone(),
+    let ctx = ActionContext::new(
+        dataset_id.to_string(),
+        deps,
+        schema.clone(),
+        caller.clone(),
         input,
-        secrets: deps.secrets,
         owner,
-        http: deps.http,
-    };
+    );
     match handler.call(ctx).await {
         Ok(value) => Dispatch::Done(value),
         Err(failure) => Dispatch::Failed(failure),

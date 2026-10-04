@@ -8,8 +8,16 @@
 //!
 //! Names follow the rule in `CLAUDE.md` ("Name resolution"), strictly: a bare
 //! collection or field name means the project that owns the running version,
-//! and a dependency's must be written `{user}/{project}.{name}`. Resolution
-//! goes through [`VersionSchema::collection_in`] / [`VersionSchema::field_in`].
+//! and a dependency's must be written `{user}/{project}.{local}`. The first
+//! `.` splits the project from `local`. A `:` in `local` addresses an
+//! integration (`sf_east:account`). Resolution goes through
+//! [`VersionSchema::collection_address`] / [`VersionSchema::field_in`].
+//!
+//! An integration collection has no source yet. After the caller is allowed
+//! to read it, that query's result is `no_source` and the lake is not called.
+//! An address that names both a standard collection and a custom collection
+//! is `ambiguous_address` after that same grant check. Routing through a
+//! source is a later issue.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -21,7 +29,7 @@ use loco_lake::{
 };
 
 use crate::http::paths::collection_key;
-use crate::http::version_schema::VersionSchema;
+use crate::http::version_schema::{AddressResolution, CollectionAddressKind, VersionSchema};
 pub use crate::validation::Diagnostic;
 
 /// Queries per batch.
@@ -44,6 +52,12 @@ pub mod kind {
     pub const FORBIDDEN: &str = "forbidden";
     pub const CURSOR_MISMATCH: &str = "cursor_mismatch";
     pub const LIMIT_EXCEEDED: &str = "limit_exceeded";
+    /// The address resolved, and the caller may read it, but no source is
+    /// registered for the integration's type. Not a lake result.
+    pub const NO_SOURCE: &str = "no_source";
+    /// The address names both a standard collection and a custom collection.
+    /// Reported after the grant check, beside [`NO_SOURCE`].
+    pub const AMBIGUOUS_ADDRESS: &str = "ambiguous_address";
 }
 
 const QUERY_KEYS: [&str; 6] = ["collection", "where", "fields", "order", "limit", "cursor"];
@@ -87,10 +101,24 @@ fn is_query_name(name: &str) -> bool {
 /// The collection a query names, resolved.
 #[derive(Debug, Clone)]
 pub struct Target {
-    /// Bare name, e.g. `lot`.
+    /// Bare collection name, e.g. `lot` or `account`. The lake key and field
+    /// lookup use this with [`Self::project`].
     pub name: String,
-    /// Owning project: the running project or a direct dependency.
+    /// Who owns the fields: the ordinary collection's project, the type's
+    /// project for a standard collection, or the integration's project for a
+    /// custom collection.
     pub project: String,
+    /// Address local: `orders`, `foo.bar`, or `sf_east:account`. Grants match
+    /// this, not [`Self::name`], when an integration is present.
+    pub local: String,
+    /// Address root. Grants match this, not the type owner.
+    pub address_project: String,
+    /// Set when the address names a connection. The handler does not plan a
+    /// lake query for it.
+    pub integration: Option<String>,
+    /// Both a standard collection and a custom collection share this address.
+    /// The handler reports it after the grant check.
+    pub ambiguous: bool,
 }
 
 impl Target {
@@ -126,27 +154,34 @@ pub fn target(schema: &VersionSchema, name: &str, raw: &Json) -> Result<Target, 
             "'collection' is required and must be a string".into(),
         ));
     };
-    let (project, bare) = schema.split(collection);
-    if schema.collection_in(project, bare).is_none() {
-        let why = if project == schema.project_id() {
-            format!("no collection '{bare}' in {project}")
-        } else if schema.visible_version(project).is_none() {
-            format!(
-                "'{project}' is not a direct dependency of {}",
-                schema.project_id()
-            )
-        } else {
-            format!("no collection '{bare}' in {project}")
-        };
-        return Err(error(
-            kind::UNKNOWN_COLLECTION,
-            path,
-            format!("unknown collection '{collection}': {why}"),
-        ));
-    }
+    let address = match schema.collection_address(collection) {
+        AddressResolution::Resolved(address) => address,
+        AddressResolution::Missing => {
+            let (project, bare) = schema.split(collection);
+            let why = if project == schema.project_id() {
+                format!("no collection '{bare}' in {project}")
+            } else if schema.visible_version(project).is_none() {
+                format!(
+                    "'{project}' is not a direct dependency of {}",
+                    schema.project_id()
+                )
+            } else {
+                format!("no collection '{bare}' in {project}")
+            };
+            return Err(error(
+                kind::UNKNOWN_COLLECTION,
+                path,
+                format!("unknown collection '{collection}': {why}"),
+            ));
+        }
+    };
     Ok(Target {
-        name: bare.to_string(),
-        project: project.to_string(),
+        name: address.name,
+        project: address.owner,
+        local: address.local,
+        address_project: address.project,
+        integration: address.integration,
+        ambiguous: matches!(address.kind, CollectionAddressKind::Ambiguous),
     })
 }
 

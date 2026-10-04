@@ -41,8 +41,8 @@ pub struct AppState {
     /// trait exists.
     pub sources: SourceRegistry,
     /// Type-action handlers, keyed by owning project, type name, and action
-    /// name. Empty in the server binary. Not dispatched: an address
-    /// `{integration}:{name}` is not routed here.
+    /// name. Empty in the server binary, and not dispatched: a resolved type
+    /// action is 501. Sources are not dispatched either.
     pub type_actions: TypeActionRegistry,
 }
 
@@ -85,8 +85,8 @@ pub struct AppOptions {
     pub actions: HandlerRegistry,
     /// Sources for integration types. [`Default`] registers none.
     pub sources: SourceRegistry,
-    /// Handlers for type actions. [`Default`] registers none, and nothing
-    /// in this binary calls them.
+    /// Handlers for type actions. [`Default`] registers none. Nothing in this
+    /// binary calls them: a resolved type action is 501 without a context.
     pub type_actions: TypeActionRegistry,
     /// SQLite file to open when the adapter is `sqlite`.
     ///
