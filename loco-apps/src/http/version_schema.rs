@@ -64,6 +64,9 @@ pub enum VersionSchemaError {
     /// The version has no manifest: it was never created through `/config`,
     /// or it has since been deleted.
     UnknownVersion(String),
+    /// An integration type cannot be deleted while an integration still
+    /// names it. The message names every one.
+    InUse(String),
     /// `delete_collection` attempted its child prefixes.
     /// These keys are still present. The parent record was left in place, so
     /// a recreate cannot inherit a leftover child and the delete can be
@@ -80,7 +83,8 @@ impl std::fmt::Display for VersionSchemaError {
             | Self::InvalidFieldType(msg)
             | Self::InvalidDeclaration(msg)
             | Self::InvalidName(msg)
-            | Self::UnknownVersion(msg) => write!(f, "{msg}"),
+            | Self::UnknownVersion(msg)
+            | Self::InUse(msg) => write!(f, "{msg}"),
             Self::LeftBehind(keys) => write!(f, "delete left behind: {}", keys.join(", ")),
             Self::Schema(e) => write!(f, "{e}"),
         }
@@ -1396,10 +1400,74 @@ impl VersionSchema {
 
     /// Deletes the type. Its collections, fields, and actions are on the
     /// document, so they go with it. A missing type is not found.
+    ///
+    /// Refused while an integration still names it. The same version matches
+    /// a canonical `type` equal to this bare name. Another project's version
+    /// matches when its manifest depends on this version and the
+    /// integration's `type` is `{this project}.{name}`. The check and the
+    /// delete both run under the `PINS` guard from [`Self::write_guard`].
+    /// Version and project delete do not come through here: they cascade the
+    /// integrations with the type.
     pub fn delete_integration_type(&self, name: &str) -> Result<(), VersionSchemaError> {
         let _pins = self.write_guard()?;
         let key = IntegrationType::to_path(&self.project_id, &self.version, name);
+        if !self.store.integration_types().has(&key) {
+            return Err(loco_schema_runtime::Error::NotFound(key).into());
+        }
+        let declared_by = self.integrations_declaring_type(name);
+        if !declared_by.is_empty() {
+            return Err(VersionSchemaError::InUse(format!(
+                "integration type {}.{name} is declared by integration(s): {}",
+                self.project_id,
+                declared_by.join(", ")
+            )));
+        }
         Ok(self.store.integration_types().delete(&key)?)
+    }
+
+    /// `{project}@{version} {name}` for every integration that still names
+    /// this version's type `name`. Callers hold `PINS`.
+    ///
+    /// Same-version rows come first, in name order. Other projects follow in
+    /// manifest-key order, and each of those versions lists its integrations
+    /// in name order. Another version of this project is its own document
+    /// and is not a dependent.
+    fn integrations_declaring_type(&self, name: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let own_prefix = format!(
+            "{}/versions/{}/integrations/",
+            self.project_id, self.version
+        );
+        for (_, integration) in self.store.integrations().list(&own_prefix) {
+            if integration.r#type() == name {
+                out.push(integration_user(&integration));
+            }
+        }
+        let qualified = format!("{}.{name}", self.project_id);
+        for (_, manifest) in self.store.manifests().list_all() {
+            if manifest.project() == self.project_id {
+                continue;
+            }
+            let depends = manifest.dependencies().iter().any(|dep| {
+                parse_dependency(dep).is_some_and(|(project, version)| {
+                    project == self.project_id && version == self.version
+                })
+            });
+            if !depends {
+                continue;
+            }
+            let prefix = format!(
+                "{}/versions/{}/integrations/",
+                manifest.project(),
+                manifest.version()
+            );
+            for (_, integration) in self.store.integrations().list(&prefix) {
+                if integration.r#type() == qualified {
+                    out.push(integration_user(&integration));
+                }
+            }
+        }
+        out
     }
 
     /// Every integration visible to this version, across self + direct deps.
@@ -2035,6 +2103,16 @@ fn auto_add_fieldsets(
         .into_iter()
         .filter_map(|(_, fs)| if fs.auto_add { Some(fs) } else { None })
         .collect()
+}
+
+/// How a 409 names an integration that still declares a type.
+fn integration_user(integration: &Integration) -> String {
+    format!(
+        "{}@{} {}",
+        integration.project(),
+        integration.version(),
+        integration.name()
+    )
 }
 
 /// Split a manifest dependency, `{account}/{project}@{version}`, into
@@ -2872,6 +2950,218 @@ mod tests {
             "Warehouse status"
         );
         assert!(schema.collection("orders").is_some());
+    }
+
+    /// A type an integration still names is refused, and the document stays.
+    /// Same-version rows match the bare canonical type. Another project's
+    /// version matches only when its manifest depends on this version and
+    /// the stored type is `{this project}.{name}`. A published copy of this
+    /// project, a dependent of that copy, and a project that does not depend
+    /// on this version do not count. A published version is read-only before
+    /// that check.
+    #[test]
+    fn delete_integration_type_refuses_while_an_integration_names_it() {
+        let (_dir, store) = draft_schema();
+        let schema = VersionSchema::new(store.clone(), PROJECT, VERSION);
+        schema
+            .create_integration_type(IntegrationType {
+                collections: vec![IntegrationCollection {
+                    name: "orders".into(),
+                    label: "Orders".into(),
+                    ..Default::default()
+                }],
+                ..integration_type("bricklink")
+            })
+            .unwrap();
+        schema
+            .create_integration_type(integration_type("spare"))
+            .unwrap();
+        for name in ["outlet", "store"] {
+            schema
+                .create_integration(Integration {
+                    name: name.into(),
+                    r#type: "bricklink".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        schema
+            .create_integration(Integration {
+                name: "spare_link".into(),
+                r#type: "spare".into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Another version of this project stores the bare name against its
+        // own copied type. A project that depends on that version, and one
+        // that does not depend on this draft at all, store the qualified
+        // name. None of them block deleting the draft type.
+        store
+            .manifests()
+            .create(Manifest::new(
+                PROJECT.into(),
+                "1.0.0".into(),
+                Vec::new(),
+                Vec::new(),
+            ))
+            .unwrap();
+        store
+            .integrations()
+            .create(Integration {
+                project: PROJECT.into(),
+                version: "1.0.0".into(),
+                name: "store".into(),
+                r#type: "bricklink".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .manifests()
+            .create(Manifest::new(
+                "alice/old".into(),
+                VERSION.into(),
+                vec![format!("{PROJECT}@1.0.0")],
+                Vec::new(),
+            ))
+            .unwrap();
+        store
+            .integrations()
+            .create(Integration {
+                project: "alice/old".into(),
+                version: VERSION.into(),
+                name: "east".into(),
+                r#type: format!("{PROJECT}.bricklink"),
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .manifests()
+            .create(Manifest::new(
+                "alice/other".into(),
+                VERSION.into(),
+                Vec::new(),
+                Vec::new(),
+            ))
+            .unwrap();
+        store
+            .integrations()
+            .create(Integration {
+                project: "alice/other".into(),
+                version: VERSION.into(),
+                name: "planted".into(),
+                r#type: format!("{PROJECT}.bricklink"),
+                ..Default::default()
+            })
+            .unwrap();
+
+        store
+            .manifests()
+            .create(Manifest::new(
+                "alice/shop".into(),
+                VERSION.into(),
+                vec![format!("{PROJECT}@{VERSION}")],
+                Vec::new(),
+            ))
+            .unwrap();
+        store
+            .manifests()
+            .create(Manifest::new(
+                "alice/shop".into(),
+                "9-dev".into(),
+                vec![format!("{PROJECT}@{VERSION}")],
+                Vec::new(),
+            ))
+            .unwrap();
+        let shop = VersionSchema::new(store.clone(), "alice/shop", VERSION);
+        for name in ["east", "west"] {
+            shop.create_integration(Integration {
+                name: name.into(),
+                r#type: format!("{PROJECT}.bricklink"),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        store
+            .integrations()
+            .create(Integration {
+                project: "alice/shop".into(),
+                version: VERSION.into(),
+                name: "notes".into(),
+                r#type: "spare".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .integrations()
+            .create(Integration {
+                project: "alice/shop".into(),
+                version: "9-dev".into(),
+                name: "late".into(),
+                r#type: format!("{PROJECT}.bricklink"),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let err = schema.delete_integration_type("spare").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "integration type ben/crm.spare is declared by integration(s): ben/crm@0.0.1-dev spare_link"
+        );
+        assert!(schema.integration_type("spare").is_some());
+        schema.delete_integration("spare_link").unwrap();
+        schema.delete_integration_type("spare").unwrap();
+        assert!(schema.integration_type("spare").is_none());
+
+        let err = schema.delete_integration_type("bricklink").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "integration type ben/crm.bricklink is declared by integration(s): \
+             ben/crm@0.0.1-dev outlet, ben/crm@0.0.1-dev store, \
+             alice/shop@0.0.1-dev east, alice/shop@0.0.1-dev west, \
+             alice/shop@9-dev late"
+        );
+        assert!(matches!(err, VersionSchemaError::InUse(_)));
+        assert_eq!(
+            schema.integration_type("bricklink").unwrap().collections()[0].name(),
+            "orders"
+        );
+        assert!(schema.integration("store").is_some());
+        assert!(shop.integration("east").is_some());
+
+        let published = VersionSchema::new(store.clone(), PROJECT, "1.0.0");
+        let err = published.delete_integration_type("bricklink").unwrap_err();
+        assert!(matches!(err, VersionSchemaError::NotWritable(_)), "{err}");
+
+        schema.delete_integration("outlet").unwrap();
+        schema.delete_integration("store").unwrap();
+        shop.delete_integration("east").unwrap();
+        shop.delete_integration("west").unwrap();
+        store
+            .integrations()
+            .delete(&Integration::to_path("alice/shop", "9-dev", "late"))
+            .unwrap();
+
+        schema.delete_integration_type("bricklink").unwrap();
+        assert!(schema.integration_type("bricklink").is_none());
+        assert!(store
+            .integrations()
+            .has(&Integration::to_path(PROJECT, "1.0.0", "store")));
+        assert!(store
+            .integrations()
+            .has(&Integration::to_path("alice/old", VERSION, "east")));
+        assert!(store
+            .integrations()
+            .has(&Integration::to_path("alice/other", VERSION, "planted")));
+
+        let err = schema.delete_integration_type("bricklink").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                VersionSchemaError::Schema(loco_schema_runtime::Error::NotFound(_))
+            ),
+            "{err}"
+        );
     }
 
     /// An installer may declare its own integration of a dependency's type,
