@@ -1,0 +1,36 @@
+description: "A field of a custom collection. Fields belong to the integration's owner."
+pathTemplate: "${project}/versions/${version}/integrations/${integration}/fields/${collection}/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  integration:
+    type: slug
+    createOnly: true
+  collection:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  type:
+    type: string
+  label:
+    type: string
+  required:
+    type: boolean
+  # Not `field_option` or `type_field_option`: codegen emits one struct per object name.
+  options:
+    type: list
+    items:
+      type: object
+      name: integration_field_option
+      properties:
+        value:
+          type: string
+        label:
+          type: string

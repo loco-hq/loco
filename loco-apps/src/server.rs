@@ -11,6 +11,7 @@ use crate::auth::local::LocalAuthAdapter;
 use crate::auth::AuthAdapter;
 use crate::handlers;
 use crate::http::host;
+use crate::integrations::{SourceRegistry, TypeActionRegistry};
 use crate::seed;
 use crate::values::{KeyStatus, LakeSecretStore, SecretStore};
 use crate::{Bundle, Project, SchemaStore, Site};
@@ -35,6 +36,14 @@ pub struct AppState {
     /// Empty unless a caller of [`build_app_with_options`] registers some.
     /// The server binary does not.
     pub actions: HandlerRegistry,
+    /// Integration-type sources, keyed by owning project and type name.
+    /// Empty in the server binary. The value is a placeholder until a source
+    /// trait exists.
+    pub sources: SourceRegistry,
+    /// Type-action handlers, keyed by owning project, type name, and action
+    /// name. Empty in the server binary. Not dispatched: an address
+    /// `{integration}:{name}` is not routed here.
+    pub type_actions: TypeActionRegistry,
 }
 
 fn build_data_adapter(sqlite_path: Option<&Path>) -> Box<dyn DataAdapter> {
@@ -74,6 +83,11 @@ pub struct AppOptions {
     /// what [`build_app`] ships. The Hurl fixture handler is registered by
     /// the test runner, so it is not in the server binary.
     pub actions: HandlerRegistry,
+    /// Sources for integration types. [`Default`] registers none.
+    pub sources: SourceRegistry,
+    /// Handlers for type actions. [`Default`] registers none, and nothing
+    /// in this binary calls them.
+    pub type_actions: TypeActionRegistry,
     /// SQLite file to open when the adapter is `sqlite`.
     ///
     /// `None` reads `LOCO_DB_PATH` (default `loco.db`) and opens that path
@@ -209,6 +223,8 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         http,
         default_site,
         actions: options.actions,
+        sources: options.sources,
+        type_actions: options.type_actions,
     });
 
     Router::new()

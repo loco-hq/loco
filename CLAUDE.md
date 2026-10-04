@@ -142,10 +142,19 @@ Persistence is `FileTreeFsAdapter` (`loco-schema-runtime`). Writes are whole-tre
 | secret | `${project}/versions/${version}/secrets/${name}` |
 | variable | `${project}/versions/${version}/variables/${name}` |
 | action | `${project}/versions/${version}/actions/${name}` |
+| integration_type | `${project}/versions/${version}/integration_types/${name}` |
+| type_collection | `${project}/versions/${version}/integration_types/${integration_type}/collections/${name}` |
+| type_field | `${project}/versions/${version}/integration_types/${integration_type}/fields/${collection}/${name}` |
+| type_action | `${project}/versions/${version}/integration_types/${integration_type}/actions/${name}` |
+| integration | `${project}/versions/${version}/integrations/${name}` |
+| integration_collection | `${project}/versions/${version}/integrations/${integration}/collections/${name}` |
+| integration_field | `${project}/versions/${version}/integrations/${integration}/fields/${collection}/${name}` |
 
-`${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `secrets`, `variables`, `actions`, `versions`).
+`${project}` is a multi-segment variable (e.g., `ben/crm`). Hard-coded path segments are always plural (`sites`, `datasets`, `collections`, `fields`, `fieldsets`, `permission_sets`, `secrets`, `variables`, `actions`, `integration_types`, `integrations`, `versions`).
 
 An `action` carries its input as `params`, an inline list of `action_param` objects (`name`, `type`, `label`, `description`, `required`, `options`). They are written with the action: a PUT that names `params` replaces the list, and there is no param route. On create and on that replacement, each `name` must be a slug (`[a-z0-9_.-]+`, one segment) and unique within the action, each `type` must pass the `FIELD_TYPES` check, and `options` are only meaningful for `string` — anything else is a 400 and nothing is stored. A consumer cannot add a param to a dependency's action, because the list lives on the owner's document.
+
+An integration type and an integration are separate schema types from collections, fields, and actions. The model is [`docs/integrations.md`](docs/integrations.md). A type at `integration_types/${name}` carries inline `integration_secret` and `integration_variable` lists: a secret has no `default` and no `value`, a variable may set `default` (empty means none), and a shared name across the two lists is a 400. Its standard collections, fields, and actions are `type_collection`, `type_field`, and `type_action`, nested under that type. The template variable is `integration_type`, not `type`, because a field's scalar type owns the property `type`. An integration at `integrations/${name}` names a type, bare or `{account}/{project}.{name}`. Custom collections and fields are `integration_collection` and `integration_field` under that integration. They are their own types: one `pathTemplate` matches a path exactly, so a file under `integration_types/.../collections/` cannot load as a `collection`. A consumer cannot add a standard collection, field, or action to a dependency's type, and cannot declare a custom collection or field on a dependency's integration. Deleting an integration on a draft removes its custom collections and fields (`delete_by_prefix`, leftovers reported). Deleting a type removes its standard collections, fields, and actions the same way. Version copy carries all of them. Addressing `{integration}:{name}`, routing `/data` through a source, and storing values per integration are later issues and are not this layer.
 
 `secret` and `variable` declare named configuration a version needs (`label`, `description`, `required`). A variable may also set `default` (a string; empty means none). A secret has no `default` and no `value` — a body carrying either is a 400, because the declaration never holds the value. A secret and a variable may not share a name in one version.
 
@@ -155,7 +164,7 @@ Secret and variable values are lake records on the dataset, in the reserved coll
 
 `PUT` and `DELETE /config/secret/{account}/{project}/{dataset}/{name}` — and the same paths under `/variable` — take `{"value":"…"}`. `name` is that reference, percent-encoded as one segment (`alice%2Fbricklink.consumer_key`). Writes require developer or org owner, and the name must be declared by some version of the project, itself or a direct dependency. A `DELETE` whose declaration is already gone still removes the row. `GET .../list` is any project role, editor included. A secret row is `{name, project, set, updated_at}` and never the value, so the list uses the same gate as a variable read. A variable row adds `value` and, when one applies, `source` of `value` or `default` (the declaration's default when nothing is set). The list is the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing, even if a value was stored for it. Deleting a dataset or a project calls `SecretStore::delete_dataset` and then `DataAdapter::delete_dataset`, inside the same purge. The secret-store call is what a later cloud impl cleans up; the lake impl deletes `$secrets` rows the purge would remove anyway, and the lake purge still removes `$variables` and every other collection. If the secret store fails, the lake is not purged. A failed purge is reported left behind and keeps the dataset and project records.
 
-An inline `object`'s `name:` is snake_case (`collection_grant`, `action_param`, `action_param_option`); codegen PascalCases it into the generated struct name. An action param's `options` object is `action_param_option` — the same `{ value, label }` shape as a field option — so the generated struct is `ActionParamOption` and does not collide with `FieldOption`. The param object itself is `action_param` (`ActionParam`), not a schema type.
+An inline `object`'s `name:` is snake_case (`collection_grant`, `action_param`, `action_param_option`, `integration_secret`, `integration_variable`, `type_action_param`, `type_action_param_option`, `type_field_option`, `integration_field_option`); codegen PascalCases it into the generated struct name. An action param's `options` object is `action_param_option` — the same `{ value, label }` shape as a field option — so the generated struct is `ActionParamOption` and does not collide with `FieldOption`. The param object itself is `action_param` (`ActionParam`), not a schema type. A type action's params and a type or integration field's options use their own object names for the same reason.
 
 ### Versions, sites, datasets
 
@@ -167,7 +176,7 @@ An inline `object`'s `name:` is snake_case (`collection_grant`, `action_param`, 
 
 Creating a project via `/config` bootstraps `0.0.1-dev`, a `dev` dataset, and a `dev` site.
 
-`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, secrets, variables, actions, and manifest into the new id — the publish primitive. An action's params travel with the action document. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. The version's file trees (its `bundle`) are copied too — metadata is a version directory, not only its YAML. Datasets, sites, records, and secret and variable values are never copied.
+`POST /config/version/{user}/{project}` creates a version. With `{"version": "0.0.1"}` it is empty; with `{"version": "0.0.1", "from": "0.0.1-dev"}` it snapshots the source version's collections, fields, fieldsets, permission sets, secrets, variables, actions, integration types (standard collections, fields, and actions included), integrations (custom collections and fields included), and manifest into the new id — the publish primitive. An action's params travel with the action document. A type's secrets, variables, and type-action params travel with those documents. The target may be published: copying *into* a non-draft version is how it gets its content, which is why the copy lives on `/config` and not behind `VersionSchema`'s draft gate. The version's file trees (its `bundle`) are copied too — metadata is a version directory, not only its YAML. Datasets, sites, records, and secret and variable values are never copied.
 
 ### Manifests and dependency visibility
 
@@ -183,7 +192,7 @@ Dependency grammar and the scoped view live in `loco-apps/src/http/version_schem
 
 **Rule: an unqualified name always means _self_ — the project that owns the running
 version. A dependency's collection, field, fieldset, permission set, secret,
-variable, or action must be named fully qualified
+variable, action, integration type, or integration must be named fully qualified
 (`{user}/{project}.{name}`) to be reachable.**
 
 The point is that installing a dependency can never silently change what an existing
@@ -213,6 +222,13 @@ dependency list for a match, so two deps that share a name are both addressable.
   separate write that could add one. The handler registry is keyed by that owning
   project and the bare name, so a same-named declaration in another project does
   not run this project's handler.
+- **Integration types and integrations** follow the same owner rule.
+  `/schema/.../integration_type/{name}` and `/schema/.../integration/{name}` take a
+  bare name for this version and a dependency's qualified and percent-encoded
+  (`alice%2Fpkg.bricklink`, `alice%2Fpkg.store`). Standard collections, fields, and
+  type actions are read under the type. Custom collections and fields are read
+  under the integration. An address `{integration}:{name}` is not resolved on
+  `/data` or `/actions` here.
 - **Handler config** — `ActionContext::secret` and `variable` do not use `split`.
   They read the owning project's declarations (the registry key) and the values
   on the request's dataset. A bare name inside the handler is that package's
@@ -225,7 +241,7 @@ dependency list for a match, so two deps that share a name are both addressable.
   consumer's set opens only the consumer's `contacts`, and in a set a dependency ships
   only the dependency's. A qualified grant names its owner exactly.
 - **Listings** (`collection/list`, `permission_set/list`, `secret/list`,
-  `variable/list`, `action/list`) span self + direct deps and return each item's `project`,
+  `variable/list`, `action/list`, `integration_type/list`, `integration/list`) span self + direct deps and return each item's `project`,
   from which a client builds the qualified name. A bare secret, variable, or action
   name is this version's own; a dependency's is `loco/bricklink.consumer_key`.
   An action's params are on the action, in the order the action declares them.
@@ -257,7 +273,7 @@ Mounted in `server.rs`:
 |--------|------|
 | `/data` | Record CRUD on `/data/{collection}/…` — bare for the site's own collection, a dependency's qualified and percent-encoded (`acme%2Fcrm.contacts`) — plus `GET /data/{collection}/fields` — the collection's fields in the site's pinned version — and `POST /data/query`, named batched reads with filters and cursors ([`docs/query.md`](docs/query.md)). Site-scoped via headers. Strict validation on write; diagnostics on read. |
 | `/actions` | Site-scoped, like `/data`. `GET /actions` and `GET /actions/{name}` return the pinned version's actions (self + direct deps) with their params, in the order the action declares them. `POST /actions/{name}` body `{"input":{…}}` validates that input and runs the handler registered for the action's owning project and bare name. See "Actions". |
-| `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, permission sets, secrets, variables, actions, bundle). An action's params are part of the action document. |
+| `/schema` | Versioned metadata CRUD (manifest, collections, fields, fieldsets, permission sets, secrets, variables, actions, integration types, integrations, bundle). An action's params are part of the action document. A type's secrets, variables, and standard collections, fields, and actions are part of the type. An integration's custom collections and fields are part of the integration. See [`docs/integrations.md`](docs/integrations.md). |
 | `/config` | Unversioned project / dataset / site / version lifecycle, plus per-dataset secret and variable values (`/config/secret`, `/config/variable`). |
 | `/auth` | Login, logout, `/me` (self), signup (`POST /users`), update/delete (self), API keys. |
 | *(fallback)* | Files from the request's site's **pinned version** bundle. `handlers/hosting.rs`. |
@@ -308,7 +324,7 @@ Handlers are async and run on the request task. `http()` is a process-wide `reqw
 
 Who may run: an authenticated editor or developer, via `require_can_write_data`. That is the refusal a `/data` add gives a caller who cannot write. Token-less `public` is never allowed, including when a public permission set grants `create` on a collection. An unknown name is 404 (`action not found: {name}`) before that check. A declared action with no handler is 501 `no handler for action {project}.{name}`.
 
-Handlers are registered in code against `(owning project, bare name)`. The production binary registers none: `build_app` uses an empty registry. The Hurl fixture handlers (`alice/fixture` / `echo`, and `alice/pkg` / `pull`) are registered by the test runner, so they are not in the server binary. `pull`'s upstream URL is a variable the installing dataset sets; the declaration's default points nowhere.
+Handlers are registered in code against `(owning project, bare name)`. The production binary registers none: `build_app` uses an empty registry. A source registry (`SourceRegistry`, keyed by owning project and type name) and a type-action registry (`TypeActionRegistry`, keyed by owning project, type name, and action name) are the same: both empty in `build_app`, and neither is dispatched. The Hurl fixture handlers (`alice/fixture` / `echo`, and `alice/pkg` / `pull`) are registered by the test runner, so they are not in the server binary. `pull`'s upstream URL is a variable the installing dataset sets; the declaration's default points nowhere.
 
 The lake has no transactions. A handler that fails after it has written leaves those writes in place. That partial failure is the contract: handlers must be safe to re-run, and a handler error should say what was already written. The handler maps that to 400 (bad input it found itself), 409 (conflict), 502 (upstream), 503 (`LOCO_SECRET_KEY`), or 500, with diagnostics when it has them — the same body shape as `/data`. Handlers update records by patch and never replace a record's `fields` wholesale, because an installer may have added fields the owning package's code does not know about (#117).
 

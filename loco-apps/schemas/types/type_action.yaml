@@ -1,0 +1,48 @@
+description: "An action an integration type offers. The handler is registered against the owning project, the type, and this name. Params are inline, as on an ordinary action."
+pathTemplate: "${project}/versions/${version}/integration_types/${integration_type}/actions/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  integration_type:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+  description:
+    type: string
+  # Not `action_param`: that name already generates `ActionParam` for an
+  # ordinary action, and codegen emits the struct once per object name.
+  params:
+    type: list
+    items:
+      type: object
+      name: type_action_param
+      properties:
+        name:
+          type: slug
+        type:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+        options:
+          type: list
+          items:
+            type: object
+            name: type_action_param_option
+            properties:
+              value:
+                type: string
+              label:
+                type: string

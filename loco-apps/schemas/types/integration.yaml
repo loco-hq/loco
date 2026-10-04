@@ -1,0 +1,20 @@
+description: "One connection of an integration type. `type` is bare when this project declares the type, and {account}/{project}.{name} when a dependency does."
+pathTemplate: "${project}/versions/${version}/integrations/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+  description:
+    type: string
+  # Not a slug: a dependency's type is `{account}/{project}.{name}`.
+  type:
+    type: string

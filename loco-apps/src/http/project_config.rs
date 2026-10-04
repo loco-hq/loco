@@ -204,6 +204,8 @@ impl ProjectConfig {
 
     /// Removes everything under this project: each version's collections,
     /// fields, fieldsets, permission sets, secrets, variables, actions,
+    /// integration types (and their standard collections, fields, and
+    /// actions), integrations (and their custom collections and fields),
     /// bundle, and manifest; every dataset and its records;
     /// every site; then the project record.
     ///
@@ -274,6 +276,51 @@ impl ProjectConfig {
             &mut left,
             self.store.actions().delete_by_prefix(&versions_prefix),
             || keys_of(self.store.actions().list(&versions_prefix)),
+        );
+        // Integration types and integrations sit under the same version
+        // prefix. A leftover child would be inherited by a recreated project.
+        note_prefix(
+            &mut left,
+            self.store.type_fields().delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.type_fields().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .type_collections()
+                .delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.type_collections().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store.type_actions().delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.type_actions().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .integration_types()
+                .delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.integration_types().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .integration_fields()
+                .delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.integration_fields().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .integration_collections()
+                .delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.integration_collections().list(&versions_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store.integrations().delete_by_prefix(&versions_prefix),
+            || keys_of(self.store.integrations().list(&versions_prefix)),
         );
         // File trees too, or a deleted project leaves its frontends on disk
         // for a same-named project to inherit.
@@ -458,7 +505,9 @@ impl ProjectConfig {
     }
 
     /// Delete a version: cascade-removes its collections, fields, fieldsets,
-    /// permission sets, secrets, variables, actions, bundle,
+    /// permission sets, secrets, variables, actions, integration types and
+    /// their standard collections, fields, and actions, integrations and
+    /// their custom collections and fields, bundle,
     /// and manifest. Secret and variable *values* are per dataset, not per
     /// version, and stay. Refused while a site pins it or another project's
     /// manifest depends on it.
@@ -538,6 +587,78 @@ impl ProjectConfig {
             self.store.actions().delete_by_prefix(&actions_prefix),
             || keys_of(self.store.actions().list(&actions_prefix)),
         );
+        let integration_types_prefix = format!(
+            "{}/versions/{version}/integration_types/",
+            self.project_id()
+        );
+        let integrations_prefix = format!("{}/versions/{version}/integrations/", self.project_id());
+        note_prefix(
+            &mut left,
+            self.store
+                .type_fields()
+                .delete_by_prefix(&integration_types_prefix),
+            || keys_of(self.store.type_fields().list(&integration_types_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .type_collections()
+                .delete_by_prefix(&integration_types_prefix),
+            || {
+                keys_of(
+                    self.store
+                        .type_collections()
+                        .list(&integration_types_prefix),
+                )
+            },
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .type_actions()
+                .delete_by_prefix(&integration_types_prefix),
+            || keys_of(self.store.type_actions().list(&integration_types_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .integration_types()
+                .delete_by_prefix(&integration_types_prefix),
+            || {
+                keys_of(
+                    self.store
+                        .integration_types()
+                        .list(&integration_types_prefix),
+                )
+            },
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .integration_fields()
+                .delete_by_prefix(&integrations_prefix),
+            || keys_of(self.store.integration_fields().list(&integrations_prefix)),
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .integration_collections()
+                .delete_by_prefix(&integrations_prefix),
+            || {
+                keys_of(
+                    self.store
+                        .integration_collections()
+                        .list(&integrations_prefix),
+                )
+            },
+        );
+        note_prefix(
+            &mut left,
+            self.store
+                .integrations()
+                .delete_by_prefix(&integrations_prefix),
+            || keys_of(self.store.integrations().list(&integrations_prefix)),
+        );
         // The version's bundle goes with it; a recreated version must not
         // inherit the frontend of the one that was deleted.
         let bundle_key = Bundle::to_path(&self.project_id(), version);
@@ -569,6 +690,17 @@ impl ProjectConfig {
             || !self.store.secrets().list(&prefix).is_empty()
             || !self.store.variables().list(&prefix).is_empty()
             || !self.store.actions().list(&prefix).is_empty()
+            || !self.store.type_fields().list(&prefix).is_empty()
+            || !self.store.type_collections().list(&prefix).is_empty()
+            || !self.store.type_actions().list(&prefix).is_empty()
+            || !self.store.integration_types().list(&prefix).is_empty()
+            || !self.store.integration_fields().list(&prefix).is_empty()
+            || !self
+                .store
+                .integration_collections()
+                .list(&prefix)
+                .is_empty()
+            || !self.store.integrations().list(&prefix).is_empty()
             || !self.store.bundles().list(&prefix).is_empty()
     }
 
@@ -599,7 +731,9 @@ impl ProjectConfig {
 
     /// Copy every piece of versioned metadata from `from` into a brand-new
     /// version `to`: collections, fields, fieldsets, permission sets, secrets,
-    /// variables, actions, the version's file trees (its
+    /// variables, actions, integration types (standard collections, fields,
+    /// and actions included) and integrations (custom collections and fields
+    /// included), the version's file trees (its
     /// `bundle`), and the manifest (dependencies plus the public
     /// permission-set assignment).
     ///
@@ -750,6 +884,86 @@ impl ProjectConfig {
             self.store.actions().create(copy)?;
             copied.actions.push(key);
         }
+        // Type documents and integration documents share a directory prefix
+        // per kind (`integration_types/` and `integrations/`) and live in
+        // their own stores, so each store is listed on its own.
+        for (_, item) in self
+            .store
+            .integration_types()
+            .list(&source_prefix("integration_types"))
+        {
+            let mut copy = (*item).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.integration_types().create(copy)?;
+            copied.integration_types.push(key);
+        }
+        for (_, item) in self
+            .store
+            .type_collections()
+            .list(&source_prefix("integration_types"))
+        {
+            let mut copy = (*item).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.type_collections().create(copy)?;
+            copied.type_collections.push(key);
+        }
+        for (_, item) in self
+            .store
+            .type_fields()
+            .list(&source_prefix("integration_types"))
+        {
+            let mut copy = (*item).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.type_fields().create(copy)?;
+            copied.type_fields.push(key);
+        }
+        for (_, item) in self
+            .store
+            .type_actions()
+            .list(&source_prefix("integration_types"))
+        {
+            let mut copy = (*item).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.type_actions().create(copy)?;
+            copied.type_actions.push(key);
+        }
+        for (_, item) in self
+            .store
+            .integrations()
+            .list(&source_prefix("integrations"))
+        {
+            let mut copy = (*item).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.integrations().create(copy)?;
+            copied.integrations.push(key);
+        }
+        for (_, item) in self
+            .store
+            .integration_collections()
+            .list(&source_prefix("integrations"))
+        {
+            let mut copy = (*item).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.integration_collections().create(copy)?;
+            copied.integration_collections.push(key);
+        }
+        for (_, item) in self
+            .store
+            .integration_fields()
+            .list(&source_prefix("integrations"))
+        {
+            let mut copy = (*item).clone();
+            copy.version = to.to_string();
+            let key = copy.to_path();
+            self.store.integration_fields().create(copy)?;
+            copied.integration_fields.push(key);
+        }
 
         // File trees, by prefix rather than by naming `bundle`: the store
         // rewrites each key's version segment and skips anything that stops
@@ -803,6 +1017,27 @@ impl ProjectConfig {
         for key in &copied.actions {
             let _ = self.store.actions().delete(key);
         }
+        for key in &copied.type_fields {
+            let _ = self.store.type_fields().delete(key);
+        }
+        for key in &copied.type_collections {
+            let _ = self.store.type_collections().delete(key);
+        }
+        for key in &copied.type_actions {
+            let _ = self.store.type_actions().delete(key);
+        }
+        for key in &copied.integration_types {
+            let _ = self.store.integration_types().delete(key);
+        }
+        for key in &copied.integration_fields {
+            let _ = self.store.integration_fields().delete(key);
+        }
+        for key in &copied.integration_collections {
+            let _ = self.store.integration_collections().delete(key);
+        }
+        for key in &copied.integrations {
+            let _ = self.store.integrations().delete(key);
+        }
         for key in &copied.bundles {
             let _ = self.store.bundles().delete(key);
         }
@@ -820,6 +1055,13 @@ struct CopiedKeys {
     secrets: Vec<String>,
     variables: Vec<String>,
     actions: Vec<String>,
+    integration_types: Vec<String>,
+    type_collections: Vec<String>,
+    type_fields: Vec<String>,
+    type_actions: Vec<String>,
+    integrations: Vec<String>,
+    integration_collections: Vec<String>,
+    integration_fields: Vec<String>,
     /// File-tree keys (the version's `bundle`), which are whole trees rather
     /// than documents but undo the same way.
     bundles: Vec<String>,
@@ -1689,5 +1931,175 @@ mod tests {
         assert!(rows[0].set);
         assert_eq!(rows[0].source, Some("value"));
         assert_eq!(rows[0].value.as_deref(), Some("https://set.example"));
+    }
+
+    /// Version copy carries integration types and integrations, including the
+    /// collections, fields, and actions nested under them. Deleting the source
+    /// version removes those documents and leaves the copy.
+    #[test]
+    fn copy_and_delete_version_carry_integration_declarations() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SchemaStore::load(dir.path()).unwrap());
+        let config = ProjectConfig::new(store.clone(), "ben", "crm");
+        config.create_version(VERSION.into()).unwrap();
+        let schema =
+            crate::http::version_schema::VersionSchema::new(store.clone(), PROJECT, VERSION);
+
+        schema
+            .create_integration_type(crate::IntegrationType {
+                name: "bricklink".into(),
+                label: "BrickLink".into(),
+                secrets: vec![crate::IntegrationSecret {
+                    name: "consumer_key".into(),
+                    required: true,
+                    ..crate::IntegrationSecret::default()
+                }],
+                ..crate::IntegrationType::default()
+            })
+            .unwrap();
+        schema
+            .create_type_collection(
+                "bricklink",
+                crate::TypeCollection {
+                    name: "orders".into(),
+                    label: "Orders".into(),
+                    ..crate::TypeCollection::default()
+                },
+            )
+            .unwrap();
+        schema
+            .create_type_field(
+                "bricklink",
+                crate::TypeField {
+                    collection: "orders".into(),
+                    name: "status".into(),
+                    r#type: "string".into(),
+                    ..crate::TypeField::default()
+                },
+            )
+            .unwrap();
+        schema
+            .create_type_action(
+                "bricklink",
+                crate::TypeAction {
+                    name: "set_status".into(),
+                    params: vec![crate::TypeActionParam {
+                        name: "order_id".into(),
+                        r#type: "string".into(),
+                        ..crate::TypeActionParam::default()
+                    }],
+                    ..crate::TypeAction::default()
+                },
+            )
+            .unwrap();
+        schema
+            .create_integration(crate::Integration {
+                name: "store".into(),
+                r#type: "bricklink".into(),
+                ..crate::Integration::default()
+            })
+            .unwrap();
+        schema
+            .create_integration_collection(
+                "store",
+                crate::IntegrationCollection {
+                    name: "invoice".into(),
+                    label: "Invoice".into(),
+                    ..crate::IntegrationCollection::default()
+                },
+            )
+            .unwrap();
+        schema
+            .create_integration_field(
+                "store",
+                crate::IntegrationField {
+                    collection: "invoice".into(),
+                    name: "amount".into(),
+                    r#type: "string".into(),
+                    ..crate::IntegrationField::default()
+                },
+            )
+            .unwrap();
+
+        config.copy_version(VERSION, "1.0.0").unwrap();
+        let published = crate::http::version_schema::VersionSchema::new_read_only(
+            store.clone(),
+            PROJECT,
+            "1.0.0",
+        );
+        assert_eq!(
+            published.integration_type("bricklink").unwrap().version(),
+            "1.0.0"
+        );
+        assert_eq!(
+            published.integration_type("bricklink").unwrap().secrets()[0].name(),
+            "consumer_key"
+        );
+        assert_eq!(
+            published
+                .type_collection("bricklink", "orders")
+                .unwrap()
+                .label(),
+            "Orders"
+        );
+        assert_eq!(
+            published.type_fields("bricklink", "orders")[0].name(),
+            "status"
+        );
+        assert_eq!(
+            published
+                .type_action("bricklink", "set_status")
+                .unwrap()
+                .params()[0]
+                .name(),
+            "order_id"
+        );
+        assert_eq!(
+            published.integration("store").unwrap().r#type(),
+            "bricklink"
+        );
+        assert_eq!(
+            published
+                .integration_collection("store", "invoice")
+                .unwrap()
+                .label(),
+            "Invoice"
+        );
+        assert_eq!(
+            published.integration_fields("store", "invoice")[0].name(),
+            "amount"
+        );
+        assert_eq!(
+            schema.integration_type("bricklink").unwrap().version(),
+            VERSION
+        );
+
+        config.delete_version(VERSION).unwrap();
+        let prefix = format!("{PROJECT}/versions/{VERSION}/");
+        assert!(store.integration_types().list(&prefix).is_empty());
+        assert!(store.type_collections().list(&prefix).is_empty());
+        assert!(store.type_fields().list(&prefix).is_empty());
+        assert!(store.type_actions().list(&prefix).is_empty());
+        assert!(store.integrations().list(&prefix).is_empty());
+        assert!(store.integration_collections().list(&prefix).is_empty());
+        assert!(store.integration_fields().list(&prefix).is_empty());
+        assert!(store
+            .manifests()
+            .get(&Manifest::to_path(PROJECT, VERSION))
+            .is_none());
+        assert!(store
+            .integration_types()
+            .get(&crate::IntegrationType::to_path(
+                PROJECT,
+                "1.0.0",
+                "bricklink"
+            ))
+            .is_some());
+        assert!(store
+            .integration_collections()
+            .get(&crate::IntegrationCollection::to_path(
+                PROJECT, "1.0.0", "store", "invoice"
+            ))
+            .is_some());
     }
 }

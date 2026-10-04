@@ -1,0 +1,53 @@
+description: "A kind of connection a package version offers. Secrets and variables are the connection's declarations, inline, the way an action's params are."
+pathTemplate: "${project}/versions/${version}/integration_types/${name}"
+properties:
+  project:
+    type: slug
+    segments: 2
+    createOnly: true
+  version:
+    type: slug
+    createOnly: true
+  name:
+    type: slug
+    createOnly: true
+  label:
+    type: string
+  description:
+    type: string
+  # Written with the type. A PUT that names `secrets` replaces the list.
+  # A consumer sees it and cannot add to it. A secret has no default and no
+  # value — a body carrying either is a 400.
+  secrets:
+    type: list
+    items:
+      type: object
+      name: integration_secret
+      properties:
+        # A slug, unique on this type across secrets and variables.
+        name:
+          type: slug
+        label:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+  # Same list rule as `secrets`. A variable may set `default` (empty means
+  # none). A secret and a variable of one name on this type are a 400.
+  variables:
+    type: list
+    items:
+      type: object
+      name: integration_variable
+      properties:
+        name:
+          type: slug
+        label:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+        default:
+          type: string

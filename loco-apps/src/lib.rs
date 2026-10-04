@@ -8,6 +8,7 @@ pub mod auth;
 pub mod bundle;
 pub mod handlers;
 pub mod http;
+pub mod integrations;
 pub mod query;
 pub mod seed;
 pub mod server;
@@ -190,5 +191,83 @@ mod generated_tests {
         ]);
         let m = Manifest::from_yaml("dependencies: []\n", &vars).unwrap();
         assert!(m.public_permission_sets().is_empty());
+    }
+
+    /// Nested integration paths are their own templates. An ordinary
+    /// collection, field, or action does not match them, and they do not
+    /// match an ordinary path of the same name.
+    #[test]
+    fn integration_paths_do_not_match_ordinary_types() {
+        let project = "ben/crm";
+        let version = "0.0.1-dev";
+
+        let type_collection = TypeCollection::to_path(project, version, "bricklink", "orders");
+        assert_eq!(
+            type_collection,
+            "ben/crm/versions/0.0.1-dev/integration_types/bricklink/collections/orders"
+        );
+        assert!(Collection::from_path(&type_collection).is_none());
+        assert!(TypeCollection::from_path(&type_collection).is_some());
+        let ordinary = Collection::to_path(project, version, "orders");
+        assert!(TypeCollection::from_path(&ordinary).is_none());
+        assert!(Collection::from_path(&ordinary).is_some());
+
+        let type_field = TypeField::to_path(project, version, "bricklink", "orders", "status");
+        assert!(Field::from_path(&type_field).is_none());
+        assert_eq!(
+            TypeField::from_path(&type_field)
+                .unwrap()
+                .get("integration_type")
+                .unwrap(),
+            "bricklink"
+        );
+        let ordinary_field = Field::to_path(project, version, "orders", "status");
+        assert!(TypeField::from_path(&ordinary_field).is_none());
+
+        let type_action = TypeAction::to_path(project, version, "bricklink", "set_status");
+        assert!(Action::from_path(&type_action).is_none());
+        assert!(TypeAction::from_path(&type_action).is_some());
+        let other_orders = TypeCollection::to_path(project, version, "warehouse", "orders");
+        assert_ne!(type_collection, other_orders);
+
+        let custom = IntegrationCollection::to_path(project, version, "store", "invoice");
+        assert_eq!(
+            custom,
+            "ben/crm/versions/0.0.1-dev/integrations/store/collections/invoice"
+        );
+        assert!(Collection::from_path(&custom).is_none());
+        assert!(TypeCollection::from_path(&custom).is_none());
+        assert!(IntegrationCollection::from_path(&custom).is_some());
+
+        let custom_field =
+            IntegrationField::to_path(project, version, "store", "invoice", "amount");
+        assert!(Field::from_path(&custom_field).is_none());
+        assert!(TypeField::from_path(&custom_field).is_none());
+        assert!(IntegrationField::from_path(&custom_field).is_some());
+
+        let integration = Integration::to_path(project, version, "store");
+        let integration_type = IntegrationType::to_path(project, version, "bricklink");
+        assert!(Integration::from_path(&integration_type).is_none());
+        assert!(IntegrationType::from_path(&integration).is_none());
+        assert!(Integration::from_path(&integration).is_some());
+        assert!(IntegrationType::from_path(&integration_type).is_some());
+
+        let vars = std::collections::HashMap::from([
+            ("project".into(), "alice/pkg".into()),
+            ("version".into(), "0.0.1-dev".into()),
+            ("name".into(), "bricklink".into()),
+        ]);
+        let parsed = IntegrationType::from_yaml(
+            "label: BrickLink\nsecrets:\n  - name: consumer_key\n    label: Consumer key\n    required: true\nvariables:\n  - name: base_url\n    default: https://api.bricklink.com/api/store/v1\n",
+            &vars,
+        )
+        .unwrap();
+        assert_eq!(parsed.name(), "bricklink");
+        assert_eq!(parsed.secrets()[0].name(), "consumer_key");
+        assert!(parsed.secrets()[0].required());
+        assert_eq!(
+            parsed.variables()[0].default(),
+            "https://api.bricklink.com/api/store/v1"
+        );
     }
 }

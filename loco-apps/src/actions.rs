@@ -5,6 +5,10 @@
 //! another project does not bind it. The production binary registers nothing
 //! (`AppOptions::default`); the Hurl fixture handlers live in the test runner.
 //!
+//! Type actions are a different registry, keyed `(project, type, name)`.
+//! See [`crate::integrations::TypeActionRegistry`]. This one stays
+//! `(project, name)`.
+//!
 //! Handlers are async. Outbound HTTP uses [`reqwest`]'s async client, so the
 //! call awaits on the request task. [`DataAdapter`] stays synchronous and
 //! runs on that same task: a call finishes without awaiting, so no lock is
