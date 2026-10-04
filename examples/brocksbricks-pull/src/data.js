@@ -31,12 +31,19 @@ const where = (field, op, value) => ({ field, op, value });
  */
 export async function readPlan() {
   const [settings, locations, openRuns, orders] = await Promise.all([
-    loco.queryAll({ collection: 'settings', fields: ['scale_threshold'] }),
+    // One record is the contract; if there are more, the oldest wins and
+    // the page says so.
+    loco.queryAll({
+      collection: 'settings',
+      fields: ['scale_threshold'],
+      order: [{ field: '$created_at' }],
+    }),
     loco.queryAll({ collection: 'location', fields: ['code', 'walk_order'] }),
     loco.queryAll({ collection: 'pull_run', where: where('status', 'eq', 'open'), fields: [] }),
     loco.queryAll({ collection: ORDERS, where: where(bl('status'), 'in', PULL_STATUSES), fields: [] }),
   ]);
   const threshold = settings[0]?.fields.scale_threshold;
+  const settingsCount = settings.length;
   if (threshold == null) {
     throw new Error('No settings record. Add one with a scale_threshold before planning a run.');
   }
@@ -51,6 +58,8 @@ export async function readPlan() {
   // Only the orders this run will take: an order already in an open run
   // costs no upstream call for its lines.
   const fresh = orders.filter((o) => !taken.has(o.id));
+  // 500 lines a page, and the source pages over a full upstream read, so
+  // past 500 lines each further page reads every order again (#141).
   const items = fresh.length
     ? await loco.queryAll({
         collection: ORDER_ITEMS,
@@ -58,7 +67,7 @@ export async function readPlan() {
       })
     : [];
   const plan = buildPlan({ orders, items, locations, threshold, allocated: taken });
-  return { ...plan, threshold, locations: locations.length };
+  return { ...plan, threshold, settingsCount, locations: locations.length };
 }
 
 /** Runs `tasks` with at most `limit` in flight, stopping at the first failure. */
@@ -84,7 +93,8 @@ async function pool(tasks, limit) {
  * `pick_allocation` per order line. /data has no batch insert, so that is
  * 1 + lines + allocations requests. The lake has no transactions either: a
  * failure leaves what was written, and the run is open, so its orders are
- * skipped by the next plan until the run is marked done.
+ * skipped by the next plan until the run is marked done. Both wait on
+ * batch writes (#142); nothing here works around them.
  */
 export function useCreateRun() {
   const qc = useQueryClient();
@@ -151,7 +161,11 @@ export function useLines(runId) {
   return { ...q, data: q.data ?? [] };
 }
 
-/** pick_line id → its allocations, from one query over the run. */
+/**
+ * pick_line id → one `{ bl_order_id, qty }` per order, from one query over
+ * the run. A lot in both batches of one order is two allocations; the picker
+ * bags it once, so the share is summed here.
+ */
 export function useSplits(runId) {
   return useQuery({
     queryKey: ['pick_allocation', runId],
@@ -163,12 +177,17 @@ export function useSplits(runId) {
         order: [{ field: 'bl_order_id', collation: 'natural' }],
       });
       const byLine = new Map();
-      for (const a of allocs) {
-        const list = byLine.get(a.fields.pick_line_id) ?? [];
-        list.push(a.fields);
-        byLine.set(a.fields.pick_line_id, list);
+      for (const { fields: a } of allocs) {
+        const shares = byLine.get(a.pick_line_id) ?? new Map();
+        shares.set(a.bl_order_id, (shares.get(a.bl_order_id) ?? 0) + a.qty);
+        byLine.set(a.pick_line_id, shares);
       }
-      return byLine;
+      return new Map(
+        [...byLine].map(([line, shares]) => [
+          line,
+          [...shares].map(([bl_order_id, qty]) => ({ bl_order_id, qty })),
+        ]),
+      );
     },
   });
 }

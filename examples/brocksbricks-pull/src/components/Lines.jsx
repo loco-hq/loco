@@ -83,8 +83,8 @@ function Line({ line, split, open, pending, onPick }) {
       </button>
       <div className="line-foot">
         <ul className="split" aria-label="per-order share">
-          {split.map((a, i) => (
-            <li key={i}>
+          {split.map((a) => (
+            <li key={a.bl_order_id}>
               <span className="mono">#{a.bl_order_id}</span> <strong>{a.qty}</strong>
             </li>
           ))}

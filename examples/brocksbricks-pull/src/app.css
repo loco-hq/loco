@@ -75,6 +75,13 @@ a {
   color: var(--danger);
 }
 
+.warning {
+  color: var(--unlocated);
+  background: var(--unlocated-bg);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
 .empty {
   color: var(--muted);
   text-align: center;

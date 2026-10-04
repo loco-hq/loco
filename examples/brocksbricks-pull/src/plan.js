@@ -21,6 +21,11 @@ export const locationKey = (text) => String(text ?? '').trim().toLowerCase();
  * location, or is empty, is `unlocated`: keyed by its trimmed remark instead,
  * so two different notes never merge, and kept, never dropped.
  *
+ * A line whose `qty` is not a positive integer is never summed as 0. Its
+ * whole order is held back: listed in `held` with the bad lines, and none of
+ * its lines planned, so the order is not in any run and the next plan reads
+ * it again once BrickLink has it right.
+ *
  * Lines come back in walk order within each station, then by item number
  * (natural), color, and condition. Unlocated lines have no walk order and
  * sort by remark, then item.
@@ -35,8 +40,20 @@ export const locationKey = (text) => String(text ?? '').trim().toLowerCase();
  */
 export function buildPlan({ orders, items, locations, threshold, allocated = [] }) {
   const taken = new Set(allocated);
-  const included = orders.map((o) => o.id).filter((id) => !taken.has(id));
   const skipped = orders.map((o) => o.id).filter((id) => taken.has(id));
+
+  // Orders with a line we cannot count are held back whole.
+  const bad = new Map();
+  for (const item of items) {
+    if (isQty(item.fields.qty)) continue;
+    const orderId = String(item.fields.order_id);
+    if (taken.has(orderId)) continue;
+    const list = bad.get(orderId) ?? [];
+    list.push({ order_item_id: item.id, item_no: item.fields.item_no, qty: item.fields.qty ?? null });
+    bad.set(orderId, list);
+  }
+  const held = [...bad].map(([bl_order_id, lines]) => ({ bl_order_id, lines }));
+  const included = orders.map((o) => o.id).filter((id) => !taken.has(id) && !bad.has(id));
   const wanted = new Set(included);
 
   const byCode = new Map();
@@ -71,7 +88,7 @@ export function buildPlan({ orders, items, locations, threshold, allocated = [] 
       };
       groups.set(key, line);
     }
-    const qty = Number(f.qty) || 0;
+    const qty = f.qty;
     line.qty += qty;
     line.allocations.push({
       bl_order_id: orderId,
@@ -89,8 +106,11 @@ export function buildPlan({ orders, items, locations, threshold, allocated = [] 
 
   const count = Object.fromEntries(STATIONS.map((s) => [s, 0]));
   for (const line of lines) count[line.station] += 1;
-  return { included, skipped, lines, count };
+  return { included, skipped, held, lines, count };
 }
+
+/** A quantity a line can be picked by: a positive integer, never coerced. */
+const isQty = (qty) => Number.isInteger(qty) && qty > 0;
 
 const natural = new Intl.Collator('en', { numeric: true });
 

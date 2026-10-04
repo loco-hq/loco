@@ -118,3 +118,24 @@ test('stored fields omit what a line does not have', () => {
     qty: 1,
   });
 });
+
+test('a line with no countable qty holds its whole order back, never as 0', () => {
+  const extra = [
+    item('1004', '601', { item_no: '3001', qty: 10, remarks: 'B-07-3' }),
+    item('1004', '602', { item_no: '3002', remarks: 'B-07-3' }),
+    item('1005', '603', { item_no: '3003', qty: 'lots', remarks: 'B-07-3' }),
+    item('1006', '604', { item_no: '3004', qty: 0, remarks: 'B-07-3' }),
+  ];
+  const all = [...orders, { id: '1004' }, { id: '1005' }, { id: '1006' }];
+  const p = buildPlan({ orders: all, items: [...items, ...extra], locations, threshold: 200, allocated: ['1003'] });
+  assert.deepEqual(p.included, ['1001', '1002']);
+  assert.deepEqual(p.held, [
+    { bl_order_id: '1004', lines: [{ order_item_id: '1004-1-602', item_no: '3002', qty: null }] },
+    { bl_order_id: '1005', lines: [{ order_item_id: '1005-1-603', item_no: '3003', qty: 'lots' }] },
+    { bl_order_id: '1006', lines: [{ order_item_id: '1006-1-604', item_no: '3004', qty: 0 }] },
+  ]);
+  // None of a held order's lines is planned, including its good one.
+  const planned = p.lines.flatMap((l) => l.allocations.map((a) => a.bl_order_id));
+  assert.ok(!planned.some((id) => ['1004', '1005', '1006'].includes(id)));
+  assert.deepEqual(p.count, plan.count);
+});

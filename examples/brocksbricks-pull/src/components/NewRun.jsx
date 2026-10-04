@@ -70,6 +70,19 @@ export default function NewRun() {
             <p className="hint">
               Scale at {plan.threshold} or more. {plan.locations} locations on file.
             </p>
+            {plan.settingsCount > 1 && (
+              <p className="warning">
+                There are {plan.settingsCount} settings records. Using the oldest one&rsquo;s scale
+                threshold, {plan.threshold}. Delete the others so the threshold is not a guess.
+              </p>
+            )}
+            {plan.held.length > 0 && (
+              <p className="warning">
+                Held back {plan.held.length} order{plan.held.length === 1 ? '' : 's'} with a line
+                that has no quantity to pick (below). They are not on this run, and the next plan
+                reads them again.
+              </p>
+            )}
             {plan.lines.length > 0 && (
               <>
                 <label>
@@ -86,6 +99,27 @@ export default function NewRun() {
             {plan.lines.length === 0 && <p className="empty">Nothing to pull.</p>}
             {create.error && <p className="error">{create.error.message}</p>}
           </div>
+
+          {plan.held.length > 0 && (
+            <div className="card">
+              <h2>Held back</h2>
+              <p className="hint">
+                Each order has a line whose quantity is missing or not a positive whole number. Fix
+                it in BrickLink, then plan again.
+              </p>
+              <ul className="plain">
+                {plan.held.flatMap((o) =>
+                  o.lines.map((l) => (
+                    <li key={l.order_item_id}>
+                      <span className="mono">#{o.bl_order_id}</span>{' '}
+                      <span className="mono">{l.item_no}</span> — quantity{' '}
+                      <span className="remark">{l.qty == null ? 'missing' : JSON.stringify(l.qty)}</span>
+                    </li>
+                  )),
+                )}
+              </ul>
+            </div>
+          )}
 
           {plan.count.unlocated > 0 && (
             <div className="card">
