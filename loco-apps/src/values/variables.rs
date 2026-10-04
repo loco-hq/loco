@@ -1,7 +1,8 @@
 //! Variable values as plain lake records in [`super::VARIABLES`].
 //!
 //! No trait: a variable is a string, and the lake already stores strings.
-//! The record id is the declaration reference, the same string a secret uses.
+//! The record id is the declaration reference, the same string a secret uses:
+//! a loose name, or `{qualified integration}:{name}` for a connection value.
 
 use std::collections::HashMap;
 

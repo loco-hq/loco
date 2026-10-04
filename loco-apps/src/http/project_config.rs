@@ -1883,4 +1883,350 @@ mod tests {
         assert_eq!(kept.collections()[0].name(), "invoice");
         assert_eq!(kept.collections()[0].fields()[0].name(), "amount");
     }
+
+    /// Connection values are `{integration}:{name}` on the dataset. Two
+    /// integrations of one type do not share a row. A loose secret of the
+    /// same bare name is a different row. A qualified name for this project's
+    /// own integration stores as the bare integration id, and delete strips
+    /// only a `{project}.` prefix, leaving the colon.
+    #[test]
+    fn connection_values_are_keyed_by_integration() {
+        use crate::http::config_values::ValueError;
+        use crate::http::version_schema::VersionSchema;
+        use crate::values::{get_variable, SecretStore};
+
+        let world = world(true);
+        let pkg = ProjectConfig::new(world.store.clone(), "alice", "pkg");
+        pkg.create_project("Pkg", "").unwrap();
+        pkg.create_version(VERSION.to_string()).unwrap();
+        let pkg_schema = VersionSchema::new(world.store.clone(), "alice/pkg", VERSION);
+        pkg_schema
+            .create_integration_type(crate::IntegrationType {
+                name: "warehouse".into(),
+                label: "Warehouse".into(),
+                secrets: vec![
+                    crate::IntegrationSecret {
+                        name: "token".into(),
+                        label: "Token".into(),
+                        required: true,
+                        ..crate::IntegrationSecret::default()
+                    },
+                    crate::IntegrationSecret {
+                        name: "consumer_key".into(),
+                        label: "Consumer key".into(),
+                        ..crate::IntegrationSecret::default()
+                    },
+                ],
+                variables: vec![crate::IntegrationVariable {
+                    name: "region".into(),
+                    label: "Region".into(),
+                    default: "us".into(),
+                    ..Default::default()
+                }],
+                ..crate::IntegrationType::default()
+            })
+            .unwrap();
+        pkg_schema
+            .create_integration(crate::Integration {
+                name: "store".into(),
+                label: "Store".into(),
+                r#type: "warehouse".into(),
+                ..crate::Integration::default()
+            })
+            .unwrap();
+
+        let crm = VersionSchema::new(world.store.clone(), PROJECT, VERSION);
+        crm.update_manifest(
+            crate::ManifestUpdate {
+                dependencies: Some(vec![format!("alice/pkg@{VERSION}")]),
+                ..crate::ManifestUpdate::default()
+            },
+            |_| true,
+        )
+        .unwrap();
+        let crm = VersionSchema::new(world.store.clone(), PROJECT, VERSION);
+        for name in ["sf_east", "sf_west"] {
+            crm.create_integration(crate::Integration {
+                name: name.into(),
+                label: name.into(),
+                r#type: "alice/pkg.warehouse".into(),
+                ..crate::Integration::default()
+            })
+            .unwrap();
+        }
+
+        let secrets = world
+            .config
+            .list_secret_values(&world.secrets, "dev")
+            .unwrap();
+        let secret_ids: Vec<_> = secrets
+            .iter()
+            .map(|row| {
+                (
+                    row.integration.clone(),
+                    row.project.as_str(),
+                    row.name.as_str(),
+                    row.set,
+                )
+            })
+            .collect();
+        assert_eq!(
+            secret_ids,
+            vec![
+                (None, PROJECT, "consumer_key", false),
+                (
+                    Some("alice/pkg.store".into()),
+                    "alice/pkg",
+                    "consumer_key",
+                    false
+                ),
+                (Some("alice/pkg.store".into()), "alice/pkg", "token", false),
+                (Some("sf_east".into()), PROJECT, "consumer_key", false),
+                (Some("sf_east".into()), PROJECT, "token", false),
+                (Some("sf_west".into()), PROJECT, "consumer_key", false),
+                (Some("sf_west".into()), PROJECT, "token", false),
+            ]
+        );
+        let variables = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        assert_eq!(variables[0].name, "api_base");
+        assert!(variables[0].integration.is_none());
+        assert_eq!(variables[0].source, Some("default"));
+        assert_eq!(
+            variables
+                .iter()
+                .skip(1)
+                .map(|row| (
+                    row.integration.as_deref(),
+                    row.name.as_str(),
+                    row.value.as_deref(),
+                    row.source
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    Some("alice/pkg.store"),
+                    "region",
+                    Some("us"),
+                    Some("default")
+                ),
+                (Some("sf_east"), "region", Some("us"), Some("default")),
+                (Some("sf_west"), "region", Some("us"), Some("default")),
+            ]
+        );
+
+        // No site pins `sandbox`, so the list is empty. The write is still
+        // allowed: some version of the project declares the integration.
+        world
+            .config
+            .create_dataset(Dataset::new(
+                String::new(),
+                "sandbox".into(),
+                "Sandbox".into(),
+                String::new(),
+            ))
+            .unwrap();
+        world
+            .config
+            .set_secret_value(&world.secrets, "sandbox", "sf_east:token", "early")
+            .unwrap();
+        assert!(world
+            .config
+            .list_secret_values(&world.secrets, "sandbox")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            world
+                .secrets
+                .get(&format!("{PROJECT}/sandbox"), "sf_east:token")
+                .unwrap()
+                .as_deref(),
+            Some("early")
+        );
+
+        world
+            .config
+            .set_secret_value(&world.secrets, "dev", "sf_east:token", "east")
+            .unwrap();
+        world
+            .config
+            .set_secret_value(&world.secrets, "dev", "sf_west:token", "west")
+            .unwrap();
+        world
+            .config
+            .set_secret_value(&world.secrets, "dev", "consumer_key", "loose-key")
+            .unwrap();
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "sf_east:token")
+                .unwrap()
+                .as_deref(),
+            Some("east")
+        );
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "sf_west:token")
+                .unwrap()
+                .as_deref(),
+            Some("west")
+        );
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("loose-key")
+        );
+        // The loose row does not satisfy, or overwrite, the connection row.
+        assert_ne!(
+            world
+                .secrets
+                .get(&dev_dataset(), "sf_east:consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("loose-key")
+        );
+
+        let qualified = format!("{PROJECT}.sf_east:token");
+        world
+            .config
+            .set_secret_value(&world.secrets, "dev", &qualified, "east-via-self")
+            .unwrap();
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "sf_east:token")
+                .unwrap()
+                .as_deref(),
+            Some("east-via-self")
+        );
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), &qualified)
+            .unwrap()
+            .is_none());
+
+        world
+            .config
+            .set_secret_value(
+                &world.secrets,
+                "dev",
+                "alice/pkg.store:consumer_key",
+                "dep-key",
+            )
+            .unwrap();
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "alice/pkg.store:consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("dep-key")
+        );
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("loose-key")
+        );
+
+        let err = world
+            .config
+            .set_secret_value(&world.secrets, "dev", "sf_east:nope", "nope")
+            .unwrap_err();
+        assert!(matches!(err, ValueError::Undeclared(_)), "{err}");
+        // A colon never falls through to the loose `consumer_key` row, and a
+        // bare name never writes a connection row. `token` is not a loose secret.
+        let err = world
+            .config
+            .set_secret_value(&world.secrets, "dev", "token", "nope")
+            .unwrap_err();
+        assert!(matches!(err, ValueError::Undeclared(_)), "{err}");
+
+        let listed = world
+            .config
+            .list_secret_values(&world.secrets, "dev")
+            .unwrap();
+        assert!(listed[0].integration.is_none());
+        assert!(listed[0].set);
+        assert_eq!(listed[4].integration.as_deref(), Some("sf_east"));
+        assert_eq!(listed[4].name, "token");
+        assert!(listed[4].set);
+        assert_eq!(listed[1].integration.as_deref(), Some("alice/pkg.store"));
+        assert_eq!(listed[1].name, "consumer_key");
+        assert!(listed[1].set);
+        assert_eq!(listed[1].project, "alice/pkg");
+
+        world
+            .config
+            .set_variable_value(world.data.as_ref(), "dev", "sf_east:region", "")
+            .unwrap();
+        let variables = world
+            .config
+            .list_variable_values(world.data.as_ref(), "dev")
+            .unwrap();
+        let east = variables
+            .iter()
+            .find(|row| row.integration.as_deref() == Some("sf_east"))
+            .unwrap();
+        assert!(east.set);
+        assert_eq!(east.source, Some("value"));
+        assert_eq!(east.value.as_deref(), Some(""));
+        let west = variables
+            .iter()
+            .find(|row| row.integration.as_deref() == Some("sf_west"))
+            .unwrap();
+        assert!(!west.set);
+        assert_eq!(west.source, Some("default"));
+        assert_eq!(west.value.as_deref(), Some("us"));
+        assert_eq!(
+            get_variable(world.data.as_ref(), &dev_dataset(), "sf_east:region")
+                .unwrap()
+                .as_deref(),
+            Some("")
+        );
+
+        world
+            .config
+            .delete_secret_value(&world.secrets, "dev", &qualified)
+            .unwrap();
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), "sf_east:token")
+            .unwrap()
+            .is_none());
+        let dependency_qualified = format!("{PROJECT}.alice/pkg.store:consumer_key");
+        world
+            .config
+            .delete_secret_value(&world.secrets, "dev", &dependency_qualified)
+            .unwrap();
+        assert!(world
+            .secrets
+            .get(&dev_dataset(), "alice/pkg.store:consumer_key")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "consumer_key")
+                .unwrap()
+                .as_deref(),
+            Some("loose-key")
+        );
+        assert_eq!(
+            world
+                .secrets
+                .get(&dev_dataset(), "sf_west:token")
+                .unwrap()
+                .as_deref(),
+            Some("west")
+        );
+    }
 }

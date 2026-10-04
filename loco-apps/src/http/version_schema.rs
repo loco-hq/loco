@@ -192,6 +192,38 @@ pub enum ActionAddressKind {
     },
 }
 
+/// Secrets and variables one integration's type declares, as the view that
+/// asked for them names that integration.
+///
+/// A connection reads only this list. A loose secret or variable of the same
+/// bare name is a different row and is not included.
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionDeclarations {
+    /// Canonical qualified integration from the asking view's project.
+    /// Bare for this project's integration (`sf_east`),
+    /// `{account}/{project}.{name}` for a dependency's
+    /// (`loco/bricklink.store`).
+    pub integration: String,
+    /// Project that declared the integration. The address root.
+    pub project: String,
+    pub secrets: Vec<ConnectionSecretDecl>,
+    pub variables: Vec<ConnectionVariableDecl>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionSecretDecl {
+    pub name: String,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionVariableDecl {
+    pub name: String,
+    pub required: bool,
+    /// The type's default. Empty means none.
+    pub default_value: String,
+}
+
 /// Wire row for `GET /actions` and `GET /actions/{name}`. Params stay in
 /// declared order. `integration` is omitted on an ordinary action.
 #[derive(Debug, Clone, Serialize)]
@@ -1393,6 +1425,50 @@ impl VersionSchema {
         self.store
             .integrations()
             .get(&Integration::to_path(project, version, name))
+    }
+
+    /// Secrets and variables of the integration `integration_project` declares
+    /// as `integration_name`, resolved from the version that declares it.
+    ///
+    /// `integration` is the canonical qualified name from **this** view's
+    /// project: bare when the integration is this project's (`sf_east`),
+    /// `{account}/{project}.{name}` when it is a dependency's
+    /// (`loco/bricklink.store`). The type may live on a project this view
+    /// does not itself depend on; the declaring version is what sees it.
+    /// `None` when the integration is not visible here, or its type is gone.
+    pub(crate) fn connection_declarations(
+        &self,
+        integration_project: &str,
+        integration_name: &str,
+    ) -> Option<ConnectionDeclarations> {
+        if !collection_name_ok(integration_name) {
+            return None;
+        }
+        let version = self.visible_version(integration_project)?;
+        let view = self.view_of(integration_project, version);
+        let doc = view.integration_at(integration_project, integration_name)?;
+        let ty = view.integration_type(doc.r#type())?;
+        Some(ConnectionDeclarations {
+            integration: self.reference(integration_project, integration_name),
+            project: integration_project.to_string(),
+            secrets: ty
+                .secrets()
+                .iter()
+                .map(|secret| ConnectionSecretDecl {
+                    name: secret.name().to_string(),
+                    required: secret.required(),
+                })
+                .collect(),
+            variables: ty
+                .variables()
+                .iter()
+                .map(|variable| ConnectionVariableDecl {
+                    name: variable.name().to_string(),
+                    required: variable.required(),
+                    default_value: variable.default().to_string(),
+                })
+                .collect(),
+        })
     }
 
     /// Stores `type` in canonical form: bare when this version declares it,

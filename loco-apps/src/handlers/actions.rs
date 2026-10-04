@@ -23,8 +23,8 @@ use crate::http::response::{
 };
 use crate::http::scope::SiteScope;
 use crate::http::version_schema::{ActionAddressKind, AddressResolution};
+use crate::integrations::dispatch_type_action;
 use crate::server::AppState;
-use crate::validation::validate_type_action_input;
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::get;
@@ -97,38 +97,42 @@ async fn run_action(
     if let Err(resp) = scope.require_can_write_data() {
         return resp;
     }
-    if let ActionAddressKind::Type {
-        type_project,
-        type_name,
-        action,
-    } = &address.kind
-    {
-        let action_ref = scope.schema.reference(&address.project, &address.local);
-        return run_type_action(
-            &scope,
-            &action_ref,
-            type_project,
-            type_name,
-            action,
-            &body.input,
-        );
-    }
     let dataset_id = scope.dataset_id();
-    match dispatch(
-        &scope.schema,
-        &state.actions,
-        &dataset_id,
-        HandlerDeps {
-            data: state.data_adapter.clone(),
-            secrets: state.secrets.clone(),
-            http: state.http.clone(),
-        },
-        scope.user(),
-        &name,
-        &body.input,
-    )
-    .await
-    {
+    let deps = HandlerDeps {
+        data: state.data_adapter.clone(),
+        secrets: state.secrets.clone(),
+        http: state.http.clone(),
+    };
+    // A type action reads the connection it was addressed to. An ordinary
+    // action keeps the loose-declaration path.
+    let outcome = if matches!(address.kind, ActionAddressKind::Type { .. }) {
+        dispatch_type_action(
+            &scope.schema,
+            &state.type_actions,
+            &dataset_id,
+            deps,
+            scope.user(),
+            &address,
+            &body.input,
+        )
+        .await
+    } else {
+        dispatch(
+            &scope.schema,
+            &state.actions,
+            &dataset_id,
+            deps,
+            scope.user(),
+            &name,
+            &body.input,
+        )
+        .await
+    };
+    dispatch_response(&name, outcome)
+}
+
+fn dispatch_response(name: &str, outcome: Dispatch) -> Response {
+    match outcome {
         Dispatch::NotFound => {
             error_response(StatusCode::NOT_FOUND, &format!("action not found: {name}"))
         }
@@ -145,31 +149,6 @@ async fn run_action(
         Dispatch::Done(value) => ApiResponse::success(value).into_response(),
         Dispatch::Failed(failure) => failure_response(failure),
     }
-}
-
-/// A type action. Resolve and the access check already happened. Input is
-/// validated, then 501. The type-action registry is not called and no
-/// [`crate::actions::ActionContext`] is built: a handler would read the type
-/// project's loose secrets, and integration code reads only the connection
-/// it was called for.
-fn run_type_action(
-    scope: &SiteScope,
-    action_ref: &str,
-    type_project: &str,
-    type_name: &str,
-    action: &crate::IntegrationAction,
-    input: &Map<String, serde_json::Value>,
-) -> Response {
-    if let Err(report) = validate_type_action_input(&scope.schema, action_ref, action, input) {
-        return validation_error_response(report.diagnostics);
-    }
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        &format!(
-            "no handler for action {type_project}.{type_name}.{}",
-            action.name()
-        ),
-    )
 }
 
 fn failure_response(failure: ActionFailure) -> Response {

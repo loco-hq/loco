@@ -215,6 +215,44 @@ fn suite_actions() {
     );
 }
 
+#[test]
+fn suite_connection_values() {
+    // Registered here, not in the server binary. The addresses suite keeps
+    // an empty type-action registry, so `sf_east:set_owner` stays 501.
+    let mut type_actions = loco_apps::integrations::TypeActionRegistry::default();
+    type_actions.register("alice/pkg", "warehouse", "read", |ctx| async move {
+        read_connection(ctx).await
+    });
+    run_suite_with(
+        &suites_dir().join("connection_values"),
+        AppOptions {
+            type_actions,
+            ..AppOptions::default()
+        },
+    );
+}
+
+async fn read_connection(
+    ctx: loco_apps::actions::ActionContext,
+) -> Result<serde_json::Value, loco_apps::actions::ActionFailure> {
+    let integration = ctx
+        .connection()
+        .expect("type action carries a connection")
+        .integration
+        .clone();
+    let loose = match ctx.secret("license") {
+        Ok(value) => serde_json::json!(value),
+        Err(err) => serde_json::json!({ "error": err.to_string() }),
+    };
+    Ok(serde_json::json!({
+        "integration": integration,
+        "token": ctx.secret("token")?,
+        "consumer_key": ctx.secret("consumer_key")?,
+        "region": ctx.variable("region")?,
+        "loose": loose,
+    }))
+}
+
 /// `GET /ok` is 200 `upstream ok`. `GET /fail` is 503 `upstream is down`.
 fn start_upstream() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
