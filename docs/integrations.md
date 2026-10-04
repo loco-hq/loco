@@ -18,16 +18,16 @@ A package that wraps an outside system (BrickLink, Salesforce) serves its collec
 
 An integration type declares:
 
-- The secrets and variables every connection of this type needs. A variable may have a default. A secret has no default and no value.
-- The standard collections it offers, and the actions it offers.
-
-The declaration list lives on the type document. A consumer sees it and cannot add to it. That is the same rule as an action's `params`: the list is the owner's, and version copy copies the document.
+- The secrets and variables every connection of this type needs. A variable may have a default. A secret has no default and no value. The list is inline on the type document. A consumer sees it and cannot add to it, the same rule as an action's `params`, and version copy copies the document.
+- The standard collections it offers, and the actions it offers, as documents under the type. A consumer cannot add those either. A name with no `:` does not find them, except through the root mount.
 
 ## Live, not synced
 
 Reads and writes on an integration's collections are calls to the outside system. v1 has no cache. A caching layer may sit in front of those calls later. It is not a second copy that `/data` reads instead.
 
 BrickLink allows about 5,000 calls a day. A load of 50 orders is one list call plus one items call per order, about 51 calls. Repeating that on every page load spends the quota. That cost is the cache's job later. It is not a reason to sync in v1.
+
+A public read grant on an integration collection spends that quota with the store's credentials: token-less `public` calls BrickLink as the store. A public `update` grant writes upstream. The permission set is still the consuming version's choice, as in [`identity.md`](identity.md).
 
 Record ids are the upstream ids. In `GET /data/loco%2Fbricklink.orders/29471234` the id is the BrickLink order id. Lake collections keep the ids `Record::new_for_insert` mints.
 
@@ -56,9 +56,11 @@ local        = name | integration ":" name
 
 ### Why `:`
 
-`.` already separates the project from `local`. A project id contains no `.`, so the first `.` is that boundary, including when `local` itself contains a `.` (`foo.bar` is a legal collection name). `VersionSchema::split` today takes the last `.` (`split_qualified`). That agrees with the first `.` only when `local` has none. Integration addresses use the first `.`.
+`.` already separates the project from `local`. A project id contains no `.`, so the first `.` is that boundary, including when `local` itself contains a `.` (`foo.bar` is a legal collection name).
 
-`:` is the integration separator because `collection_name_ok` does not allow it, and an action param is checked with the same charset. A type's secret and variable names use it too, so a value row id has one `:`. Adding an integration cannot change what an existing name means: `orders` and `warehouse:orders` are different strings, and `orders` keeps the meaning it had before `warehouse` existed.
+`split` (`split_qualified`) and grant matching (`collection_grant_matches`) both move to the first `.` for every name, not only an integration address. Today both take the last `.`, so `acme/crm.foo.bar` is read as project `acme/crm.foo` and is not found. The first `.` reads it as project `acme/crm` and name `foo.bar`. A name that resolves today has one `.` after the project id, so the first and the last are the same dot and the meaning does not change.
+
+`:` is the integration separator because `collection_name_ok` does not allow it. An action param is checked by `param_name_ok`, which is the same charset and not `collection_name_ok`. A type's secret and variable names use that charset too, so a value row id has one `:`. Adding an integration cannot change what an existing name means: `orders` and `warehouse:orders` are different strings, and `orders` keeps the meaning it had before `warehouse` existed.
 
 `/` is the project-id separator and the path separator. `.` cannot take the integration's job without a tie-breaker between `sf_east.account` (a dotted collection name, legal today) and an integration `sf_east` plus a collection `account`.
 
@@ -68,8 +70,8 @@ Parse is a property of the string. Resolve is a property of the version. Nothing
 
 1. If the string contains `/`, split on the first `.` into `project` and `local`. Otherwise `project` is self and `local` is the whole string. A project that is not self or a **direct** dependency is not found.
 2. If `local` contains `:`, split on the first `:` into `integration` and `name`. Each side must pass `collection_name_ok`. Otherwise `local` is `name` and there is no integration segment.
-3. With an integration segment: that project must declare an integration of that name, and `name` must be a standard collection or action of its type, or a custom collection that integration declares. The type's project must be self or a direct dependency on the version that declares the integration.
-4. With no integration segment, classify the name on that project. If the project has a root-mounted integration and the type lists this collection or action, the address is that connection. The document on the version is the schema; the records come from the source, and the action runs with that connection. Any other collection or action is ordinary: a lake collection, or an action with no integration, as today. A name is one of those, not both.
+3. With an integration segment: that project must declare an integration of that name, and `name` must be a collection or action document under its type, or a custom collection that integration declares. The type's project must be self or a direct dependency on the version that declares the integration.
+4. With no integration segment, look up an ordinary collection or action on that project, at the ordinary paths. A standard collection or a type action is not on those paths, so this step does not find it, unless the project has a root-mounted integration and the type has a document of this name. Then the address is that connection. `acme/salesforce.account` is not found when `account` lives under the type and salesforce has no root mount. `sf_east:account` is step 3.
 
 The root mount does not rewrite steps 1 or 2. It is how step 4 chooses a connection for a name that has no integration segment. The integration still has a name (`bricklink`). Collection and action addresses omit it. Value keys do not (below). A named integration never takes an existing spelling, because `:` is outside the charset. `warehouse:orders` is a new name even when `orders` already resolves.
 
@@ -112,9 +114,9 @@ collections:
     read: true
 ```
 
-`sf_east:account` does not grant `sf_west:account`. A set `acme/salesforce` ships grants addresses in `acme/salesforce`'s namespace. It does not grant the installer's `sf_east:account`. The example package has no root mount, so a bare `account` in that set is not `sf_east:account`. A consumer opts in by listing the set on the consuming version's manifest, as in [`identity.md`](identity.md). A bare grant is the set's own project. A qualified grant (`ben/sync.sf_east:account`) names that project exactly.
+`sf_east:account` does not grant `sf_west:account`. A set `acme/salesforce` ships grants addresses in `acme/salesforce`'s namespace. It does not grant the installer's `sf_east:account`. The example package has no root mount, so a bare `account` grant does not resolve to the type's `account`. A consumer opts in by listing the set on the consuming version's manifest, as in [`identity.md`](identity.md). A bare grant is the set's own project. A qualified grant (`ben/sync.sf_east:account`) names that project exactly. Grant matching uses the first-`.` split above.
 
-`public` and members are otherwise unchanged. Token-less `public` still cannot run an action.
+Members are unchanged. Token-less `public` still cannot run an action. A public data grant on an integration collection is a live call with the store's credentials; see [Live, not synced](#live-not-synced).
 
 ## Worked examples
 
@@ -127,11 +129,6 @@ The type. Secrets and variables are the connection's declarations. `base_url` is
 ```yaml
 # loco/bricklink  versions/1.0.0/integration_types/bricklink.yaml
 label: BrickLink
-collections:
-  - orders
-  - order_items
-actions:
-  - set_status
 secrets:
   - name: consumer_key
     label: Consumer key
@@ -161,16 +158,16 @@ type: bricklink
 root: true
 ```
 
-A standard collection. The document is the existing collection type; the type lists its name. The record id is the BrickLink order id, so the id is not also a field. `order_items` is the same kind of document: `item_no`, `item_type`, `color_id`, `color_name`, `condition`, `qty`, `remarks`, `inventory_id`, and `order_id` (the parent order). Fields are the type owner's, at the existing field path.
+A standard collection. It lives under the type. A name with no `:` does not find it except through this root mount. The record id is the BrickLink order id, so the id is not also a field. `order_items` is the same kind of document, under the same type: `item_no`, `item_type`, `color_id`, `color_name`, `condition`, `qty`, `remarks`, `inventory_id`, and `order_id` (the parent order). Fields belong to the type's owner.
 
 ```yaml
-# loco/bricklink  versions/1.0.0/collections/orders.yaml
+# loco/bricklink  versions/1.0.0/integration_types/bricklink/collections/orders.yaml
 label: Order
 label_plural: Orders
 ```
 
 ```yaml
-# loco/bricklink  versions/1.0.0/fields/orders/status.yaml
+# loco/bricklink  versions/1.0.0/integration_types/bricklink/fields/orders/status.yaml
 type: string
 label: Status
 ```
@@ -180,7 +177,7 @@ The other order fields are `buyer` (string), `date` (string, the API's timestamp
 An action the type offers. Reading orders is the collection, not this action. [#104](https://github.com/loco-hq/loco/issues/104) does not have to ship `set_status`; the block is here so the free integration's action address is visible. Params are the action's, as today.
 
 ```yaml
-# loco/bricklink  versions/1.0.0/actions/set_status.yaml
+# loco/bricklink  versions/1.0.0/integration_types/bricklink/actions/set_status.yaml
 label: Set status
 description: Sets one order's status. The order id is the BrickLink order id.
 params:
@@ -246,10 +243,6 @@ Whether BrickLink's source declares that it can honor `eq` on `status` is the ca
 ```yaml
 # acme/salesforce  versions/1.0.0/integration_types/salesforce.yaml
 label: Salesforce
-collections:
-  - account
-actions:
-  - set_owner
 secrets:
   - name: client_id
     label: Client id
@@ -278,7 +271,13 @@ label: Salesforce West
 type: acme/salesforce.salesforce
 ```
 
-Neither sets `root`. Standard `account` is addressed twice. Fields of `account` belong to `acme/salesforce`.
+Neither sets `root`. Standard `account` lives under the type and is addressed twice, as `sf_east:account` and `sf_west:account`. `acme/salesforce.account` has no `:` and no root mount, so it is not found. Fields of `account` belong to `acme/salesforce`.
+
+```yaml
+# acme/salesforce  versions/1.0.0/integration_types/salesforce/collections/account.yaml
+label: Account
+label_plural: Accounts
+```
 
 East has a custom object. It is a collection document under the integration, not a collection of the type, and not an ordinary collection named `invoice__c` (that name, bare, is a different address and a different document).
 
@@ -330,7 +329,7 @@ Compare the two orgs in one batch. Each query is authorized on its own. They are
 ```
 
 ```yaml
-# acme/salesforce  versions/1.0.0/actions/set_owner.yaml
+# acme/salesforce  versions/1.0.0/integration_types/salesforce/actions/set_owner.yaml
 label: Set owner
 description: Sets the owner of one Account. Runs against the integration in the address.
 params:
@@ -358,16 +357,22 @@ POST /actions/sf_east:set_owner
 
 | Document | Where | Who owns the fields or the list |
 |---|---|---|
-| Integration type | `${project}/versions/${version}/integration_types/${name}` | The package. Secrets, variables, the standard collection names, and the action names are inline. |
-| Standard collection, its fields, its actions | The existing collection, field, and action paths on the type's project | The type's owner. The type names them. |
+| Integration type | `${project}/versions/${version}/integration_types/${name}` | The package. Secrets and variables are inline. |
+| Standard collection, its fields, its actions | `.../integration_types/${type}/collections/${name}`, `.../fields/${collection}/${name}`, `.../actions/${name}` | The type's owner. A name with no `:` does not find these, except through the root mount. |
 | Integration | `${project}/versions/${version}/integrations/${name}` | The project that connected. `type` is bare for a type this project declares, qualified for a dependency's. |
 | Custom collection and its fields | `.../integrations/${integration}/collections/${name}` and `.../integrations/${integration}/fields/${name}/…` | The integration's owner. A bare `invoice__c` does not find this document. |
 
+Each type has its own directory, so two types in one project may both offer `orders`. The files do not collide, and a name with no `:` still does not find either, unless one of them is the root mount.
+
 Hard-coded path segments stay plural. `project` and `version` are template variables and stay out of the YAML body, as elsewhere.
 
-Writes are `/schema` and draft-only. Version copy copies the type document, so its secret and variable lists go with it, and copies integrations, custom collections, and their fields, along with the collections and actions it already copies. It does not copy datasets, records, or values.
+Writes are `/schema` and draft-only. Version copy copies the type directory (the type document, its collections, fields, and actions) and each integration directory (the integration and its custom collections and fields), along with the ordinary collections and actions it already copies. It does not copy datasets, records, or values.
 
-On a project with a root-mounted integration, a collection or action the type lists is that connection. One the type does not list is ordinary. Moving a name from one of those to the other is a 400 once the name resolves: setting `root`, clearing it, or editing the type's list would change what an existing address means. A name that does not resolve yet can be declared as the free integration's. On `loco/bricklink` that is the type and the root integration first, then the `orders` document. The document is the schema of the live collection, and it is not also a lake collection. Custom-collection files sit under the integration, so `invoice__c` bare and `sf_east:invoice__c` are different documents.
+In a version with a root mount, a name that has a collection or action document under that type may not equal an ordinary collection or action name. The check runs on both writes: saving the ordinary document, and saving the type's document or setting `root`. A second type in the same version is unaffected, because its documents are not on the ordinary paths and bare `orders` is the root mount's name only.
+
+An installer cannot declare a custom collection on a dependency's free integration. They declare their own integration, and the custom collection lives under that.
+
+Deleting an integration on a draft cascades its custom collections and fields (`delete_by_prefix`). A grant that names `sf_east:account` goes inert, the same as a grant on a deleted collection. Value rows stay. `DELETE` still removes a row without looking the declaration up. The value key carries neither version nor type, so re-declaring `sf_east` with another type reuses any rows whose declaration names match.
 
 Dynamic discovery is later. A type may offer a describe hook that **proposes** collection and field declarations into a draft. Someone publishes the draft. The remote system does not change a published version, and it does not change what a name resolves to on read. Until that hook exists, a custom object is written by hand, as `invoice__c` is above.
 
@@ -375,7 +380,7 @@ Dynamic discovery is later. A type may offer a describe hook that **proposes** c
 
 Connection credentials are declared on the type, not as loose secret and variable documents on the version. The declaration fields are the ones [#100](https://github.com/loco-hq/loco/issues/100) defined. A secret has `label`, `description`, and `required`, and a body that carries `default` or `value` is a 400. A variable may also have `default` (a string; empty means none). A secret and a variable of one name on one type are a 400. Whether a version may still declare a secret that is not a connection is an [open question](#open-questions).
 
-Values stay on the dataset, in the [#101](https://github.com/loco-hq/loco/issues/101) storage. `SecretStore` is plaintext in and plaintext out. `LakeSecretStore` stays AES-256-GCM, a random 12-byte nonce, additional data bound to the dataset id and the canonical name. Rows stay in the reserved lake collections `$secrets` and `$variables`, which are not schema collections. `LOCO_SECRET_KEY` unset or malformed is still 503, on a read as on `PUT`. `GET` of a secret still has no route. A list row still has no secret plaintext. A variable row still has `value` and `source` (`value` or `default`). Writes still require developer or org owner. List still allows any project role. Dataset and project delete still call `SecretStore::delete_dataset` before `DataAdapter::delete_dataset`, and a secret-store failure still leaves the lake in place. Version copy still does not copy values. The key still has no version in it: a draft and a published version that share an integration name share values on a dataset. The write rule is still "any version of this project declares it," so a store can set a credential before a site pins the version. The list is still the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing.
+Values stay on the dataset in the [#101](https://github.com/loco-hq/loco/issues/101) storage (`SecretStore`, `$secrets`, `$variables`). Storage, gates, and purge order are unchanged. A write is allowed when any version of the project declares the name, itself or through a direct dependency (`http/config_values.rs`). Brock's `loco/bricklink.bricklink:consumer_key` is the dependency half of that rule. The list is still the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing. Version copy still does not copy values.
 
 The row id changes. It is the qualified integration, then `:`, then the declaration's bare name.
 
@@ -389,7 +394,7 @@ The row id changes. It is the qualified integration, then `:`, then the declarat
 
 Handlers and sources read values only through the integration the address resolved to. `secret("consumer_key")` is that integration's row on the request's dataset. It is not resolved through `split`. A secret the installer declared under the same bare name, on the version or on another integration, is a different row. `Ok(None)` means this integration's type declares it and this dataset has not set it. A stored variable wins, including `""`. With no row, a non-empty default is returned. Asking for a name the type does not declare is a bug in the handler and is 500.
 
-Before the source or the handler runs, every required secret and variable of **this** integration must be set on the dataset, or the call is 400 `required configuration is not set`, one diagnostic per missing name. A non-empty variable default counts as set. The check uses `list` and does not decrypt, so an empty stored secret counts as set and the 400 does not contain plaintext. That is the [#102](https://github.com/loco-hq/loco/issues/102) check, scoped to the one integration.
+Before a source call or an integration action runs, every required secret and variable of **this** integration must be set on the dataset, or the call is 400 `required configuration is not set`, one diagnostic per missing name. The check is this integration's declarations only. It does not also require the owning project's loose declarations. Whether those loose declarations still exist, and whether an ordinary action checks them, is [open question 1](#open-questions). A non-empty variable default counts as set. The check uses `list` and does not decrypt, so an empty stored secret counts as set and the 400 does not contain plaintext. That is the [#102](https://github.com/loco-hq/loco/issues/102) check, scoped to the one integration.
 
 The HTTP client on the connection is the process-wide client actions already use: 5s to connect, 30s for the call, no proxy, same-host redirects, at most ten.
 
@@ -420,7 +425,9 @@ A query batch stays one response of named results. Queries for one lake collecti
       CollectionSource, with this connection          live
       or the cache, later, in that same place
       then merge the sidecar row                      #117, not built
-           key: (integration collection name, upstream id)
+           key: integration-qualified name + upstream id
+                loco/bricklink.bricklink:orders
+                sf_east:account
   write:
       upstream fields   →  the source, as a patch
       installer fields  →  the sidecar row            #117, not built
@@ -428,7 +435,7 @@ A query batch stays one response of named results. Queries for one lake collecti
 
 The sidecar and the cache are not part of v1. The trait's update takes upstream fields only, and the read path merges after the source returns, so both can be added without a second route and without the source knowing about them.
 
-[#117](https://github.com/loco-hq/loco/issues/117). An installer may later add a field to a dependency's collection. The owner's fields stay keyed bare in `fields`. The added field is keyed qualified (`brocksbricks/orders.picked_by`). BrickLink has nowhere to store `picked_by`. The added fields are a lake row keyed by the integration collection's name and the upstream id, merged on read. A patch that names both an upstream field and an added field writes each half in its own place. A handler that replaces `fields` wholesale would drop the added half; the source never receives it. Building that merge is #117, not the issues below.
+[#117](https://github.com/loco-hq/loco/issues/117). An installer may later add a field to a dependency's collection. The owner's fields stay keyed bare in `fields`. The added field is keyed qualified (`brocksbricks/orders.picked_by`). BrickLink has nowhere to store `picked_by`. The added fields are a lake row keyed by the integration-qualified collection name and the upstream id, merged on read. The collection half of that key is the integration's own name, root mount included: `loco/bricklink.bricklink:orders`, not the root address `loco/bricklink.orders`, and `sf_east:account`, not `acme/salesforce.account`. Two connections that share an upstream id do not share added fields. The key cannot collide with an ordinary lake key `{owner}.{name}`, because `:` is outside the collection charset. A patch that names both an upstream field and an added field writes each half in its own place. A handler that replaces `fields` wholesale would drop the added half; the source never receives it. Building that merge is #117, not the issues below.
 
 The cache, when it exists, sits in front of the source and behind the merge. A hit is still an upstream record, then the sidecar is applied. Callers do not choose cached versus live. v1 always takes the live branch.
 
@@ -442,14 +449,14 @@ System fields on a live record (`$created_at`, `$owner`, and the rest) are an [o
 
 - A credential that belongs to a connection is declared on the integration type (inline list: `label`, `description`, `required`, and `default` on a variable only). It is not a loose `${version}/secrets/${name}` document.
 - The value row id is `{qualified integration}:{name}` in the existing `$secrets` / `$variables` collections. `SecretStore`'s trait stays `put` / `get` / `delete` / `list` / `delete_dataset` of a dataset id and a name string. The name string grows the integration.
-- A handler or a source reads, and the required-config check lists, only the integration the call was addressed to.
+- A handler or a source reads only the integration the call was addressed to. An integration action's required-config check is that integration's declarations only. Loose declarations are [open question 1](#open-questions).
 - The list a client sees is one row per integration per declaration. The columns beyond today's `name`, `project`, `set`, and (for a variable) `value` and `source` are the listing question below.
 
-What does not change is the storage and the gates in the section above: encryption, 503, no secret `GET`, purge order, draft versus `/config`, member versus developer, defaults, and empty-secret-counts-as-set.
+Storage, gates, and purge order are unchanged ([#101](https://github.com/loco-hq/loco/issues/101)).
 
 [#104](https://github.com/loco-hq/loco/issues/104) stays the BrickLink package. It is edited in place when this document is accepted. It does not stay a sync into the lake.
 
-- Seed package `loco/bricklink`, published version `1.0.0`: the integration type, the free integration mounted at the root, and live collections `orders` and `order_items` with the fields in the Brock example.
+- Seed package `loco/bricklink`, published version `1.0.0`: the integration type, the free integration mounted at the root, and live collections `orders` and `order_items` with their fields and the example action under `integration_types/bricklink/`. A bare `orders` on that version is the root mount. An ordinary collection of the same name is a 400.
 - The four OAuth secrets, required, and `base_url` defaulting to the store API. CI sets `base_url` on the fixture dataset. No live BrickLink call in CI.
 - The OAuth 1.0a signer is unit-tested against a known-good signature.
 - A store that depends on `loco/bricklink@1.0.0` and has the four secrets set reads `loco%2Fbricklink.orders` and `loco%2Fbricklink.order_items` through `/data` and `/data/query`. There is no `sync_orders`, and no "skip item calls for unchanged orders," because nothing is cached.
@@ -465,9 +472,9 @@ What does not change is the storage and the gates in the section above: encrypti
 
 Not filed here. File these from the merged document. One shippable change each. #104 is an edit of the existing issue, not a fifth one. #117, #120, the cache, and the describe hook are not in this list.
 
-1. **Add integration type and integration declarations on a version.** The documents and paths above, inline secrets and variables, standard collections and actions named by the type, custom collections and their fields, the root-mount rules, draft writes, version copy of the declarations. A code registry keyed by owning project and type name, empty in the production binary. Blocked by nothing in this list. The loose-secret question is settled in issue 4, not by deleting the #100 types in this issue.
+1. **Add integration type and integration declarations on a version.** The documents and paths above, inline secrets and variables, standard collections, fields, and actions under the type, custom collections and their fields under the integration, the root-mount uniqueness check, draft delete of an integration, version copy of the declarations. A code registry keyed by owning project and type name, empty in the production binary. Blocked by nothing in this list. The loose-secret question is settled in issue 4, not by deleting the #100 types in this issue.
 
-2. **Resolve integration addresses.** The parse in `split`, one path segment on `/data` and `/actions`, `/data/query`, and grant matching against the address. Root-mount resolution. The 400 when a root name collides with an ordinary name. Listing rows are the open question; close it in this issue. The recommendation below is the proposal. Depends on issue 1.
+2. **Resolve integration addresses.** The parse in `split` and in grant matching, both on the first `.`, one path segment on `/data` and `/actions`, `/data/query`, and grant matching against the address. A name with no `:` finds a standard collection only through the root mount. The 400 when a root-mounted type's name equals an ordinary collection or action name, checked on both writes. Listing rows are the open question; close it in this issue. The recommendation below is the proposal. Depends on issue 1.
 
 3. **Route `/data` through `CollectionSource`.** The async trait, the connection argument, capability declaration, the lake implementation, upstream ids, and an error (never a widened result) for a verb or a filter the source does not declare. `/data` and `/data/query` call the trait. The read and write path keeps the seam in the diagram: sidecar merge and cache are not implemented. Depends on issues 1 and 2.
 
