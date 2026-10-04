@@ -108,6 +108,8 @@ The address is `reference(project, integration + ":" + name)` when `integration`
 
 Field names do not gain a new rule. A bare field means the running project. A standard collection's fields belong to the type's owner, so from `brocksbricks/orders` the filter is `loco/bricklink.status`, not `status`. A custom collection's fields belong to the integration's owner, so from `ben/sync` the filter on `sf_east:invoice__c` is the bare `amount`. This is the conservative rule in [`query.md`](query.md) (open question 1 there, answered for v1).
 
+An integration collection's fields are reachable because the address resolved. The caller names the field by its owner, the same way as above (`loco/bricklink.status`, bare `amount` when the caller is the owner). The owner does not also have to be a direct dependency of the caller's version. `alice/shop` can filter `ben/sync.sf_east:account` with `acme/salesforce.status` when `ben/sync` is a direct dependency and declares `sf_east`, even when `alice/shop` does not depend on `acme/salesforce`. The address brings those fields into scope. `acme/salesforce`'s ordinary collections, and a name without `:`, stay out of scope. That limit is still #108.
+
 A permission-set grant names the address the same way it names a collection today. `collection_grant_matches` compares the grant, after this parse, to the address the request resolved. The project in that comparison is the project the address is rooted in (who declared the integration, or who owns the ordinary collection), not the type owner that holds the fields.
 
 ```yaml

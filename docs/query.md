@@ -147,8 +147,9 @@ filtered by `batch_id` in the browser.
 }
 ```
 
-Records keep the lake shape (`id`, `created_at`, …, `fields`). With `fields`, the `fields` map
-holds only the named fields; system fields are always present.
+Records keep the lake shape (`id`, `created_at`, …, `fields`). A live integration record is
+`{id, fields}` only. With `fields`, the `fields` map holds only the named fields; system
+fields stay present on a lake record and are omitted on a live record except `id`.
 
 ## 4. Names
 
@@ -176,15 +177,22 @@ the same collection name. This is the conservative answer to
 [Open question 1](#open-questions); loosening it later is not breaking. A field name resolves to
 its bare name as the key in the record's `fields` map.
 
-Resolution uses `VersionSchema::collection_in` / `field_in`, which look only in the named
-project and only when it is self or a direct dependency.
+Resolution of an ordinary collection uses `VersionSchema::collection_in` / `field_in`, which
+look only in the named project and only when it is self or a direct dependency.
+
+An integration address is the exception to the direct-dependency check on the field's owner.
+The fields are the type's (a standard collection) or the integration project's (a custom
+collection), and that owner is in scope because the address resolved. The caller still writes
+the owner's name (`acme/salesforce.status`). A project the caller does not depend on is not
+otherwise visible. See docs/integrations.md, Listings, query, and grants.
 
 ### System fields
 
 Record metadata is not a schema field. It is addressed with a `$` prefix so it can never
 collide with a user field: `$id`, `$created_at`, `$created_by`, `$updated_at`, `$updated_by`,
-`$owner`. They can be used in `where` and `order`. They are always returned, so they don't go in
-`fields`.
+`$owner`. They can be used in `where` and `order`. On a lake record they are always returned, so
+they don't go in `fields`. A live integration record returns `id` and omits the rest. Filtering
+or ordering by a system field its source does not declare is `unsupported`.
 
 ## 5. Filters, order, cursors
 
@@ -301,7 +309,23 @@ Send it back as `"cursor"` on the same query to get the next page.
 | `lots/8a1e…/qty` | a field of that record |
 
 New `kind`s for queries: `unknown_collection`, `unknown_field`, `type_mismatch`,
-`invalid_query`, `forbidden`, `cursor_mismatch`, `limit_exceeded`.
+`invalid_query`, `forbidden`, `cursor_mismatch`, `limit_exceeded`. A query result can
+also carry:
+
+- `unsupported` — the source does not declare a verb, filter, order, direction, collation,
+  limit, or cursor the query uses. The query does not run.
+- `upstream` — the integration's upstream call failed. The message is
+  `upstream {status}: {message}` and does not include the request URL.
+- `unavailable` — reading this integration's connection values needs `LOCO_SECRET_KEY`, and
+  it is unset or malformed.
+- `failed` — the source failed for another reason. A lake error while reading this
+  integration's connection values is also `failed`, on this query only.
+- `required` — a required secret or variable of this integration is not set. The path is
+  the declaration name.
+- `no_source` — the address resolved and the caller may read it, and no source is registered
+  for the type. Reported after the grant check.
+- `ambiguous_address` — the address names both a standard collection and a custom collection.
+  Reported after the grant check, before `no_source`.
 
 - **Query diagnostics** (errors) are all collected before execution and returned in that
   query's result. The query does not run. Two exceptions stop early: an unresolvable
@@ -350,11 +374,16 @@ pub trait DataAdapter {
 ```
 
 One call per batch, so the adapter owns the snapshot: memory holds one read lock for the call,
-sqlite runs every query in one deferred transaction. `Page` is `records` plus `next`: the last
-record's effective order-key values, present only when more records follow (the adapter fetches
-`limit + 1` to know). `loco-apps` returns `cursor: null` exactly when `next` is `None`. It never
-guesses from `records.len() == limit`, which would hand out a cursor to an empty page. The cursor
-encoding lives in `loco-apps`, not the lake.
+sqlite runs every query in one deferred transaction. A failure of that call fails the whole
+request and drops every result. Reading an integration's connection values (`$secrets` and
+`$variables`) is a different lake read, done per query before its source call. A failure of
+that read is a per-query `failed` and does not fail the request.
+
+`Page` is `records` plus `next`: the last record's effective order-key values, present only
+when more records follow (the adapter fetches `limit + 1` to know). `loco-apps` returns
+`cursor: null` exactly when `next` is `None`. It never guesses from `records.len() == limit`,
+which would hand out a cursor to an empty page. The cursor encoding lives in `loco-apps`, not
+the lake.
 
 System fields are `FieldRef::System(SystemField::…)`, an enum, never keys in `fields`.
 

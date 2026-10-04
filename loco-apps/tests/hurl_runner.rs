@@ -232,6 +232,30 @@ fn suite_connection_values() {
     );
 }
 
+#[test]
+fn suite_collection_source() {
+    // Registered here, not in the server binary. The addresses suite keeps
+    // an empty source registry, so an integration collection there stays 501.
+    let east = start_record_upstream(&[("e1", "open"), ("e2", "closed")], &[]);
+    let west = start_record_upstream(&[("w1", "open")], &[]);
+    let hub = start_record_upstream(&[("h1", "open"), ("h2", "closed")], &[("n1", "hi")]);
+    let mut sources = loco_apps::integrations::SourceRegistry::default();
+    sources.register("alice/pkg", "warehouse", WarehouseSource);
+    run_suite_in(
+        &suites_dir().join("collection_source"),
+        AppOptions {
+            sources,
+            ..AppOptions::default()
+        },
+        &[],
+        &[
+            ("east", east.as_str()),
+            ("west", west.as_str()),
+            ("hub", hub.as_str()),
+        ],
+    );
+}
+
 async fn read_connection(
     ctx: loco_apps::integrations::TypeActionContext,
 ) -> Result<serde_json::Value, loco_apps::actions::ActionFailure> {
@@ -349,6 +373,439 @@ async fn pull(
         body["http_body"] = serde_json::json!(message);
     }
     Ok(body)
+}
+
+/// Fixture source for `alice/pkg`'s `warehouse` type. get, list, and query
+/// only. `$id` is the only system field, so `$created_at` and `gt` are
+/// capability errors. Two integrations reach different upstreams because
+/// each call reads that integration's `base_url` and `token`.
+struct WarehouseSource;
+
+#[loco_apps::source::async_trait]
+impl loco_apps::source::CollectionSource for WarehouseSource {
+    fn capabilities(&self) -> loco_apps::source::Capabilities {
+        loco_apps::source::Capabilities {
+            get: true,
+            list: true,
+            query: true,
+            eq: true,
+            asc: true,
+            binary: true,
+            limit: true,
+            cursor: true,
+            system: vec![loco_lake::SystemField::Id],
+            ..loco_apps::source::Capabilities::none()
+        }
+    }
+
+    async fn get(
+        &self,
+        call: loco_apps::source::SourceCall<'_>,
+        collection: &str,
+        id: &str,
+    ) -> Result<Option<loco_apps::source::SourceRecord>, loco_apps::source::SourceError> {
+        let response = http_get(&call, &format!("/{collection}/{id}")).await?;
+        if response.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        let body = success_body(response).await?;
+        Ok(Some(loco_apps::source::SourceRecord::Live(parse_one(
+            &body,
+        )?)))
+    }
+
+    async fn list(
+        &self,
+        call: loco_apps::source::SourceCall<'_>,
+        collection: &str,
+    ) -> Result<Vec<loco_apps::source::SourceRecord>, loco_apps::source::SourceError> {
+        let response = http_get(&call, &format!("/{collection}")).await?;
+        let body = success_body(response).await?;
+        Ok(parse_list(&body)?
+            .into_iter()
+            .map(loco_apps::source::SourceRecord::Live)
+            .collect())
+    }
+
+    async fn insert(
+        &self,
+        _: loco_apps::source::SourceCall<'_>,
+        _: &str,
+        _: loco_lake::InsertRequest,
+    ) -> Result<loco_apps::source::SourceRecord, loco_apps::source::SourceError> {
+        Err(loco_apps::source::SourceError::Failed {
+            message: "warehouse does not insert".into(),
+        })
+    }
+
+    async fn update(
+        &self,
+        _: loco_apps::source::SourceCall<'_>,
+        _: &str,
+        _: &str,
+        _: loco_lake::UpdatePatch,
+    ) -> Result<loco_apps::source::SourceRecord, loco_apps::source::SourceError> {
+        Err(loco_apps::source::SourceError::Failed {
+            message: "warehouse does not update".into(),
+        })
+    }
+
+    async fn delete(
+        &self,
+        _: loco_apps::source::SourceCall<'_>,
+        _: &str,
+        _: &str,
+    ) -> Result<(), loco_apps::source::SourceError> {
+        Err(loco_apps::source::SourceError::Failed {
+            message: "warehouse does not delete".into(),
+        })
+    }
+
+    async fn query(
+        &self,
+        call: loco_apps::source::SourceCall<'_>,
+        queries: &[loco_lake::LakeQuery],
+    ) -> Result<Vec<loco_apps::source::SourcePage>, loco_apps::source::SourceError> {
+        let mut pages = Vec::new();
+        for query in queries {
+            let response = http_get(&call, &format!("/{}", query.collection)).await?;
+            let body = success_body(response).await?;
+            pages.push(apply_query(parse_list(&body)?, query)?);
+        }
+        Ok(pages)
+    }
+}
+
+async fn http_get(
+    call: &loco_apps::source::SourceCall<'_>,
+    path: &str,
+) -> Result<reqwest::Response, loco_apps::source::SourceError> {
+    let connection = call
+        .connection
+        .ok_or_else(|| loco_apps::source::SourceError::Failed {
+            message: "a collection source requires a connection".into(),
+        })?;
+    let base = connection.variable("base_url")?.unwrap_or_default();
+    let token = connection.secret("token")?.unwrap_or_default();
+    let base = base.trim_end_matches('/');
+    Ok(connection
+        .http()
+        .get(format!("{base}{path}"))
+        .header("X-Token", token)
+        .send()
+        .await?)
+}
+
+async fn success_body(
+    response: reqwest::Response,
+) -> Result<String, loco_apps::source::SourceError> {
+    let status = response.status().as_u16();
+    let message = response.text().await?.trim().to_string();
+    if !(200..300).contains(&status) {
+        return Err(loco_apps::source::SourceError::Upstream { status, message });
+    }
+    Ok(message)
+}
+
+fn parse_one(body: &str) -> Result<loco_apps::source::LiveRecord, loco_apps::source::SourceError> {
+    serde_json::from_str(body).map_err(|_| loco_apps::source::SourceError::Failed {
+        message: "upstream record was not JSON".into(),
+    })
+}
+
+fn parse_list(
+    body: &str,
+) -> Result<Vec<loco_apps::source::LiveRecord>, loco_apps::source::SourceError> {
+    serde_json::from_str(body).map_err(|_| loco_apps::source::SourceError::Failed {
+        message: "upstream record was not JSON".into(),
+    })
+}
+
+fn apply_query(
+    records: Vec<loco_apps::source::LiveRecord>,
+    query: &loco_lake::LakeQuery,
+) -> Result<loco_apps::source::SourcePage, loco_apps::source::SourceError> {
+    use std::cmp::Ordering;
+
+    let mut rows = Vec::new();
+    for record in records {
+        if let Some(filter) = &query.filter {
+            if !matches_filter(&record, filter)? {
+                continue;
+            }
+        }
+        rows.push(record);
+    }
+    let order = query.effective_order();
+    if order
+        .iter()
+        .any(|key| key.dir == loco_lake::Direction::Desc)
+    {
+        return Err(loco_apps::source::SourceError::Failed {
+            message: "unexpected direction".into(),
+        });
+    }
+    rows.sort_by(|left, right| cmp_records(left, right, &order));
+    if let Some(after) = &query.after {
+        rows.retain(|record| after_cmp(record, after, &order) == Ordering::Greater);
+    }
+    let more = rows.len() > query.limit;
+    rows.truncate(query.limit);
+    let next = if more {
+        rows.last().map(|record| {
+            order
+                .iter()
+                .map(|key| field_value(record, &key.field))
+                .collect()
+        })
+    } else {
+        None
+    };
+    Ok(loco_apps::source::SourcePage {
+        records: rows
+            .into_iter()
+            .map(loco_apps::source::SourceRecord::Live)
+            .collect(),
+        next,
+    })
+}
+
+fn matches_filter(
+    record: &loco_apps::source::LiveRecord,
+    filter: &loco_lake::Filter,
+) -> Result<bool, loco_apps::source::SourceError> {
+    match filter {
+        loco_lake::Filter::Compare { field, op, value } => {
+            if !matches!(op, loco_lake::CompareOp::Eq) {
+                return Err(loco_apps::source::SourceError::Failed {
+                    message: "unexpected op".into(),
+                });
+            }
+            Ok(values_eq(&field_value(record, field), value))
+        }
+        loco_lake::Filter::And(filters) => {
+            for filter in filters {
+                if !matches_filter(record, filter)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => Err(loco_apps::source::SourceError::Failed {
+            message: "unexpected op".into(),
+        }),
+    }
+}
+
+fn field_value(
+    record: &loco_apps::source::LiveRecord,
+    field: &loco_lake::FieldRef,
+) -> loco_lake::Value {
+    match field {
+        loco_lake::FieldRef::System(loco_lake::SystemField::Id) => {
+            loco_lake::Value::String(record.id.clone())
+        }
+        loco_lake::FieldRef::System(_) => loco_lake::Value::Null,
+        loco_lake::FieldRef::Field(name) => record
+            .fields
+            .get(name)
+            .cloned()
+            .unwrap_or(loco_lake::Value::Null),
+    }
+}
+
+fn values_eq(left: &loco_lake::Value, right: &loco_lake::Value) -> bool {
+    match (left, right) {
+        (loco_lake::Value::Null, loco_lake::Value::Null) => true,
+        (loco_lake::Value::String(left), loco_lake::Value::String(right)) => left == right,
+        (loco_lake::Value::Integer(left), loco_lake::Value::Integer(right)) => left == right,
+        (loco_lake::Value::Boolean(left), loco_lake::Value::Boolean(right)) => left == right,
+        (loco_lake::Value::Float(left), loco_lake::Value::Float(right)) => left == right,
+        (loco_lake::Value::Integer(left), loco_lake::Value::Float(right)) => *left as f64 == *right,
+        (loco_lake::Value::Float(left), loco_lake::Value::Integer(right)) => *left == *right as f64,
+        _ => false,
+    }
+}
+
+fn cmp_records(
+    left: &loco_apps::source::LiveRecord,
+    right: &loco_apps::source::LiveRecord,
+    order: &[loco_lake::OrderKey],
+) -> std::cmp::Ordering {
+    for key in order {
+        let cmp = cmp_value(
+            &field_value(left, &key.field),
+            &field_value(right, &key.field),
+        );
+        if cmp != std::cmp::Ordering::Equal {
+            return cmp;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn after_cmp(
+    record: &loco_apps::source::LiveRecord,
+    after: &[loco_lake::Value],
+    order: &[loco_lake::OrderKey],
+) -> std::cmp::Ordering {
+    for (key, value) in order.iter().zip(after) {
+        let cmp = cmp_value(&field_value(record, &key.field), value);
+        if cmp != std::cmp::Ordering::Equal {
+            return cmp;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn cmp_value(left: &loco_lake::Value, right: &loco_lake::Value) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let kind = |value: &loco_lake::Value| match value {
+        loco_lake::Value::Null => 0,
+        loco_lake::Value::Boolean(_) => 1,
+        loco_lake::Value::Integer(_) | loco_lake::Value::Float(_) => 2,
+        loco_lake::Value::String(_) => 3,
+    };
+    match kind(left).cmp(&kind(right)) {
+        Ordering::Equal => {}
+        other => return other,
+    }
+    match (left, right) {
+        (loco_lake::Value::String(left), loco_lake::Value::String(right)) => left.cmp(right),
+        (loco_lake::Value::Integer(left), loco_lake::Value::Integer(right)) => left.cmp(right),
+        (loco_lake::Value::Boolean(left), loco_lake::Value::Boolean(right)) => left.cmp(right),
+        _ => Ordering::Equal,
+    }
+}
+
+/// `items` are `(id, status)`. `notes` are `(id, body)` for the custom
+/// collection. `GET /fail` is 503. The token header is copied into `seen`.
+fn start_record_upstream(items: &[(&str, &str)], notes: &[(&str, &str)]) -> String {
+    let items: Vec<(String, String)> = items
+        .iter()
+        .map(|(id, status)| ((*id).to_string(), (*status).to_string()))
+        .collect();
+    let notes: Vec<(String, String)> = notes
+        .iter()
+        .map(|(id, body)| ((*id).to_string(), (*body).to_string()))
+        .collect();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let _ = answer_records(stream, &items, &notes);
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+fn answer_records(
+    mut stream: std::net::TcpStream,
+    items: &[(String, String)],
+    notes: &[(String, String)],
+) -> std::io::Result<()> {
+    use std::io::Read;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 1024];
+    loop {
+        match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|window| window == b"\r\n\r\n") || buf.len() > 8192 {
+                    break;
+                }
+            }
+            Err(err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                break;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    let req = String::from_utf8_lossy(&buf);
+    let path = req.split_whitespace().nth(1).unwrap_or("/");
+    let path = path.split('?').next().unwrap_or(path);
+    let token = header_value(&req, "x-token");
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    let collection = parts.next().unwrap_or("");
+    let id = parts.next();
+    if collection == "fail" {
+        return write_http(
+            &mut stream,
+            503,
+            "Service Unavailable",
+            "text/plain",
+            "upstream is down",
+        );
+    }
+    let rows: &[(String, String)] = match collection {
+        "items" => items,
+        "note" => notes,
+        _ => return write_http(&mut stream, 404, "Not Found", "text/plain", "no"),
+    };
+    let body = match id {
+        None => {
+            let records: Vec<_> = rows
+                .iter()
+                .map(|(id, value)| record_json(collection, id, value, token))
+                .collect();
+            serde_json::to_string(&records).unwrap_or_else(|_| "[]".into())
+        }
+        Some(id) => match rows.iter().find(|(row_id, _)| row_id == id) {
+            Some((id, value)) => serde_json::to_string(&record_json(collection, id, value, token))
+                .unwrap_or_else(|_| "{}".into()),
+            None => return write_http(&mut stream, 404, "Not Found", "text/plain", "no"),
+        },
+    };
+    write_http(&mut stream, 200, "OK", "application/json", &body)
+}
+
+fn record_json(collection: &str, id: &str, value: &str, token: &str) -> serde_json::Value {
+    let mut fields = serde_json::Map::new();
+    match collection {
+        "note" => {
+            fields.insert("body".into(), serde_json::Value::String(value.to_string()));
+        }
+        _ => {
+            fields.insert(
+                "status".into(),
+                serde_json::Value::String(value.to_string()),
+            );
+        }
+    }
+    fields.insert("seen".into(), serde_json::Value::String(token.to_string()));
+    serde_json::json!({ "id": id, "fields": fields })
+}
+
+fn header_value<'a>(req: &'a str, name: &str) -> &'a str {
+    for line in req.lines() {
+        if let Some((key, value)) = line.split_once(':') {
+            if key.eq_ignore_ascii_case(name) {
+                return value.trim();
+            }
+        }
+    }
+    ""
+}
+
+fn write_http(
+    stream: &mut std::net::TcpStream,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes())?;
+    stream.flush()
 }
 
 #[test]

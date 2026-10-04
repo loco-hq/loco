@@ -5,12 +5,13 @@
 //! Ordinary actions stay [`crate::actions::HandlerRegistry`], keyed by
 //! `(project, name)` only.
 //!
-//! Both registries are empty in the production binary. There is no source
-//! trait yet: [`RegisteredSource`] is a placeholder until `CollectionSource`
-//! exists. A resolved type action with no handler is 501. One with a handler
-//! runs with a [`TypeActionContext`] for the integration the address named.
-//! That context's connection reads the integration's values. It does not
-//! read the type project's loose secrets. Sources are not dispatched.
+//! Both registries are empty in the production binary. A source is a
+//! [`crate::source::CollectionSource`]: `/data` dispatches it for that type's
+//! standard and custom collections. An address with no registration is 501
+//! before the required-value check. A resolved type action with no handler
+//! is 501. One with a handler runs with a [`TypeActionContext`] for the
+//! integration the address named. That context's connection reads the
+//! integration's values. It does not read the type project's loose secrets.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -65,24 +66,37 @@ impl TypeActionContext {
     }
 }
 
-/// Placeholder registered for one integration type.
-///
-/// `CollectionSource` is not this issue. The map exists so a later trait
-/// object can take this slot without a second key.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RegisteredSource;
-
 /// Sources keyed by `(owning project, type name)`.
+///
+/// One source serves every integration of that type. The connection on the
+/// call says which integration. Empty in the server binary.
 #[derive(Clone, Default)]
 pub struct SourceRegistry {
-    sources: HashMap<(String, String), RegisteredSource>,
+    sources: HashMap<(String, String), Arc<dyn crate::source::CollectionSource>>,
 }
 
 impl SourceRegistry {
-    /// Record that `project`'s integration type `type_name` has a source.
-    pub fn register(&mut self, project: impl Into<String>, type_name: impl Into<String>) {
+    /// Register `source` for `project`'s integration type `type_name`.
+    pub fn register<S>(
+        &mut self,
+        project: impl Into<String>,
+        type_name: impl Into<String>,
+        source: S,
+    ) where
+        S: crate::source::CollectionSource + 'static,
+    {
         self.sources
-            .insert((project.into(), type_name.into()), RegisteredSource);
+            .insert((project.into(), type_name.into()), Arc::new(source));
+    }
+
+    pub fn get(
+        &self,
+        project: &str,
+        type_name: &str,
+    ) -> Option<Arc<dyn crate::source::CollectionSource>> {
+        self.sources
+            .get(&(project.to_string(), type_name.to_string()))
+            .cloned()
     }
 
     pub fn contains(&self, project: &str, type_name: &str) -> bool {
@@ -232,14 +246,73 @@ pub(crate) async fn dispatch_type_action(
 mod tests {
     use super::*;
 
+    use crate::source::{
+        async_trait, Capabilities, CollectionSource, SourceCall, SourceError, SourcePage,
+        SourceRecord,
+    };
+
+    /// Registry tests only check the key. The methods are never called.
+    struct Unused;
+
+    #[async_trait]
+    impl CollectionSource for Unused {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::none()
+        }
+
+        async fn get(
+            &self,
+            _: SourceCall<'_>,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<SourceRecord>, SourceError> {
+            panic!("unused")
+        }
+
+        async fn list(&self, _: SourceCall<'_>, _: &str) -> Result<Vec<SourceRecord>, SourceError> {
+            panic!("unused")
+        }
+
+        async fn insert(
+            &self,
+            _: SourceCall<'_>,
+            _: &str,
+            _: loco_lake::InsertRequest,
+        ) -> Result<SourceRecord, SourceError> {
+            panic!("unused")
+        }
+
+        async fn update(
+            &self,
+            _: SourceCall<'_>,
+            _: &str,
+            _: &str,
+            _: loco_lake::UpdatePatch,
+        ) -> Result<SourceRecord, SourceError> {
+            panic!("unused")
+        }
+
+        async fn delete(&self, _: SourceCall<'_>, _: &str, _: &str) -> Result<(), SourceError> {
+            panic!("unused")
+        }
+
+        async fn query(
+            &self,
+            _: SourceCall<'_>,
+            _: &[loco_lake::LakeQuery],
+        ) -> Result<Vec<SourcePage>, SourceError> {
+            panic!("unused")
+        }
+    }
+
     #[test]
     fn registries_key_by_type_and_start_empty() {
         let sources = SourceRegistry::default();
         assert!(!sources.contains("alice/pkg", "bricklink"));
 
         let mut sources = SourceRegistry::default();
-        sources.register("alice/pkg", "bricklink");
-        sources.register("alice/pkg", "warehouse");
+        sources.register("alice/pkg", "bricklink", Unused);
+        sources.register("alice/pkg", "warehouse", Unused);
         assert!(sources.contains("alice/pkg", "bricklink"));
         assert!(sources.contains("alice/pkg", "warehouse"));
         assert!(!sources.contains("alice/shop", "bricklink"));

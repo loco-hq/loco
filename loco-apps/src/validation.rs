@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use loco_lake::Value;
 
-use crate::http::version_schema::VersionSchema;
+use crate::http::version_schema::{InlineField, VersionSchema};
 use crate::{Action, IntegrationAction, IntegrationActionParam};
 
 /// Stable string identifiers for the `kind` field on diagnostics. Clients can
@@ -25,6 +25,18 @@ pub mod kind {
     pub const TYPE_MISMATCH: &str = "type_mismatch";
     pub const INVALID_OPTION: &str = "invalid_option";
     pub const REQUIRED: &str = "required";
+    /// A verb, filter, order, limit, or cursor the collection's source does
+    /// not declare. The result is this error, never a widened page.
+    pub const UNSUPPORTED: &str = "unsupported";
+    /// The integration source's upstream call failed. The message is
+    /// `upstream {status}: {message}` and does not include the request URL.
+    pub const UPSTREAM: &str = "upstream";
+    /// Reading connection values needs `LOCO_SECRET_KEY`, and it is unset
+    /// or malformed.
+    pub const UNAVAILABLE: &str = "unavailable";
+    /// The source failed, or a lake read of this integration's connection
+    /// values failed. On a query the latter stays inside that query.
+    pub const FAILED: &str = "failed";
 }
 
 /// The types a collection field may declare. `/schema` field writes reject
@@ -372,6 +384,75 @@ where
     combined
 }
 
+/// [`validate_record`] for an integration collection's inline fields.
+///
+/// `collection` is the canonical address (`east:items`,
+/// `alice/sync.hub:items`), which is what the diagnostic names. The specs
+/// are the type's fields or the integration's, not ordinary field documents.
+pub fn validate_inline_record(
+    specs: &[InlineField],
+    collection: &str,
+    version: &str,
+    fields: &HashMap<String, Value>,
+    mode: ValidationMode,
+) -> ValidationReport {
+    check_inline(specs, collection, version, fields, mode, None)
+}
+
+/// [`validate_records`] for inline integration fields. `projection` is the
+/// query's `fields` list; `None` means the whole record.
+pub fn validate_inline_records<'a, I>(
+    specs: &[InlineField],
+    collection: &str,
+    version: &str,
+    records: I,
+    mode: ValidationMode,
+    projection: Option<&[String]>,
+) -> ValidationReport
+where
+    I: IntoIterator<Item = (&'a str, &'a HashMap<String, Value>)>,
+{
+    let mut combined = ValidationReport::default();
+    for (id, fields) in records {
+        let report = check_inline(specs, collection, version, fields, mode, projection);
+        if !report.is_empty() {
+            combined.extend(report.prefix_paths(id));
+        }
+    }
+    combined
+}
+
+fn check_inline(
+    specs_in: &[InlineField],
+    collection: &str,
+    version: &str,
+    fields: &HashMap<String, Value>,
+    mode: ValidationMode,
+    projection: Option<&[String]>,
+) -> ValidationReport {
+    let specs: Vec<ScalarSpec> = specs_in
+        .iter()
+        .map(|field| ScalarSpec {
+            name: &field.name,
+            ty: &field.ty,
+            required: field.required,
+            options: field.options.iter().map(String::as_str).collect(),
+        })
+        .collect();
+    check_scalars(
+        &specs,
+        fields,
+        &[],
+        mode,
+        Wording {
+            noun: "field",
+            container: &format!("collection '{collection}'"),
+            version,
+        },
+        projection,
+    )
+}
+
 /// Validate `input` against `action`'s params, the same walk and the same
 /// diagnostic kinds as a `/data` create. `Ok` is the input as lake values,
 /// ready for the handler. `Err` means the handler must not run.
@@ -555,6 +636,10 @@ mod tests {
         assert_eq!(kind::TYPE_MISMATCH, "type_mismatch");
         assert_eq!(kind::INVALID_OPTION, "invalid_option");
         assert_eq!(kind::REQUIRED, "required");
+        assert_eq!(kind::UNSUPPORTED, "unsupported");
+        assert_eq!(kind::UPSTREAM, "upstream");
+        assert_eq!(kind::UNAVAILABLE, "unavailable");
+        assert_eq!(kind::FAILED, "failed");
     }
 
     #[test]

@@ -13,11 +13,15 @@
 //! integration (`sf_east:account`). Resolution goes through
 //! [`VersionSchema::collection_address`] / [`VersionSchema::field_in`].
 //!
-//! An integration collection has no source yet. After the caller is allowed
-//! to read it, that query's result is `no_source` and the lake is not called.
-//! An address that names both a standard collection and a custom collection
-//! is `ambiguous_address` after that same grant check. Routing through a
-//! source is a later issue.
+//! An integration collection is planned here and run by the handler on the
+//! type's source. The cursor hash binds to the canonical address
+//! (`east:items`, `alice/sync.hub:items`), not the type owner's lake key.
+//! A missing registration is still `no_source`, after the grant check. An
+//! address that names both a standard collection and a custom collection is
+//! `ambiguous_address` after that same check. An integration collection's
+//! fields are in scope because the address resolved: the caller still writes
+//! the owner's name, and the owner does not also have to be a direct
+//! dependency. See `docs/integrations.md`.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -43,10 +47,12 @@ pub const MAX_DEPTH: usize = 8;
 /// Comparisons in one `where`.
 pub const MAX_COMPARISONS: usize = 100;
 
-/// Diagnostic kinds a query can produce, beside `unknown_field` and
-/// `type_mismatch` from `validation::kind`.
+/// Diagnostic kinds a query can produce. Field and source kinds are the
+/// constants in `validation::kind`; the rest are query-only.
 pub mod kind {
-    pub use crate::validation::kind::{TYPE_MISMATCH, UNKNOWN_FIELD};
+    pub use crate::validation::kind::{
+        FAILED, TYPE_MISMATCH, UNAVAILABLE, UNKNOWN_FIELD, UNSUPPORTED, UPSTREAM,
+    };
     pub const UNKNOWN_COLLECTION: &str = "unknown_collection";
     pub const INVALID_QUERY: &str = "invalid_query";
     pub const FORBIDDEN: &str = "forbidden";
@@ -113,8 +119,9 @@ pub struct Target {
     pub local: String,
     /// Address root. Grants match this, not the type owner.
     pub address_project: String,
-    /// Set when the address names a connection. The handler does not plan a
-    /// lake query for it.
+    /// Set when the address names a connection. The handler plans the query
+    /// and routes it to the type's source. The cursor hash uses the canonical
+    /// address, then the handler passes the bare collection name to the source.
     pub integration: Option<String>,
     /// Both a standard collection and a custom collection share this address.
     /// The handler reports it after the grant check.
@@ -193,6 +200,7 @@ pub fn plan(
     name: &str,
     raw: &Json,
     target: Target,
+    order_when_omitted: &[OrderKey],
 ) -> Result<Plan, Vec<Diagnostic>> {
     let obj = raw.as_object().expect("target() accepted an object");
     let mut cx = Resolver {
@@ -218,12 +226,11 @@ pub fn plan(
     let fields = obj.get("fields").and_then(|f| cx.fields(f, name));
     let order = match obj.get("order") {
         Some(o) => cx.order(o, name),
-        // The API's default. The lake only appends `id`; it has no default of
-        // its own.
-        None => Some(vec![
-            OrderKey::asc(FieldRef::System(SystemField::CreatedAt)),
-            OrderKey::asc(FieldRef::System(SystemField::Id)),
-        ]),
+        // The caller's default for this source. The lake passes
+        // `$created_at` then `$id`, which is what cursors already hash. A
+        // source that does not declare `$created_at` must not have that key
+        // injected. The lake still appends `$id` unless it is already last.
+        None => Some(order_when_omitted.to_vec()),
     };
     let limit = cx.limit(obj.get("limit"), name);
 
@@ -238,6 +245,12 @@ pub fn plan(
     lake.filter = filter;
     lake.order = order;
     lake.fields = fields;
+    // An integration cursor binds to the canonical address, not the type
+    // owner's `{project}.{name}` lake key. The handler clones this query and
+    // sets `collection` to the bare name before the source call.
+    if target.integration.is_some() {
+        lake.collection = schema.reference(&target.address_project, &target.local);
+    }
     let hash = query_hash(&lake);
 
     match obj.get("cursor") {
@@ -381,6 +394,9 @@ impl Resolver<'_> {
                 }
             };
         }
+        if self.target.integration.is_some() && !self.target.ambiguous {
+            return self.integration_field(name, path);
+        }
         let (project, bare) = self.schema.split(name);
         let target = &self.target;
         match self
@@ -415,6 +431,51 @@ impl Resolver<'_> {
                     format!(
                         "unknown field '{name}': {project} declares no '{bare}' on {collection}"
                     )
+                };
+                self.error(kind::UNKNOWN_FIELD, path, message);
+                None
+            }
+        }
+    }
+
+    /// An integration collection's fields are in scope because the address
+    /// resolved. The caller still writes the owner's name. The owner does
+    /// not also have to be a direct dependency, so this path does not say
+    /// "not a direct dependency".
+    fn integration_field(&mut self, name: &str, path: String) -> Option<(FieldRef, Ty)> {
+        let canonical = self
+            .schema
+            .reference(&self.target.address_project, &self.target.local);
+        let address = match self.schema.collection_address(&canonical) {
+            AddressResolution::Resolved(address) => address,
+            AddressResolution::Missing => {
+                self.error(
+                    kind::UNKNOWN_FIELD,
+                    path,
+                    format!("unknown field '{name}': unknown collection '{canonical}'"),
+                );
+                return None;
+            }
+        };
+        let (project, bare) = self.schema.split(name);
+        match self.schema.integration_field(&address, project, bare) {
+            Some(_) if !lake_accepts_field_name(bare) => {
+                self.error(
+                    kind::INVALID_QUERY,
+                    path,
+                    format!("field name {name:?} contains NUL, which cannot be queried"),
+                );
+                None
+            }
+            Some(field) => Some((FieldRef::field(bare), Ty::of(&field.ty))),
+            None => {
+                let owner = &address.owner;
+                let message = if project != owner {
+                    format!(
+                        "unknown field '{name}': fields on {canonical} are {owner}'s; write {owner}.{bare}"
+                    )
+                } else {
+                    format!("unknown field '{name}': {project} declares no '{bare}' on {canonical}")
                 };
                 self.error(kind::UNKNOWN_FIELD, path, message);
                 None

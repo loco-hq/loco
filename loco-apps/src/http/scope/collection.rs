@@ -11,7 +11,10 @@ use crate::http::authz::{forbidden, DataVerb};
 use crate::http::paths::collection_key;
 use crate::http::version_schema::{CollectionAddress, CollectionAddressKind};
 use crate::server::AppState;
-use crate::validation::{validate_record, validate_records, ValidationMode, ValidationReport};
+use crate::validation::{
+    validate_inline_record, validate_inline_records, validate_record, validate_records,
+    ValidationMode, ValidationReport,
+};
 
 use loco_lake::Value;
 
@@ -54,10 +57,10 @@ impl CollectionScope {
         self.site.site.version()
     }
 
-    /// Lake key for an ordinary collection. An integration address has no
-    /// lake collection until a source exists (#125); callers answer 501
-    /// instead of reading the lake. An ambiguous address has none either:
-    /// both documents share the name, so the caller answers 409.
+    /// Lake key for an ordinary collection. An integration address is not a
+    /// lake collection: the handler routes it to the type's source. An
+    /// ambiguous address has none either: both documents share the name, so
+    /// the caller answers 409.
     pub fn lake_key(&self) -> Option<String> {
         match self.address.kind {
             CollectionAddressKind::Ordinary => {
@@ -78,21 +81,33 @@ impl CollectionScope {
     }
 
     /// Validate a single record's fields against this collection's schema.
-    /// Thin adapter over [`validate_record`] — keeps the validator pure and
-    /// gives handlers a one-line call site. Integration addresses do not
-    /// reach this: a data verb returns 501 before validation.
+    /// An ordinary collection uses its field documents. An integration
+    /// collection uses the inline fields on the type or the integration.
+    /// An ambiguous address does not reach a data verb; the report is empty.
     pub fn validate(
         &self,
         fields: &HashMap<String, Value>,
         mode: ValidationMode,
     ) -> ValidationReport {
-        validate_record(
-            &self.site.schema,
-            &self.address.owner,
-            &self.address.name,
-            fields,
-            mode,
-        )
+        match self.address.kind {
+            CollectionAddressKind::Ordinary => validate_record(
+                &self.site.schema,
+                &self.address.owner,
+                &self.address.name,
+                fields,
+                mode,
+            ),
+            CollectionAddressKind::Standard { .. } | CollectionAddressKind::Custom => {
+                validate_inline_record(
+                    &self.site.schema.integration_fields(&self.address),
+                    &self.canonical(),
+                    self.site.schema.version(),
+                    fields,
+                    mode,
+                )
+            }
+            CollectionAddressKind::Ambiguous => ValidationReport::default(),
+        }
     }
 
     /// Validate every record in a list against this collection's schema.
@@ -101,14 +116,27 @@ impl CollectionScope {
     where
         I: IntoIterator<Item = (&'a str, &'a HashMap<String, Value>)>,
     {
-        validate_records(
-            &self.site.schema,
-            &self.address.owner,
-            &self.address.name,
-            records,
-            mode,
-            None,
-        )
+        match self.address.kind {
+            CollectionAddressKind::Ordinary => validate_records(
+                &self.site.schema,
+                &self.address.owner,
+                &self.address.name,
+                records,
+                mode,
+                None,
+            ),
+            CollectionAddressKind::Standard { .. } | CollectionAddressKind::Custom => {
+                validate_inline_records(
+                    &self.site.schema.integration_fields(&self.address),
+                    &self.canonical(),
+                    self.site.schema.version(),
+                    records,
+                    mode,
+                    None,
+                )
+            }
+            CollectionAddressKind::Ambiguous => ValidationReport::default(),
+        }
     }
 
     fn public_allowed(&self, verb: DataVerb) -> bool {

@@ -13,13 +13,19 @@ use crate::handlers;
 use crate::http::host;
 use crate::integrations::{SourceRegistry, TypeActionRegistry};
 use crate::seed;
+use crate::source::LakeSource;
 use crate::values::{KeyStatus, LakeSecretStore, SecretStore};
 use crate::{Bundle, Project, SchemaStore, Site};
 
 pub struct AppState {
     /// Shared with [`crate::values::LakeSecretStore`]. Secret and variable
     /// rows live in this lake, under `$secrets` and `$variables`.
+    /// `delete_dataset` stays here. Record verbs go through [`Self::lake`].
     pub data_adapter: Arc<dyn DataAdapter>,
+    /// Lake collections as a [`crate::source::CollectionSource`]. `/data` and
+    /// `/data/query` call this for ordinary collections, and the same trait
+    /// for an integration collection's registered source.
+    pub lake: Arc<LakeSource>,
     pub auth_adapter: Box<dyn AuthAdapter>,
     pub schema: Arc<SchemaStore>,
     /// Plaintext trait. The lake impl encrypts. Handlers clone this `Arc`.
@@ -37,14 +43,14 @@ pub struct AppState {
     /// The server binary does not.
     pub actions: HandlerRegistry,
     /// Integration-type sources, keyed by owning project and type name.
-    /// Empty in the server binary. The value is a placeholder until a source
-    /// trait exists.
+    /// Empty in the server binary. A registered source handles that type's
+    /// standard and custom collections. An address with no registration is
+    /// 501 before the required-value check.
     pub sources: SourceRegistry,
     /// Type-action handlers, keyed by owning project, type name, and action
     /// name. Empty in the server binary, so a resolved type action is 501.
     /// A registered handler runs with a [`crate::integrations::TypeActionContext`]
-    /// whose connection is the integration the address named. Sources are not
-    /// dispatched.
+    /// whose connection is the integration the address named.
     pub type_actions: TypeActionRegistry,
 }
 
@@ -212,6 +218,7 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
 
     let data_adapter: Arc<dyn DataAdapter> =
         Arc::from(build_data_adapter(options.sqlite_path.as_deref()));
+    let lake = Arc::new(LakeSource::new(data_adapter.clone()));
     let secrets: Arc<dyn SecretStore> =
         Arc::new(LakeSecretStore::new(data_adapter.clone(), secret_key));
     let http = crate::actions::http_client();
@@ -221,6 +228,7 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
 
     let state = Arc::new(AppState {
         data_adapter,
+        lake,
         auth_adapter,
         schema,
         secrets,
