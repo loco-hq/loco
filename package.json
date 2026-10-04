@@ -5,6 +5,7 @@
     "loco-studio",
     "loco-ui",
     "loco-client",
-    "examples/brickos-inventory"
+    "examples/brickos-inventory",
+    "examples/brocksbricks-pull"
   ]
 }

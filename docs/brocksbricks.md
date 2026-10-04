@@ -1,6 +1,6 @@
 # Brock's Bricks orders
 
-`brocksbricks/orders` is the store project for Brock's Bricks' order pulling (issue [#105](https://github.com/loco-hq/loco/issues/105)). It is committed under `loco-apps/schemas/seed/brocksbricks/orders/` and seeded into the live store on first boot. It is schema only: `0.0.1-dev`, a `dev` dataset, and a `dev` site. The pulling app that uses it is [#106](https://github.com/loco-hq/loco/issues/106).
+`brocksbricks/orders` is the store project for Brock's Bricks' order pulling (issue [#105](https://github.com/loco-hq/loco/issues/105)). It is committed under `loco-apps/schemas/seed/brocksbricks/orders/` and seeded into the live store on first boot. It is schema only: `0.0.1-dev`, a `dev` dataset, and a `dev` site. The pulling app that uses it is [`examples/brocksbricks-pull/`](../examples/brocksbricks-pull/README.md) ([#106](https://github.com/loco-hq/loco/issues/106)).
 
 The manifest depends on `loco/bricklink@1.0.0`, so a store reads its BrickLink orders live as `loco/bricklink.store:orders` and `loco/bricklink.store:order_items` ([`integrations.md`](integrations.md)). That dependency is on disk only: `PUT /schema/.../manifest` refuses `loco/bricklink` for a writer who cannot read it, until projects can be marked installable ([#137](https://github.com/loco-hq/loco/issues/137)).
 
