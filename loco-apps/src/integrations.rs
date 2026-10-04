@@ -8,21 +8,62 @@
 //! Both registries are empty in the production binary. There is no source
 //! trait yet: [`RegisteredSource`] is a placeholder until `CollectionSource`
 //! exists. A resolved type action with no handler is 501. One with a handler
-//! runs with the [`crate::actions::Connection`] for the integration the
-//! address named, not the type project's loose secrets. Sources are not
-//! dispatched.
+//! runs with a [`TypeActionContext`] for the integration the address named.
+//! That context's connection reads the integration's values. It does not
+//! read the type project's loose secrets. Sources are not dispatched.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use loco_lake::{DataAdapter, Value};
 use serde_json::Map;
 
-use crate::actions::{ActionContext, ActionFailure, Dispatch, HandlerDeps};
+use crate::actions::{ActionFailure, ConfigReadError, Connection, Dispatch, HandlerDeps};
 use crate::auth::AuthUser;
 use crate::http::version_schema::{ActionAddress, ActionAddressKind, VersionSchema};
 use crate::validation::validate_type_action_input;
+
+/// What a type-action handler receives.
+///
+/// `connection` is the integration the address named. It is not optional.
+/// This context has no secret store. [`Self::secret`] and [`Self::variable`]
+/// forward to the connection. They do not read a loose declaration, and a
+/// handler written against [`crate::actions::ActionContext`] does not type-check
+/// here. The schema and the lake adapter are the same ones an ordinary action
+/// receives, so a handler can patch records.
+pub struct TypeActionContext {
+    pub dataset_id: String,
+    pub data: Arc<dyn DataAdapter>,
+    pub schema: VersionSchema,
+    pub caller: AuthUser,
+    pub input: HashMap<String, Value>,
+    pub connection: Connection,
+}
+
+impl TypeActionContext {
+    /// This connection's plaintext for the type's bare declaration `name`.
+    ///
+    /// Forwards to [`Connection::secret`]. A loose declaration of the same
+    /// name is not read. A name the type does not declare names that type.
+    pub fn secret(&self, name: &str) -> Result<Option<String>, ConfigReadError> {
+        self.connection.secret(name)
+    }
+
+    /// This connection's value for the type's bare declaration `name`.
+    ///
+    /// Forwards to [`Connection::variable`]. A loose declaration of the same
+    /// name is not read.
+    pub fn variable(&self, name: &str) -> Result<Option<String>, ConfigReadError> {
+        self.connection.variable(name)
+    }
+
+    /// The process-wide client. The same one [`Connection::http`] returns.
+    pub fn http(&self) -> &reqwest::Client {
+        self.connection.http()
+    }
+}
 
 /// Placeholder registered for one integration type.
 ///
@@ -54,15 +95,15 @@ type TypeActionFuture =
     Pin<Box<dyn Future<Output = Result<serde_json::Value, ActionFailure>> + Send>>;
 
 trait TypeActionHandler: Send + Sync {
-    fn call(&self, ctx: ActionContext) -> TypeActionFuture;
+    fn call(&self, ctx: TypeActionContext) -> TypeActionFuture;
 }
 
 impl<F, Fut> TypeActionHandler for F
 where
-    F: Fn(ActionContext) -> Fut + Send + Sync,
+    F: Fn(TypeActionContext) -> Fut + Send + Sync,
     Fut: Future<Output = Result<serde_json::Value, ActionFailure>> + Send + 'static,
 {
-    fn call(&self, ctx: ActionContext) -> TypeActionFuture {
+    fn call(&self, ctx: TypeActionContext) -> TypeActionFuture {
         Box::pin(self(ctx))
     }
 }
@@ -76,8 +117,9 @@ pub struct TypeActionRegistry {
 impl TypeActionRegistry {
     /// Register `handler` for `project`'s type `type_name`, action `name`.
     ///
-    /// A same-named action on another type, or an ordinary action of the
-    /// same name, does not call it.
+    /// The handler receives a [`TypeActionContext`]. `secret` and `variable`
+    /// read that context's connection. A same-named action on another type,
+    /// or an ordinary action of the same name, does not call it.
     pub fn register<F, Fut>(
         &mut self,
         project: impl Into<String>,
@@ -85,7 +127,7 @@ impl TypeActionRegistry {
         name: impl Into<String>,
         handler: F,
     ) where
-        F: Fn(ActionContext) -> Fut + Send + Sync + 'static,
+        F: Fn(TypeActionContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<serde_json::Value, ActionFailure>> + Send + 'static,
     {
         let handler: Arc<dyn TypeActionHandler> = Arc::new(handler);
@@ -119,8 +161,8 @@ impl TypeActionRegistry {
 /// demand configuration. Once a handler exists, every required secret and
 /// variable of **this** integration must be set on `dataset_id`. Loose
 /// version-level declarations are not part of that check and are not read.
-/// The handler receives a context whose `secret` and `variable` read only
-/// that connection.
+/// The handler receives a [`TypeActionContext`]. Its connection reads only
+/// that integration. The context has no secret store.
 pub(crate) async fn dispatch_type_action(
     schema: &VersionSchema,
     registry: &TypeActionRegistry,
@@ -158,7 +200,13 @@ pub(crate) async fn dispatch_type_action(
             name: action.name().to_string(),
         };
     };
-    let connection = crate::actions::Connection::new(dataset_id.to_string(), spec, &deps);
+    let connection = Connection::new(
+        dataset_id.to_string(),
+        spec,
+        deps.secrets,
+        deps.data.clone(),
+        deps.http,
+    );
     let missing = match connection.missing_required() {
         Ok(missing) => missing,
         Err(failure) => return Dispatch::Failed(failure),
@@ -166,14 +214,14 @@ pub(crate) async fn dispatch_type_action(
     if !missing.is_empty() {
         return Dispatch::MissingConfig(missing);
     }
-    let ctx = ActionContext::with_connection(
-        dataset_id.to_string(),
-        deps,
-        schema.clone(),
-        caller.clone(),
+    let ctx = TypeActionContext {
+        dataset_id: dataset_id.to_string(),
+        data: deps.data,
+        schema: schema.clone(),
+        caller: caller.clone(),
         input,
         connection,
-    );
+    };
     match handler.call(ctx).await {
         Ok(value) => Dispatch::Done(value),
         Err(failure) => Dispatch::Failed(failure),
@@ -457,11 +505,7 @@ mod tests {
             let flag = std::sync::Arc::clone(&flag);
             async move {
                 flag.store(true, Ordering::SeqCst);
-                let integration = ctx
-                    .connection()
-                    .expect("type action carries a connection")
-                    .integration
-                    .clone();
+                let integration = ctx.connection.integration.clone();
                 let loose = match ctx.secret("license") {
                     Ok(value) => json!(value),
                     Err(err) => json!({ "error": err.to_string() }),
@@ -539,7 +583,7 @@ mod tests {
         assert_eq!(body["region"], "us");
         assert_eq!(
             body["loose"]["error"],
-            "secret 'license' is not declared by this package"
+            "secret 'license' is not declared by integration type 'alice/pkg.warehouse'"
         );
         let text = body.to_string();
         assert!(!text.contains("loose-token"), "{text}");
@@ -609,6 +653,10 @@ mod tests {
         assert_eq!(body["integration"], "alice/pkg.store");
         assert_eq!(body["token"], "store-token");
         assert!(body["consumer_key"].is_null());
+        assert_eq!(
+            body["loose"]["error"],
+            "secret 'license' is not declared by integration type 'alice/pkg.warehouse'"
+        );
         assert!(!body.to_string().contains("east-token"));
     }
 

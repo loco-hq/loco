@@ -206,6 +206,10 @@ pub(crate) struct ConnectionDeclarations {
     pub integration: String,
     /// Project that declared the integration. The address root.
     pub project: String,
+    /// Canonical type reference from the asking view. Bare when this version
+    /// declares the type (`warehouse`), `{account}/{project}.{name}` when a
+    /// dependency does (`alice/pkg.warehouse`).
+    pub type_ref: String,
     pub secrets: Vec<ConnectionSecretDecl>,
     pub variables: Vec<ConnectionVariableDecl>,
 }
@@ -1433,9 +1437,10 @@ impl VersionSchema {
     /// `integration` is the canonical qualified name from **this** view's
     /// project: bare when the integration is this project's (`sf_east`),
     /// `{account}/{project}.{name}` when it is a dependency's
-    /// (`loco/bricklink.store`). The type may live on a project this view
-    /// does not itself depend on; the declaring version is what sees it.
-    /// `None` when the integration is not visible here, or its type is gone.
+    /// (`loco/bricklink.store`). `type_ref` is the type's reference from this
+    /// same view. The type may live on a project this view does not itself
+    /// depend on; the declaring version is what sees it. `None` when the
+    /// integration is not visible here, or its type is gone.
     pub(crate) fn connection_declarations(
         &self,
         integration_project: &str,
@@ -1451,6 +1456,7 @@ impl VersionSchema {
         Some(ConnectionDeclarations {
             integration: self.reference(integration_project, integration_name),
             project: integration_project.to_string(),
+            type_ref: self.reference(ty.project(), ty.name()),
             secrets: ty
                 .secrets()
                 .iter()

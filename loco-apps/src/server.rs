@@ -42,8 +42,9 @@ pub struct AppState {
     pub sources: SourceRegistry,
     /// Type-action handlers, keyed by owning project, type name, and action
     /// name. Empty in the server binary, so a resolved type action is 501.
-    /// A registered handler runs with the connection the address named.
-    /// Sources are not dispatched.
+    /// A registered handler runs with a [`crate::integrations::TypeActionContext`]
+    /// whose connection is the integration the address named. Sources are not
+    /// dispatched.
     pub type_actions: TypeActionRegistry,
 }
 
@@ -87,8 +88,9 @@ pub struct AppOptions {
     /// Sources for integration types. [`Default`] registers none.
     pub sources: SourceRegistry,
     /// Handlers for type actions. [`Default`] registers none, so a resolved
-    /// type action is 501. A registered handler receives the connection the
-    /// address named.
+    /// type action is 501. A registered handler receives a
+    /// [`crate::integrations::TypeActionContext`] whose connection is the
+    /// integration the address named.
     pub type_actions: TypeActionRegistry,
     /// SQLite file to open when the adapter is `sqlite`.
     ///

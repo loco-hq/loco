@@ -233,13 +233,9 @@ fn suite_connection_values() {
 }
 
 async fn read_connection(
-    ctx: loco_apps::actions::ActionContext,
+    ctx: loco_apps::integrations::TypeActionContext,
 ) -> Result<serde_json::Value, loco_apps::actions::ActionFailure> {
-    let integration = ctx
-        .connection()
-        .expect("type action carries a connection")
-        .integration
-        .clone();
+    let integration = ctx.connection.integration.clone();
     let loose = match ctx.secret("license") {
         Ok(value) => serde_json::json!(value),
         Err(err) => serde_json::json!({ "error": err.to_string() }),
@@ -314,7 +310,7 @@ async fn pull(
     ) -> Result<serde_json::Value, ActionFailure> {
         match result {
             Ok(value) => Ok(serde_json::json!(value)),
-            Err(ConfigReadError::Undeclared { kind, name }) => Ok(serde_json::json!({
+            Err(ConfigReadError::Undeclared { kind, name, .. }) => Ok(serde_json::json!({
                 "error": format!("{kind} '{name}' is not declared by this package")
             })),
             Err(err) => Err(err.into()),

@@ -7,9 +7,10 @@
 //!
 //! Type actions are a different registry, keyed `(project, type, name)`.
 //! See [`crate::integrations::TypeActionRegistry`]. Dispatch of those lives
-//! next to that registry and hands the handler a [`Connection`] for the
-//! integration the address named. This registry stays `(project, name)` and
-//! [`ActionContext::new`] still reads the owning project's loose declarations.
+//! next to that registry and hands the handler a
+//! [`crate::integrations::TypeActionContext`], whose [`Connection`] reads the
+//! integration the address named. This registry stays `(project, name)`.
+//! [`ActionContext`] reads the owning project's loose declarations.
 //!
 //! Handlers are async. Outbound HTTP uses [`reqwest`]'s async client, so the
 //! call awaits on the request task. [`DataAdapter`] stays synchronous and
@@ -95,17 +96,25 @@ impl ActionFailure {
     }
 }
 
-/// A secret or variable read failed, or the package does not declare `name`.
+/// A secret or variable read failed, or the call's declarations do not
+/// include `name`.
 ///
 /// [`ActionFailure`] implements [`From<ConfigReadError>`], so a handler can
 /// propagate with `?`. [`ConfigReadError::Undeclared`] becomes 500: asking
-/// for a name the package did not declare is a bug in the handler.
+/// for a name those declarations omit is a bug in the handler. An ordinary
+/// action says the package does not declare it. A connection names the
+/// integration type.
 #[derive(Debug)]
 pub enum ConfigReadError {
-    /// `owner` does not declare `name` on the version this request sees.
+    /// The call's declarations do not include `name`.
+    ///
+    /// `type_ref` is set when a [`Connection`] reports the miss. It is the
+    /// integration type's reference from the view that built the connection.
+    /// An ordinary action leaves it unset.
     Undeclared {
         kind: &'static str,
         name: String,
+        type_ref: Option<String>,
     },
     /// `LOCO_SECRET_KEY` is missing or malformed. The string names it.
     Unavailable(String),
@@ -115,9 +124,17 @@ pub enum ConfigReadError {
 impl std::fmt::Display for ConfigReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Undeclared { kind, name } => {
-                write!(f, "{kind} '{name}' is not declared by this package")
-            }
+            Self::Undeclared {
+                kind,
+                name,
+                type_ref,
+            } => match type_ref {
+                Some(type_ref) => write!(
+                    f,
+                    "{kind} '{name}' is not declared by integration type '{type_ref}'"
+                ),
+                None => write!(f, "{kind} '{name}' is not declared by this package"),
+            },
             Self::Unavailable(message) | Self::Failed(message) => write!(f, "{message}"),
         }
     }
@@ -165,25 +182,35 @@ pub struct Connection {
     pub integration: String,
     secrets: Arc<dyn SecretStore>,
     data: Arc<dyn DataAdapter>,
+    /// Canonical type reference from the view that built this connection.
+    type_ref: String,
     secret_decls: Vec<crate::http::version_schema::ConnectionSecretDecl>,
     variable_decls: Vec<crate::http::version_schema::ConnectionVariableDecl>,
     http: reqwest::Client,
 }
 
 impl Connection {
+    /// Build a connection for one integration.
+    ///
+    /// `spec` is that integration's declarations. `secrets`, `data`, and
+    /// `http` are what the reads use. A source builds one the same way a
+    /// type action does.
     pub(crate) fn new(
         dataset_id: String,
         spec: ConnectionDeclarations,
-        deps: &HandlerDeps,
+        secrets: Arc<dyn SecretStore>,
+        data: Arc<dyn DataAdapter>,
+        http: reqwest::Client,
     ) -> Self {
         Self {
             dataset_id,
             integration: spec.integration,
-            secrets: deps.secrets.clone(),
-            data: deps.data.clone(),
+            secrets,
+            data,
+            type_ref: spec.type_ref,
             secret_decls: spec.secrets,
             variable_decls: spec.variables,
-            http: deps.http.clone(),
+            http,
         }
     }
 
@@ -193,13 +220,11 @@ impl Connection {
     /// [`VersionSchema::split`]. `Ok(None)` means the type declares it and
     /// this dataset has not set it. The plaintext is returned as stored,
     /// including `""`. A name the type does not declare is
-    /// [`ConfigReadError::Undeclared`].
+    /// [`ConfigReadError::Undeclared`], and the message names this
+    /// connection's integration type.
     pub fn secret(&self, name: &str) -> Result<Option<String>, ConfigReadError> {
         let Some(decl) = self.secret_decls.iter().find(|decl| decl.name == name) else {
-            return Err(ConfigReadError::Undeclared {
-                kind: "secret",
-                name: name.to_string(),
-            });
+            return Err(self.undeclared("secret", name));
         };
         match self.secrets.get(&self.dataset_id, &self.row_id(&decl.name)) {
             Ok(value) => Ok(value),
@@ -216,10 +241,7 @@ impl Connection {
     /// it, nothing is stored, and the default is empty.
     pub fn variable(&self, name: &str) -> Result<Option<String>, ConfigReadError> {
         let Some(decl) = self.variable_decls.iter().find(|decl| decl.name == name) else {
-            return Err(ConfigReadError::Undeclared {
-                kind: "variable",
-                name: name.to_string(),
-            });
+            return Err(self.undeclared("variable", name));
         };
         match get_variable(
             self.data.as_ref(),
@@ -232,9 +254,19 @@ impl Connection {
         }
     }
 
-    /// The process-wide client. The same one [`ActionContext::http`] returns.
+    /// The process-wide client. Connect and total timeouts are set. No proxy.
+    /// A redirect is followed only when the next URL keeps the same scheme,
+    /// host, and port.
     pub fn http(&self) -> &reqwest::Client {
         &self.http
+    }
+
+    fn undeclared(&self, kind: &'static str, name: &str) -> ConfigReadError {
+        ConfigReadError::Undeclared {
+            kind,
+            name: name.to_string(),
+            type_ref: Some(self.type_ref.clone()),
+        }
     }
 
     /// Required secrets and variables of this integration that `dataset_id`
@@ -294,13 +326,13 @@ impl Connection {
     }
 }
 
-/// What a handler is allowed to see.
+/// What an ordinary action handler is allowed to see.
 ///
-/// An ordinary action's `secret` and `variable` read the owning project's
-/// loose declarations only (the registry key), and the values are always
-/// [`Self::dataset_id`] — the installing project's dataset. A type action's
-/// read the [`Connection`] instead, and only that integration. The package's
-/// own datasets are never opened.
+/// `secret` and `variable` read the owning project's loose declarations
+/// (the registry key). The values are always [`Self::dataset_id`], the
+/// installing project's dataset. The package's own datasets are never
+/// opened. A type action receives [`crate::integrations::TypeActionContext`]
+/// instead, so it cannot call these methods.
 pub struct ActionContext {
     pub dataset_id: String,
     pub data: Arc<dyn DataAdapter>,
@@ -308,21 +340,16 @@ pub struct ActionContext {
     pub caller: AuthUser,
     pub input: HashMap<String, Value>,
     secrets: Arc<dyn SecretStore>,
-    /// Owning project of an ordinary action. The registry key. Empty on a
-    /// type action, so a fall-through cannot resolve a loose declaration.
+    /// Owning project. The registry key.
     owner: String,
     http: reqwest::Client,
-    /// Set for a type action. Ordinary actions leave this `None`.
-    connection: Option<Connection>,
 }
 
 impl ActionContext {
     /// Build the context an ordinary action receives.
     ///
-    /// `owner` is the action's project, the registry key. A type action uses
-    /// [`Self::with_connection`]: `new` stays the ordinary constructor. It
-    /// was added when a type-action path was expected to share it, and that
-    /// path was removed; ordinary dispatch still calls it.
+    /// `owner` is the action's project, the registry key. `secret` and
+    /// `variable` read that project's loose declarations on `dataset_id`.
     pub(crate) fn new(
         dataset_id: String,
         deps: HandlerDeps,
@@ -340,59 +367,24 @@ impl ActionContext {
             secrets: deps.secrets,
             owner,
             http: deps.http,
-            connection: None,
         }
     }
 
-    /// Build the context a type action receives.
+    /// The installing dataset's plaintext for the secret `name` the owning
+    /// package declares.
     ///
-    /// `secret` and `variable` read `connection` only. `owner` is empty so a
-    /// fall-through cannot resolve a loose declaration of the same name.
-    pub(crate) fn with_connection(
-        dataset_id: String,
-        deps: HandlerDeps,
-        schema: VersionSchema,
-        caller: AuthUser,
-        input: HashMap<String, Value>,
-        connection: Connection,
-    ) -> Self {
-        Self {
-            dataset_id,
-            data: deps.data,
-            schema,
-            caller,
-            input,
-            secrets: deps.secrets,
-            owner: String::new(),
-            http: deps.http,
-            connection: Some(connection),
-        }
-    }
-
-    /// The connection a type action was called for. `None` on an ordinary action.
-    pub fn connection(&self) -> Option<&Connection> {
-        self.connection.as_ref()
-    }
-
-    /// The installing dataset's plaintext for the secret `name` this call's
-    /// declarations include.
-    ///
-    /// On an ordinary action, `name` is the package's bare declaration name
-    /// and the row is that package's loose secret. On a type action, `name`
-    /// is the type's bare declaration name and the row is this connection's.
-    /// Neither resolves through [`VersionSchema::split`], so a secret the
-    /// installer declares under the same name — loose, or on another
-    /// integration — is a different row and is not returned. `Ok(None)` means
-    /// the declaration exists and this dataset has not set it. The plaintext
-    /// is returned as stored, including `""`.
+    /// `name` is the package's bare declaration name. It is not resolved
+    /// through [`VersionSchema::split`], so a secret the installer declares
+    /// under the same name is a different row and is not returned.
+    /// `Ok(None)` means the package declares it and this dataset has not set
+    /// it. The plaintext is returned as stored, including `""`. A name the
+    /// package does not declare is [`ConfigReadError::Undeclared`].
     pub fn secret(&self, name: &str) -> Result<Option<String>, ConfigReadError> {
-        if let Some(connection) = &self.connection {
-            return connection.secret(name);
-        }
         let Some(decl) = self.schema.secret_of(&self.owner, name) else {
             return Err(ConfigReadError::Undeclared {
                 kind: "secret",
                 name: name.to_string(),
+                type_ref: None,
             });
         };
         let id = self.schema.reference(&self.owner, decl.name());
@@ -404,22 +396,19 @@ impl ActionContext {
         }
     }
 
-    /// The installing dataset's value for the variable `name` this call's
-    /// declarations include, or the declaration's non-empty default when
-    /// nothing is stored.
+    /// The installing dataset's value for the variable `name` the owning
+    /// package declares, or the declaration's non-empty default when nothing
+    /// is stored.
     ///
-    /// A stored value wins, including `""`. `Ok(None)` means the declaration
-    /// exists, nothing is stored, and the default is empty. The same split as
-    /// [`Self::secret`]: an ordinary action reads the package's loose
-    /// variable, a type action reads the connection.
+    /// A stored value wins, including `""`. `Ok(None)` means the package
+    /// declares it, nothing is stored, and the default is empty. The same
+    /// split as [`Self::secret`].
     pub fn variable(&self, name: &str) -> Result<Option<String>, ConfigReadError> {
-        if let Some(connection) = &self.connection {
-            return connection.variable(name);
-        }
         let Some(decl) = self.schema.variable_of(&self.owner, name) else {
             return Err(ConfigReadError::Undeclared {
                 kind: "variable",
                 name: name.to_string(),
+                type_ref: None,
             });
         };
         let id = self.schema.reference(&self.owner, decl.name());
