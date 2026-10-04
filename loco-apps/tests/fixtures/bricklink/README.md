@@ -3,8 +3,11 @@
 Response bodies of the BrickLink store API, in its `{meta, data}` envelope, for the
 calls `loco/bricklink` makes. The `bricklink` Hurl suite serves them from an
 in-process server (`start_bricklink_upstream` in `tests/hurl_runner.rs`), and the
-source's unit tests parse them. A local mock (#135) should serve these same files so
-the two cannot drift.
+source's unit tests parse them. The local mock (`examples/bricklink-mock.rs`,
+`docs/brickos.md`) builds every order and line it serves from `orders/29471234.json`
+and `orders/29471234/items.json`, and its envelopes from `errors/`. Its tests check
+that its bodies have exactly these keys, so renaming or dropping a key here breaks
+`cargo test` until the mock follows.
 
 A request path maps to a file by appending `.json` to it, under this directory:
 
