@@ -11,13 +11,16 @@
 //! - `order_items` — the lines of one order: `GET /orders/{id}/items`. There
 //!   is no all-items endpoint, so a list, or a query without an `order_id`
 //!   filter (`eq` or `in`), is [`SourceError::Unsupported`]. It never fans
-//!   out over every order. The record id is `{order_id}-{inventory_id}`.
+//!   out over every order. Filtering by a filed order's id still returns its
+//!   lines. The record id is `{order_id}-{batch}-{inventory_id}`; see
+//!   [`item_records`]. No line is dropped.
 //!
 //! Read-only: insert, update, and delete are not declared. Requests are
 //! signed with OAuth 1.0a ([`oauth`]). BrickLink answers most errors as HTTP
 //! 200 with an error `meta.code` in the body. Either way the caller gets
 //! [`SourceError::Upstream`] with BrickLink's `meta` message, and with any
-//! credential the request carried removed from it.
+//! credential, signature, and nonce the request carried removed from it.
+//! Only BrickLink's `meta.code` 404 is not found; a bare HTTP 404 is upstream.
 
 pub mod oauth;
 
@@ -90,10 +93,12 @@ impl CollectionSource for BrickLinkSource {
                 }
             }
             ORDER_ITEMS => {
-                let Some((order_id, inventory_id)) = id.split_once('-') else {
+                // The id leads with the order id. Read that order's lines
+                // and match the whole id, so get and list agree.
+                let Some((order_id, _)) = id.split_once('-') else {
                     return Ok(None);
                 };
-                if !is_upstream_id(order_id) || !is_upstream_id(inventory_id) {
+                if !is_upstream_id(order_id) {
                     return Ok(None);
                 }
                 upstream
@@ -206,7 +211,8 @@ struct Upstream<'a> {
 
 enum Reply {
     Data(Json),
-    NotFound,
+    /// BrickLink's own `meta.code` 404, with its cleaned message.
+    NotFound(String),
 }
 
 impl<'a> Upstream<'a> {
@@ -235,8 +241,16 @@ impl<'a> Upstream<'a> {
         if let Some(status) = status {
             params.push(("status", status));
         }
-        let Reply::Data(data) = self.get("/orders", &params).await? else {
-            return Ok(Vec::new());
+        // The collection endpoint itself cannot be "not found". Reading that
+        // as no orders would tell a pulling app there is nothing to pick.
+        let data = match self.get("/orders", &params).await? {
+            Reply::Data(data) => data,
+            Reply::NotFound(message) => {
+                return Err(SourceError::Upstream {
+                    status: 404,
+                    message,
+                })
+            }
         };
         Ok(data
             .as_array()
@@ -248,7 +262,7 @@ impl<'a> Upstream<'a> {
     async fn items(&self, order_id: &str) -> Result<Vec<LiveRecord>, SourceError> {
         match self.get(&format!("/orders/{order_id}/items"), &[]).await? {
             Reply::Data(data) => Ok(item_records(order_id, &data)),
-            Reply::NotFound => Ok(Vec::new()),
+            Reply::NotFound(_) => Ok(Vec::new()),
         }
     }
 
@@ -267,7 +281,9 @@ impl<'a> Upstream<'a> {
             token_value: &self.token_value,
             token_secret: &self.token_secret,
         };
-        let header = oauth::authorization("GET", &url, &creds);
+        let (nonce, timestamp) = oauth::fresh_nonce_and_timestamp();
+        let signature = oauth::signature("GET", &url, &creds, &nonce, &timestamp);
+        let header = oauth::header(&creds, &signature, &nonce, &timestamp);
         let response = self
             .connection
             .http()
@@ -278,18 +294,30 @@ impl<'a> Upstream<'a> {
             .await?;
         let status = response.status();
         let body = response.text().await?;
-        let scrub = [
+        // Everything the request carried that is not public: the four
+        // credentials, this request's signature and nonce, raw and as they
+        // appear percent-encoded in the header.
+        let mut scrub = Vec::new();
+        for value in [
             self.consumer_key.as_str(),
             self.consumer_secret.as_str(),
             self.token_value.as_str(),
             self.token_secret.as_str(),
-        ];
+            signature.as_str(),
+            nonce.as_str(),
+        ] {
+            scrub.push(value.to_string());
+            scrub.push(oauth::encode(value));
+        }
+        let scrub: Vec<&str> = scrub.iter().map(String::as_str).collect();
         read_envelope(status.as_u16(), status.canonical_reason(), &body, &scrub)
     }
 }
 
-/// BrickLink's `{meta, data}` envelope. `meta.code` 404, or HTTP 404, is
-/// not found. Any other `meta.code` or HTTP status outside 2xx is upstream.
+/// BrickLink's `{meta, data}` envelope. Only BrickLink's own `meta.code` 404
+/// is not found. A bare HTTP 404 with no envelope (a wrong `base_url`, a
+/// path the server does not have) is upstream, like any other `meta.code` or
+/// HTTP status outside 2xx.
 fn read_envelope(
     status: u16,
     reason: Option<&str>,
@@ -302,8 +330,12 @@ fn read_envelope(
         .and_then(|meta| meta.get("code"))
         .and_then(Json::as_u64)
         .and_then(|code| u16::try_from(code).ok());
-    if code == Some(404) || (code.is_none() && status == 404) {
-        return Ok(Reply::NotFound);
+    if code == Some(404) {
+        let message = meta
+            .and_then(meta_message)
+            .map(|message| clean(&message, scrub))
+            .unwrap_or_else(|| "not found".to_string());
+        return Ok(Reply::NotFound(message));
     }
     let failed_code = code.filter(|code| !(200..300).contains(code));
     if failed_code.is_some() || !(200..300).contains(&status) {
@@ -377,24 +409,63 @@ pub(crate) fn order_record(order: &Json) -> Option<LiveRecord> {
     Some(LiveRecord { id, fields })
 }
 
-/// `data` of `GET /orders/{id}/items` → live records. BrickLink returns the
-/// lines grouped in batches (a list of lists); a flat list is read too.
+/// `data` of `GET /orders/{id}/items` → live records, one per line. No line
+/// is dropped: a missing line on a pick list is the failure that matters.
+///
+/// BrickLink returns the lines grouped in batches (a list of lists); a flat
+/// list is read as batch 1. One lot can be in more than one batch, so the
+/// inventory id alone does not name a line. The id is:
+///
+/// - `{order_id}-{batch}-{inventory_id}`, `batch` counted from 1;
+/// - `{order_id}-{batch}-x{position}` when the line has no inventory id,
+///   `position` counted from 1 within the batch;
+/// - either, then `-{position}`, if that id is already taken in this order
+///   (the same lot twice in one batch).
+///
+/// Each depends only on that order's response, so the same lines get the
+/// same ids on every read, and `get` finds a line by reading its order.
 pub(crate) fn item_records(order_id: &str, data: &Json) -> Vec<LiveRecord> {
     let Some(entries) = data.as_array() else {
         return Vec::new();
     };
-    entries
-        .iter()
-        .flat_map(|entry| match entry.as_array() {
-            Some(batch) => batch.iter().collect::<Vec<_>>(),
-            None => vec![entry],
-        })
-        .filter_map(|item| item_record(order_id, item))
-        .collect()
+    let batches: Vec<Vec<&Json>> = if entries.iter().all(Json::is_array) {
+        entries
+            .iter()
+            .map(|batch| {
+                batch
+                    .as_array()
+                    .map(|b| b.iter().collect())
+                    .unwrap_or_default()
+            })
+            .collect()
+    } else {
+        vec![entries.iter().collect()]
+    };
+    let mut records: Vec<LiveRecord> = Vec::new();
+    for (batch_index, lines) in batches.iter().enumerate() {
+        let batch = batch_index + 1;
+        for (line_index, item) in lines.iter().enumerate() {
+            let position = line_index + 1;
+            let inventory_id = item.get("inventory_id").and_then(upstream_id);
+            let mut id = match &inventory_id {
+                Some(inventory_id) => format!("{order_id}-{batch}-{inventory_id}"),
+                None => format!("{order_id}-{batch}-x{position}"),
+            };
+            if records.iter().any(|record| record.id == id) {
+                id = format!("{id}-{position}");
+            }
+            records.push(item_record(order_id, id, inventory_id, item));
+        }
+    }
+    records
 }
 
-fn item_record(order_id: &str, item: &Json) -> Option<LiveRecord> {
-    let inventory_id = upstream_id(item.get("inventory_id")?)?;
+fn item_record(
+    order_id: &str,
+    id: String,
+    inventory_id: Option<String>,
+    item: &Json,
+) -> LiveRecord {
     let mut fields = HashMap::new();
     let part = item.get("item");
     put_string(&mut fields, "item_no", part.and_then(|part| part.get("no")));
@@ -408,12 +479,11 @@ fn item_record(order_id: &str, item: &Json) -> Option<LiveRecord> {
     put_string(&mut fields, "condition", item.get("new_or_used"));
     put_integer(&mut fields, "qty", item.get("quantity"));
     put_string(&mut fields, "remarks", item.get("remarks"));
-    fields.insert("inventory_id".into(), Value::String(inventory_id.clone()));
+    if let Some(inventory_id) = inventory_id {
+        fields.insert("inventory_id".into(), Value::String(inventory_id));
+    }
     fields.insert("order_id".into(), Value::String(order_id.to_string()));
-    Some(LiveRecord {
-        id: format!("{order_id}-{inventory_id}"),
-        fields,
-    })
+    LiveRecord { id, fields }
 }
 
 fn put_string(fields: &mut HashMap<String, Value>, name: &str, value: Option<&Json>) {
@@ -574,7 +644,7 @@ mod tests {
     fn data(reply: Result<Reply, SourceError>) -> Json {
         match reply {
             Ok(Reply::Data(data)) => data,
-            Ok(Reply::NotFound) => panic!("not found"),
+            Ok(Reply::NotFound(_)) => panic!("not found"),
             Err(err) => panic!("{err:?}"),
         }
     }
@@ -599,9 +669,9 @@ mod tests {
     fn maps_batched_items_with_integer_quantities() {
         let body = fixture("orders/29471234/items.json");
         let items = item_records("29471234", &body["data"]);
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 5);
         let first = &items[0];
-        assert_eq!(first.id, "29471234-358001234");
+        assert_eq!(first.id, "29471234-1-358001234");
         assert_eq!(first.fields["item_no"], Value::String("3001".into()));
         assert_eq!(first.fields["item_type"], Value::String("PART".into()));
         assert_eq!(first.fields["color_id"], Value::Integer(11));
@@ -614,6 +684,42 @@ mod tests {
             Value::String("358001234".into())
         );
         assert_eq!(first.fields["order_id"], Value::String("29471234".into()));
+    }
+
+    #[test]
+    fn item_ids_are_unique_and_no_line_is_dropped() {
+        let body = fixture("orders/29471234/items.json");
+        let items = item_records("29471234", &body["data"]);
+        let ids: Vec<_> = items.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "29471234-1-358001234",
+                "29471234-1-358001240",
+                "29471234-2-358001299",
+                // The same lot in a second batch is its own line.
+                "29471234-2-358001234",
+                // No inventory id: still a line, named by its position.
+                "29471234-2-x3",
+            ]
+        );
+        assert_eq!(items[3].fields["qty"], Value::Integer(30));
+        assert!(!items[4].fields.contains_key("inventory_id"));
+        assert_eq!(items[4].fields["qty"], Value::Integer(8));
+        // Stable: the same response gives the same ids.
+        assert_eq!(items, item_records("29471234", &body["data"]));
+
+        // The same lot twice in one batch, and a flat list read as batch 1.
+        let flat = json!([
+            {"inventory_id": 7, "quantity": 1},
+            {"inventory_id": 7, "quantity": 2},
+            {"quantity": 3}
+        ]);
+        let ids: Vec<_> = item_records("5", &flat)
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+        assert_eq!(ids, ["5-1-7", "5-1-7-2", "5-1-x3"]);
     }
 
     #[test]
@@ -644,12 +750,16 @@ mod tests {
         let missing = json!({"meta": {"code": 404, "message": "RESOURCE_NOT_FOUND"}, "data": {}});
         assert!(matches!(
             read_envelope(200, None, &missing.to_string(), &[]),
-            Ok(Reply::NotFound)
+            Ok(Reply::NotFound(message)) if message == "RESOURCE_NOT_FOUND"
         ));
-        assert!(matches!(
-            read_envelope(404, None, "not json", &[]),
-            Ok(Reply::NotFound)
-        ));
+        // A bare 404 is a wrong base_url or path, not an empty answer.
+        match read_envelope(404, Some("Not Found"), "Cannot GET /nope/orders", &[]) {
+            Err(SourceError::Upstream { status, message }) => {
+                assert_eq!(status, 404);
+                assert_eq!(message, "Not Found");
+            }
+            _ => panic!("expected upstream"),
+        }
         let ok = fixture("orders/29471234.json").to_string();
         assert_eq!(
             data(read_envelope(200, None, &ok, &[]))["order_id"],

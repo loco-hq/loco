@@ -206,13 +206,15 @@ X-Project-Id: alice/brocks
 X-Site-Id: dev
 HTTP 404
 
-GET http://127.0.0.1:{{port}}/data/loco%2Fbricklink.store:order_items/get/29471234-358001234
+# Item ids are {order_id}-{batch}-{inventory_id}: one lot can be in two
+# batches of one order, and each is its own line.
+GET http://127.0.0.1:{{port}}/data/loco%2Fbricklink.store:order_items/get/29471234-1-358001234
 Authorization: Bearer {{token}}
 X-Project-Id: alice/brocks
 X-Site-Id: dev
 HTTP 200
 [Asserts]
-jsonpath "$.data.id" == "29471234-358001234"
+jsonpath "$.data.id" == "29471234-1-358001234"
 jsonpath "$.data.fields.item_no" == "3001"
 jsonpath "$.data.fields.item_type" == "PART"
 jsonpath "$.data.fields.color_id" == 11
@@ -223,6 +225,32 @@ jsonpath "$.data.fields.remarks" == "A-12-3"
 jsonpath "$.data.fields.inventory_id" == "358001234"
 jsonpath "$.data.fields.order_id" == "29471234"
 jsonpath "$.diagnostics" not exists
+
+GET http://127.0.0.1:{{port}}/data/loco%2Fbricklink.store:order_items/get/29471234-2-358001234
+Authorization: Bearer {{token}}
+X-Project-Id: alice/brocks
+X-Site-Id: dev
+HTTP 200
+[Asserts]
+jsonpath "$.data.fields.inventory_id" == "358001234"
+jsonpath "$.data.fields.qty" == 30
+
+# A line with no inventory id is not dropped. Its id is its position.
+GET http://127.0.0.1:{{port}}/data/loco%2Fbricklink.store:order_items/get/29471234-2-x3
+Authorization: Bearer {{token}}
+X-Project-Id: alice/brocks
+X-Site-Id: dev
+HTTP 200
+[Asserts]
+jsonpath "$.data.fields.item_no" == "3062b"
+jsonpath "$.data.fields.qty" == 8
+jsonpath "$.data.fields.inventory_id" not exists
+
+GET http://127.0.0.1:{{port}}/data/loco%2Fbricklink.store:order_items/get/29471234-9-358001234
+Authorization: Bearer {{token}}
+X-Project-Id: alice/brocks
+X-Site-Id: dev
+HTTP 404
 
 # There is no all-items endpoint. Listing every line is unsupported, the same
 # 400 and kind as an undeclared verb, not a fan-out over every order.
@@ -281,10 +309,14 @@ jsonpath "$.data.paid.records[0].fields.status" == "PAID"
 jsonpath "$.data.paid.records[0].fields.buyer" not exists
 jsonpath "$.data.one.records" count == 1
 jsonpath "$.data.one.records[0].fields.buyer" == "linus_lugs"
-jsonpath "$.data.lines.records" count == 4
+jsonpath "$.data.lines.records" count == 6
 jsonpath "$.data.lines.records[0].fields.qty" == 250
 jsonpath "$.data.lines.records[1].fields.qty" == 40
 jsonpath "$.data.lines.records[1].fields.order_id" == "29471235"
+jsonpath "$.data.lines.records[2].id" == "29471234-2-358001234"
+jsonpath "$.data.lines.records[2].fields.qty" == 30
+jsonpath "$.data.lines.records[4].id" == "29471234-2-x3"
+jsonpath "$.data.lines.records[5].fields.qty" == 1
 jsonpath "$.diagnostics" not exists
 
 # Pages over one order's lines, with a cursor.
@@ -298,7 +330,7 @@ Content-Type: application/json
     "lines": {
       "collection": "loco/bricklink.store:order_items",
       "where": {"field": "loco/bricklink.order_id", "op": "eq", "value": "29471234"},
-      "limit": 2
+      "limit": 3
     }
   }
 }
@@ -306,8 +338,9 @@ HTTP 200
 [Captures]
 cursor: jsonpath "$.data.lines.cursor"
 [Asserts]
-jsonpath "$.data.lines.records" count == 2
-jsonpath "$.data.lines.records[0].id" == "29471234-358001234"
+jsonpath "$.data.lines.records" count == 3
+jsonpath "$.data.lines.records[0].id" == "29471234-1-358001234"
+jsonpath "$.data.lines.records[2].id" == "29471234-2-358001234"
 jsonpath "$.data.lines.cursor" isString
 
 POST http://127.0.0.1:{{port}}/data/query
@@ -320,15 +353,16 @@ Content-Type: application/json
     "lines": {
       "collection": "loco/bricklink.store:order_items",
       "where": {"field": "loco/bricklink.order_id", "op": "eq", "value": "29471234"},
-      "limit": 2,
+      "limit": 3,
       "cursor": "{{cursor}}"
     }
   }
 }
 HTTP 200
 [Asserts]
-jsonpath "$.data.lines.records" count == 1
-jsonpath "$.data.lines.records[0].id" == "29471234-358001299"
+jsonpath "$.data.lines.records" count == 2
+jsonpath "$.data.lines.records[0].id" == "29471234-2-358001299"
+jsonpath "$.data.lines.records[1].id" == "29471234-2-x3"
 jsonpath "$.data.lines.cursor" == null
 
 # Shapes the source cannot honor. Each is that query's `unsupported` result,
@@ -432,5 +466,62 @@ X-Project-Id: alice/brocks
 X-Site-Id: other
 HTTP 502
 [Asserts]
-jsonpath "$.error" == "upstream 401: BAD_OAUTH_REQUEST: SIGNATURE_INVALID"
+jsonpath "$.error" == "upstream 401: BAD_OAUTH_REQUEST: SIGNATURE_INVALID: [redacted]"
 body not contains "other-consumer-secret"
+
+# ---------------------------------------------------------------------------
+# A base_url that misses the API. The server answers a bare HTTP 404 with no
+# BrickLink envelope. That is an upstream failure, never "no orders": a
+# pulling app must not conclude there is nothing to pick. The 404 body is
+# not passed on.
+# ---------------------------------------------------------------------------
+
+PUT http://127.0.0.1:{{port}}/config/variable/alice/brocks/dev/loco%2Fbricklink.store:base_url
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"value": "{{bricklink}}/nope"}
+HTTP 200
+
+GET http://127.0.0.1:{{port}}/data/loco%2Fbricklink.store:orders/list
+Authorization: Bearer {{token}}
+X-Project-Id: alice/brocks
+X-Site-Id: dev
+HTTP 502
+[Asserts]
+jsonpath "$.error" == "upstream 404: Not Found"
+body not contains "nope"
+body not contains "Cannot GET"
+
+GET http://127.0.0.1:{{port}}/data/loco%2Fbricklink.store:orders/get/29471234
+Authorization: Bearer {{token}}
+X-Project-Id: alice/brocks
+X-Site-Id: dev
+HTTP 502
+[Asserts]
+jsonpath "$.error" == "upstream 404: Not Found"
+
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: alice/brocks
+X-Site-Id: dev
+Content-Type: application/json
+{
+  "queries": {
+    "pending": {
+      "collection": "loco/bricklink.store:orders",
+      "where": {"field": "loco/bricklink.status", "op": "eq", "value": "PENDING"}
+    },
+    "lines": {
+      "collection": "loco/bricklink.store:order_items",
+      "where": {"field": "loco/bricklink.order_id", "op": "in", "value": ["29471234"]}
+    }
+  }
+}
+HTTP 200
+[Asserts]
+jsonpath "$.data.pending.error" == "query failed"
+jsonpath "$.data.pending.diagnostics[0].kind" == "upstream"
+jsonpath "$.data.pending.diagnostics[0].message" == "upstream 404: Not Found"
+jsonpath "$.data.lines.error" == "query failed"
+jsonpath "$.data.lines.diagnostics[0].kind" == "upstream"
+body not contains "nope"

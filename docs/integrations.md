@@ -252,7 +252,7 @@ From a site pinned to `brocksbricks/orders`:
 ```
 GET  /data/loco%2Fbricklink.store:orders/list
 GET  /data/loco%2Fbricklink.store:orders/get/29471234
-GET  /data/loco%2Fbricklink.store:order_items/get/29471234-358001234
+GET  /data/loco%2Fbricklink.store:order_items/get/29471234-1-358001234
 POST /actions/loco%2Fbricklink.store:set_status
 {"input": {"order_id": "29471234", "status": "PENDING"}}
 ```
@@ -278,9 +278,9 @@ What the shipped source ([#104](https://github.com/loco-hq/loco/issues/104), `lo
 
 - **Capabilities.** get, list, and query. One `eq` or `in` condition; no `and`, `or`, `not`, ranges, or `exists`. `$id` is the only system field. Order (`asc` / `desc`, `binary` / `natural`), `limit`, and `cursor` are applied in the source over the whole upstream answer, with the lake's comparison, because BrickLink does not page. Capabilities are per source, not per collection, so a shape they admit that one collection cannot honor is the source's own `unsupported` error: the same 400, or the same query kind.
 - **`orders`** is the store's incoming orders that are not filed (`GET /orders?direction=in`). A `status` filter is passed upstream as BrickLink's `status` parameter. `$id` filters too. Any other field is `unsupported`. `get` of a filed order is not found, so `get` and `list` hold the same set. `totals` is the grand total with its currency code (`USD 41.2300`).
-- **`order_items`** is one order's lines (`GET /orders/{id}/items`). There is no all-items endpoint, so `list`, and a query without an `order_id` filter (`eq` or `in`), is `unsupported`. It is never a fan-out over every order. Read `orders` first, then items with `order_id in […]`: one call per order named. The record id is `{order_id}-{inventory_id}`. `qty` and `color_id` are integers.
+- **`order_items`** is one order's lines (`GET /orders/{id}/items`). There is no all-items endpoint, so `list`, and a query without an `order_id` filter (`eq` or `in`), is `unsupported`. It is never a fan-out over every order. Read `orders` first, then items with `order_id in […]`: one call per order named. The record id is `{order_id}-{batch}-{inventory_id}`, `batch` counted from 1: one lot can be in more than one batch of an order, and each is its own line. A line with no inventory id is still returned, as `{order_id}-{batch}-x{position}` (`position` counted from 1 within the batch). An id already taken in that order (the same lot twice in one batch) gets `-{position}` appended. The ids depend only on that order's response, so they are stable across reads, and `get` finds a line by reading its order. `qty` and `color_id` are integers. Filtering by a filed order's id still returns its lines.
 - **Read-only.** insert, update, and delete are not declared. `set_status` is declared on the type and has no handler, so it is 501.
-- **Errors.** BrickLink answers most errors as HTTP 200 with the error in `meta.code`. That, or a non-2xx status, is 502 `upstream {code}: {message}: {description}`, with any credential the request carried replaced by `[redacted]`. A response that is not BrickLink JSON is 502 with the status's reason phrase, never its body. `meta.code` 404 is not found.
+- **Errors.** BrickLink answers most errors as HTTP 200 with the error in `meta.code`. That, or a non-2xx status, is 502 `upstream {code}: {message}: {description}`, with the four credentials, the request's signature, and its nonce (raw or percent-encoded) replaced by `[redacted]`. A response that is not BrickLink JSON is 502 with the status's reason phrase, never its body. Only BrickLink's own `meta.code` 404 is not found (an unknown order). A bare HTTP 404 with no envelope, such as a `base_url` that misses `/api/store/v1`, is 502 `upstream 404: Not Found`. The `orders` list never reads a 404 as "no orders".
 - **Tests.** No test calls BrickLink. The response bodies are files in `loco-apps/tests/fixtures/bricklink/`; the Hurl suite's in-process server serves them and checks each request's OAuth signature, and the source's unit tests parse them.
 
 ### Two Salesforce orgs

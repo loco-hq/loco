@@ -295,6 +295,13 @@ fn answer_bricklink(mut stream: std::net::TcpStream, port: u16) -> std::io::Resu
     let req = read_request(&mut stream)?;
     let target = req.split_whitespace().nth(1).unwrap_or("/").to_string();
     let url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}{target}")).unwrap();
+    // A path outside the API is a bare HTTP 404 with no envelope, the way a
+    // web server answers a `base_url` that misses `/api/store/v1`. The body
+    // echoes the path so the suite can check it is not passed on.
+    if !url.path().starts_with("/orders") {
+        let body = format!("Cannot GET {}", url.path());
+        return write_http(&mut stream, 404, "Not Found", "text/plain", &body);
+    }
     let body = bricklink_body(&url, header_value(&req, "authorization"));
     write_http(&mut stream, 200, "OK", "application/json", &body)
 }
@@ -328,8 +335,14 @@ fn bricklink_body(url: &reqwest::Url, authorization: &str) -> String {
         || param("oauth_token") != BRICKLINK_TOKEN_VALUE
         || param("oauth_signature_method") != "HMAC-SHA1"
     {
+        // Echoes the signature it got, so the suite can check the source
+        // redacts it.
         return serde_json::json!({
-            "meta": {"code": 401, "message": "BAD_OAUTH_REQUEST", "description": "SIGNATURE_INVALID"},
+            "meta": {
+                "code": 401,
+                "message": "BAD_OAUTH_REQUEST",
+                "description": format!("SIGNATURE_INVALID: {}", param("oauth_signature"))
+            },
             "data": {}
         })
         .to_string();

@@ -30,11 +30,34 @@ pub fn authorization_with(
     timestamp: &str,
 ) -> String {
     let signature = signature(method, url, creds, nonce, timestamp);
+    header(creds, &signature, nonce, timestamp)
+}
+
+/// [`authorization_with`] with a random nonce and the current Unix time.
+pub fn authorization(method: &str, url: &Url, creds: &Credentials<'_>) -> String {
+    let (nonce, timestamp) = fresh_nonce_and_timestamp();
+    authorization_with(method, url, creds, &nonce, &timestamp)
+}
+
+/// A random nonce and the current Unix time, for one request.
+pub fn fresh_nonce_and_timestamp() -> (String, String) {
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default()
+        .to_string();
+    (nonce, timestamp)
+}
+
+/// The `Authorization` header for an already computed `signature`. A caller
+/// that keeps the signature (to keep it out of an error message) uses this.
+pub fn header(creds: &Credentials<'_>, signature: &str, nonce: &str, timestamp: &str) -> String {
     let params = [
         ("oauth_consumer_key", creds.consumer_key),
         ("oauth_token", creds.token_value),
         ("oauth_signature_method", "HMAC-SHA1"),
-        ("oauth_signature", signature.as_str()),
+        ("oauth_signature", signature),
         ("oauth_timestamp", timestamp),
         ("oauth_nonce", nonce),
         ("oauth_version", "1.0"),
@@ -44,17 +67,6 @@ pub fn authorization_with(
         header.push_str(&format!(", {key}=\"{}\"", encode(value)));
     }
     header
-}
-
-/// [`authorization_with`] with a random nonce and the current Unix time.
-pub fn authorization(method: &str, url: &Url, creds: &Credentials<'_>) -> String {
-    let nonce = uuid::Uuid::new_v4().simple().to_string();
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
-        .to_string();
-    authorization_with(method, url, creds, &nonce, &timestamp)
 }
 
 /// Base64 HMAC-SHA1 of the signature base string (RFC 5849 §3.4.2).

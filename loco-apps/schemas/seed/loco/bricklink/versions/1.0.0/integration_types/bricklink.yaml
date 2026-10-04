@@ -42,7 +42,7 @@ collections:
   - name: order_items
     label: "Order item"
     label_plural: "Order items"
-    description: "Lines on one BrickLink order. Query with an order_id filter (eq or in); there is no list of every item. The record id is {order_id}-{inventory_id}."
+    description: "Lines on one BrickLink order. Query with an order_id filter (eq or in); there is no list of every item. Filtering by a filed order's id still returns its lines, though orders does not list that order. The record id is {order_id}-{batch}-{inventory_id}, or {order_id}-{batch}-x{position} for a line with no inventory id."
     fields:
       - name: item_no
         type: string
