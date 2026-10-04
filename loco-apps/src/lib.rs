@@ -12,6 +12,7 @@ pub mod integrations;
 pub mod query;
 pub mod seed;
 pub mod server;
+pub mod source;
 pub mod validation;
 pub mod values;
 

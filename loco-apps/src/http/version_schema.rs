@@ -154,6 +154,19 @@ pub enum CollectionAddressKind {
     Ambiguous,
 }
 
+/// One field declared inline on an integration collection.
+///
+/// A standard collection's fields come from the type document. A custom
+/// collection's fields come from the integration document. Owned so a
+/// validator can hold them after the document lookup returns.
+#[derive(Debug, Clone)]
+pub struct InlineField {
+    pub name: String,
+    pub ty: String,
+    pub required: bool,
+    pub options: Vec<String>,
+}
+
 /// Wire row for `GET /schema/.../collection/list`. Ordinary rows keep the
 /// collection document's fields and add `owner`. `integration` is omitted
 /// when the address is an ordinary collection.
@@ -606,6 +619,69 @@ impl VersionSchema {
         } else {
             serde_json::Value::Array(Vec::new())
         }
+    }
+
+    /// Inline fields of an integration address. Empty for an ordinary or
+    /// ambiguous address. Standard fields are the type document's, custom
+    /// fields the integration document's, both through the declaring
+    /// version's view.
+    pub fn integration_fields(&self, address: &CollectionAddress) -> Vec<InlineField> {
+        match &address.kind {
+            CollectionAddressKind::Ordinary | CollectionAddressKind::Ambiguous => Vec::new(),
+            CollectionAddressKind::Standard {
+                type_project,
+                type_name,
+                ..
+            } => {
+                let view = self.view_of(&address.project, &address.version);
+                view.integration_type_at(type_project, type_name)
+                    .and_then(|ty| {
+                        ty.collections()
+                            .iter()
+                            .find(|collection| collection.name() == address.name)
+                            .map(|collection| inline_fields_of(collection.fields()))
+                    })
+                    .unwrap_or_default()
+            }
+            CollectionAddressKind::Custom => {
+                let view = self.view_of(&address.project, &address.version);
+                let integration = address.integration.as_deref().unwrap_or("");
+                view.integration_at(&address.project, integration)
+                    .and_then(|doc| {
+                        doc.collections()
+                            .iter()
+                            .find(|collection| collection.name() == address.name)
+                            .map(|collection| inline_fields_of(collection.fields()))
+                    })
+                    .unwrap_or_default()
+            }
+        }
+    }
+
+    /// The field `bare` that `project` declares on this integration address.
+    ///
+    /// `None` for an ordinary or ambiguous address, when `project` is not the
+    /// owner, or when the owner declares no such field. The owner does not
+    /// also have to be a direct dependency of this version: the address is
+    /// what brings the fields into scope.
+    pub fn integration_field(
+        &self,
+        address: &CollectionAddress,
+        project: &str,
+        bare: &str,
+    ) -> Option<InlineField> {
+        if !matches!(
+            address.kind,
+            CollectionAddressKind::Standard { .. } | CollectionAddressKind::Custom
+        ) {
+            return None;
+        }
+        if project != address.owner {
+            return None;
+        }
+        self.integration_fields(address)
+            .into_iter()
+            .find(|field| field.name == bare)
     }
 
     /// The field `name` that `project` declares on the collection
@@ -2083,6 +2159,22 @@ pub fn parse_address(name: &str) -> ParsedAddress<'_> {
             name: local,
         },
     }
+}
+
+fn inline_fields_of(fields: &[crate::IntegrationField]) -> Vec<InlineField> {
+    fields
+        .iter()
+        .map(|field| InlineField {
+            name: field.name().to_string(),
+            ty: field.r#type().to_string(),
+            required: field.required(),
+            options: field
+                .options()
+                .iter()
+                .map(|option| option.value().to_string())
+                .collect(),
+        })
+        .collect()
 }
 
 fn json_value(value: impl Serialize) -> serde_json::Value {

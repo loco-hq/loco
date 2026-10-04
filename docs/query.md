@@ -147,8 +147,9 @@ filtered by `batch_id` in the browser.
 }
 ```
 
-Records keep the lake shape (`id`, `created_at`, …, `fields`). With `fields`, the `fields` map
-holds only the named fields; system fields are always present.
+Records keep the lake shape (`id`, `created_at`, …, `fields`). A live integration record is
+`{id, fields}` only. With `fields`, the `fields` map holds only the named fields; system
+fields stay present on a lake record and are omitted on a live record except `id`.
 
 ## 4. Names
 
@@ -176,15 +177,22 @@ the same collection name. This is the conservative answer to
 [Open question 1](#open-questions); loosening it later is not breaking. A field name resolves to
 its bare name as the key in the record's `fields` map.
 
-Resolution uses `VersionSchema::collection_in` / `field_in`, which look only in the named
-project and only when it is self or a direct dependency.
+Resolution of an ordinary collection uses `VersionSchema::collection_in` / `field_in`, which
+look only in the named project and only when it is self or a direct dependency.
+
+An integration address is the exception to the direct-dependency check on the field's owner.
+The fields are the type's (a standard collection) or the integration project's (a custom
+collection), and that owner is in scope because the address resolved. The caller still writes
+the owner's name (`acme/salesforce.status`). A project the caller does not depend on is not
+otherwise visible. See docs/integrations.md, Listings, query, and grants.
 
 ### System fields
 
 Record metadata is not a schema field. It is addressed with a `$` prefix so it can never
 collide with a user field: `$id`, `$created_at`, `$created_by`, `$updated_at`, `$updated_by`,
-`$owner`. They can be used in `where` and `order`. They are always returned, so they don't go in
-`fields`.
+`$owner`. They can be used in `where` and `order`. On a lake record they are always returned, so
+they don't go in `fields`. A live integration record returns `id` and omits the rest. Filtering
+or ordering by a system field its source does not declare is `unsupported`.
 
 ## 5. Filters, order, cursors
 

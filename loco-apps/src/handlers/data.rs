@@ -7,17 +7,27 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
-use loco_lake::{InsertRequest, UpdatePatch, Value};
+use loco_lake::{InsertRequest, Record, UpdatePatch, Value};
 use serde_json::{json, Map};
 
+use crate::actions::{ActionFailure, Connection};
 use crate::http::response::{
-    error_response, lake_error_to_response, validation_error_response, ApiResponse,
+    error_response, error_response_with_diagnostics, lake_error_to_response,
+    validation_error_response, ApiResponse,
 };
 use crate::http::scope::{CollectionScope, RecordScope, SiteScope};
-use crate::http::version_schema::{ambiguous_address_message, CollectionAddressKind};
+use crate::http::version_schema::{
+    ambiguous_address_message, AddressResolution, CollectionAddress, CollectionAddressKind,
+    ConnectionDeclarations, VersionSchema,
+};
+use crate::integrations::SourceRegistry;
 use crate::query::{self as q, Plan};
 use crate::server::AppState;
-use crate::validation::ValidationMode;
+use crate::source::{
+    default_order, project_live, unsupported_query, unsupported_verb, verb_allowed,
+    CollectionSource, SourceCall, SourceError, SourceRecord, Verb,
+};
+use crate::validation::{validate_inline_records, Diagnostic, ValidationMode};
 
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{delete as route_delete, get as route_get, post, put};
@@ -39,8 +49,8 @@ pub async fn add(
     if let Err(resp) = scope.require_can_create_data() {
         return resp;
     }
-    let key = match routed(&scope) {
-        Ok(key) => key,
+    let route = match open(&scope, &state, Verb::Insert) {
+        Ok(route) => route,
         Err(resp) => return resp,
     };
     let report = scope.validate(&fields, ValidationMode::Create);
@@ -48,13 +58,40 @@ pub async fn add(
         return validation_error_response(report.diagnostics);
     }
 
+    let dataset_id = scope.dataset_id();
     let req = InsertRequest {
         user: scope.user().username.clone(),
         fields,
     };
-    match state.data_adapter.insert(&scope.dataset_id(), &key, req) {
-        Ok(rec) => (StatusCode::CREATED, ApiResponse::success(rec)).into_response(),
-        Err(e) => lake_error_to_response(e),
+    let outcome = match route {
+        Route::Lake { key } => {
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: None,
+            };
+            state.lake.insert(call, &key, req).await
+        }
+        Route::Live {
+            source,
+            spec,
+            collection,
+        } => {
+            let connection = match connect(&state, &dataset_id, &spec) {
+                Ok(connection) => connection,
+                Err(fail) => return fail_response(fail),
+            };
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: Some(&connection),
+            };
+            // Installer fields would be split onto the sidecar (#117). The
+            // source receives the upstream patch only. That split is not built.
+            source.insert(call, &collection, req).await
+        }
+    };
+    match outcome {
+        Ok(record) => (StatusCode::CREATED, ApiResponse::success(record)).into_response(),
+        Err(err) => source_error_response(err),
     }
 }
 
@@ -62,19 +99,45 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
     if let Err(resp) = scope.require_can_read_data() {
         return resp;
     }
-    let key = match routed(&scope) {
-        Ok(key) => key,
+    let route = match open(&scope, &state, Verb::List) {
+        Ok(route) => route,
         Err(resp) => return resp,
     };
-    match state.data_adapter.list(&scope.dataset_id(), &key) {
+    let dataset_id = scope.dataset_id();
+    let outcome = match route {
+        Route::Lake { key } => {
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: None,
+            };
+            state.lake.list(call, &key).await
+        }
+        Route::Live {
+            source,
+            spec,
+            collection,
+        } => {
+            let connection = match connect(&state, &dataset_id, &spec) {
+                Ok(connection) => connection,
+                Err(fail) => return fail_response(fail),
+            };
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: Some(&connection),
+            };
+            // A cache would sit in front of this call. The sidecar merge
+            // (#117) would run after it, keyed by the integration-qualified
+            // address and the upstream id. Neither is built.
+            source.list(call, &collection).await
+        }
+    };
+    match outcome {
         Ok(records) => {
-            let report = scope.validate_records(
-                records.iter().map(|r| (r.id.as_str(), &r.fields)),
-                ValidationMode::Read,
-            );
+            let report =
+                scope.validate_records(records.iter().map(record_parts), ValidationMode::Read);
             ApiResponse::success_with_diagnostics(records, report.diagnostics).into_response()
         }
-        Err(e) => lake_error_to_response(e),
+        Err(err) => source_error_response(err),
     }
 }
 
@@ -82,9 +145,9 @@ pub async fn list(scope: CollectionScope, State(state): State<Arc<AppState>>) ->
 /// and shape as the matching schema field list (ordinary fields, the type's
 /// fields, or the custom collection's fields), but the version comes from the
 /// site, so a hosted frontend never has to be told which version it runs on.
-/// Readable by whoever may read the records. This is metadata, not a lake
-/// verb, so an unambiguous integration address returns its fields rather
-/// than 501. An ambiguous address is 409 after that same read check.
+/// Readable by whoever may read the records. This is metadata, not a source
+/// call, so an unambiguous integration address returns its fields. An
+/// ambiguous address is 409 after that same read check.
 pub async fn fields(scope: CollectionScope) -> Response {
     if let Err(resp) = scope.require_can_read_data() {
         return resp;
@@ -100,17 +163,45 @@ pub async fn get(scope: RecordScope, State(state): State<Arc<AppState>>) -> Resp
     if let Err(resp) = scope.collection.require_can_read_data() {
         return resp;
     }
-    let key = match routed(&scope.collection) {
-        Ok(key) => key,
+    let route = match open(&scope.collection, &state, Verb::Get) {
+        Ok(route) => route,
         Err(resp) => return resp,
     };
-    match state.data_adapter.get(&scope.dataset_id(), &key, &scope.id) {
+    let dataset_id = scope.dataset_id();
+    let outcome = match route {
+        Route::Lake { key } => {
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: None,
+            };
+            state.lake.get(call, &key, &scope.id).await
+        }
+        Route::Live {
+            source,
+            spec,
+            collection,
+        } => {
+            let connection = match connect(&state, &dataset_id, &spec) {
+                Ok(connection) => connection,
+                Err(fail) => return fail_response(fail),
+            };
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: Some(&connection),
+            };
+            // A cache would sit in front of this call. The sidecar merge
+            // (#117) would run after it, keyed by the integration-qualified
+            // address and the upstream id. Neither is built.
+            source.get(call, &collection, &scope.id).await
+        }
+    };
+    match outcome {
         Ok(Some(record)) => {
-            let report = scope.validate(&record.fields, ValidationMode::Read);
+            let report = scope.validate(record_parts(&record).1, ValidationMode::Read);
             ApiResponse::success_with_diagnostics(record, report.diagnostics).into_response()
         }
         Ok(None) => error_response(StatusCode::NOT_FOUND, "record not found"),
-        Err(e) => lake_error_to_response(e),
+        Err(err) => source_error_response(err),
     }
 }
 
@@ -118,16 +209,38 @@ pub async fn delete(scope: RecordScope, State(state): State<Arc<AppState>>) -> R
     if let Err(resp) = scope.collection.require_can_delete_data() {
         return resp;
     }
-    let key = match routed(&scope.collection) {
-        Ok(key) => key,
+    let route = match open(&scope.collection, &state, Verb::Delete) {
+        Ok(route) => route,
         Err(resp) => return resp,
     };
-    match state
-        .data_adapter
-        .delete(&scope.dataset_id(), &key, &scope.id)
-    {
+    let dataset_id = scope.dataset_id();
+    let outcome = match route {
+        Route::Lake { key } => {
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: None,
+            };
+            state.lake.delete(call, &key, &scope.id).await
+        }
+        Route::Live {
+            source,
+            spec,
+            collection,
+        } => {
+            let connection = match connect(&state, &dataset_id, &spec) {
+                Ok(connection) => connection,
+                Err(fail) => return fail_response(fail),
+            };
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: Some(&connection),
+            };
+            source.delete(call, &collection, &scope.id).await
+        }
+    };
+    match outcome {
         Ok(()) => ApiResponse::success("deleted").into_response(),
-        Err(e) => lake_error_to_response(e),
+        Err(err) => source_error_response(err),
     }
 }
 
@@ -139,8 +252,8 @@ pub async fn update(
     if let Err(resp) = scope.collection.require_can_update_data() {
         return resp;
     }
-    let key = match routed(&scope.collection) {
-        Ok(key) => key,
+    let route = match open(&scope.collection, &state, Verb::Update) {
+        Ok(route) => route,
         Err(resp) => return resp,
     };
     let report = scope.validate(&fields, ValidationMode::Update);
@@ -148,25 +261,51 @@ pub async fn update(
         return validation_error_response(report.diagnostics);
     }
 
+    let dataset_id = scope.dataset_id();
     let patch = UpdatePatch {
         user: scope.user().username.clone(),
         fields,
     };
-    match state
-        .data_adapter
-        .update(&scope.dataset_id(), &key, &scope.id, patch)
-    {
-        Ok(rec) => ApiResponse::success(rec).into_response(),
-        Err(e) => lake_error_to_response(e),
+    let outcome = match route {
+        Route::Lake { key } => {
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: None,
+            };
+            state.lake.update(call, &key, &scope.id, patch).await
+        }
+        Route::Live {
+            source,
+            spec,
+            collection,
+        } => {
+            let connection = match connect(&state, &dataset_id, &spec) {
+                Ok(connection) => connection,
+                Err(fail) => return fail_response(fail),
+            };
+            let call = SourceCall {
+                dataset_id: &dataset_id,
+                connection: Some(&connection),
+            };
+            // Installer fields would be split onto the sidecar (#117). The
+            // source receives the upstream patch only. That split is not built.
+            source.update(call, &collection, &scope.id, patch).await
+        }
+    };
+    match outcome {
+        Ok(record) => ApiResponse::success(record).into_response(),
+        Err(err) => source_error_response(err),
     }
 }
 
 /// `POST /data/query` — a batch of named read queries (`docs/query.md`).
 ///
 /// Each query is resolved, type-checked, and authorized on its own; one that
-/// fails gets an error result and the rest still run. Every runnable query
-/// goes to the lake in one call, so the batch reads one snapshot. The status
-/// is 400 only when the body is not a batch at all.
+/// fails gets an error result and the rest still run. Lake queries share one
+/// adapter snapshot. An integration query runs on that type's source and does
+/// not share the snapshot. One integration failure stays inside that query's
+/// result. A lake failure still fails the request. The status is 400 only
+/// when the body is not a batch at all.
 pub async fn query(
     scope: SiteScope,
     State(state): State<Arc<AppState>>,
@@ -181,57 +320,284 @@ pub async fn query(
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, &msg),
     };
 
-    let mut results = Map::new();
-    let mut runnable: Vec<(String, Plan)> = Vec::new();
+    let dataset_id = scope.dataset_id();
+    let mut slots: Vec<(String, Slot)> = Vec::new();
     for (name, raw) in queries {
-        match plan_one(&scope, &name, &raw) {
-            Ok(Ok(plan)) => runnable.push((name, plan)),
-            Ok(Err(diagnostics)) => {
-                results.insert(
-                    name,
-                    json!({ "error": "query failed", "diagnostics": diagnostics }),
-                );
-            }
+        match plan_one(&scope, &state, &dataset_id, &name, &raw) {
+            Ok(Ok(ready)) => slots.push((name, Slot::Ready(Box::new(ready)))),
+            Ok(Err(diagnostics)) => slots.push((name, Slot::Failed(diagnostics))),
             Err(resp) => return resp,
         }
     }
 
-    let mut diagnostics = Vec::new();
-    if !runnable.is_empty() {
-        let lake: Vec<_> = runnable.iter().map(|(_, p)| p.lake.clone()).collect();
-        let pages = match state.data_adapter.query(&scope.dataset_id(), &lake) {
-            Ok(pages) => pages,
-            Err(e) => return lake_error_to_response(e),
+    let lake_at: Vec<usize> = slots
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, slot))| {
+            matches!(slot, Slot::Ready(ready) if matches!(ready.route, QueryRoute::Lake))
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if !lake_at.is_empty() {
+        let lake_queries: Vec<_> = lake_at
+            .iter()
+            .map(|index| match &slots[*index].1 {
+                Slot::Ready(ready) => ready.plan.lake.clone(),
+                _ => unreachable!("lake index points at a ready lake query"),
+            })
+            .collect();
+        let call = SourceCall {
+            dataset_id: &dataset_id,
+            connection: None,
         };
-        for ((name, plan), page) in runnable.into_iter().zip(pages) {
-            diagnostics.extend(q::record_diagnostics(
+        let pages = match state.lake.query(call, &lake_queries).await {
+            Ok(pages) if pages.len() == lake_queries.len() => pages,
+            Ok(_) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "source returned the wrong number of pages",
+                );
+            }
+            // A lake failure fails the request and drops every result, the
+            // same as the adapter error did before sources.
+            Err(SourceError::Lake(err)) => return lake_error_to_response(err),
+            Err(err) => return source_error_response(err),
+        };
+        for (index, page) in lake_at.into_iter().zip(pages) {
+            let name = slots[index].0.clone();
+            let Slot::Ready(ready) =
+                std::mem::replace(&mut slots[index].1, Slot::Failed(Vec::new()))
+            else {
+                continue;
+            };
+            let records = lake_records(&page.records);
+            let diagnostics = q::record_diagnostics(
                 &scope.schema,
                 &name,
-                &plan.target.project,
-                &plan.target.name,
-                &page.records,
-                plan.lake.fields.as_deref(),
-            ));
-            let cursor = page.next.map(|next| q::encode_cursor(&plan.hash, &next));
-            results.insert(name, json!({ "records": page.records, "cursor": cursor }));
+                &ready.plan.target.project,
+                &ready.plan.target.name,
+                &records,
+                ready.plan.lake.fields.as_deref(),
+            );
+            let cursor = page
+                .next
+                .as_ref()
+                .map(|next| q::encode_cursor(&ready.plan.hash, next));
+            slots[index].1 = Slot::Done {
+                value: json!({ "records": page.records, "cursor": cursor }),
+                diagnostics,
+            };
+        }
+    }
+
+    for (name, slot) in &mut slots {
+        let is_live = matches!(
+            slot,
+            Slot::Ready(ready) if matches!(ready.route, QueryRoute::Live { .. })
+        );
+        if !is_live {
+            continue;
+        }
+        let Slot::Ready(ready) = std::mem::replace(slot, Slot::Failed(Vec::new())) else {
+            continue;
+        };
+        *slot = run_live(&state, &scope.schema, &dataset_id, name, *ready).await;
+    }
+
+    // Errors first, then successes, each group in the batch's original order.
+    let mut results = Map::new();
+    let mut diagnostics = Vec::new();
+    for (name, slot) in &slots {
+        if let Slot::Failed(failed) = slot {
+            results.insert(
+                name.clone(),
+                json!({ "error": "query failed", "diagnostics": failed }),
+            );
+        }
+    }
+    for (name, slot) in &slots {
+        if let Slot::Done {
+            value,
+            diagnostics: found,
+        } = slot
+        {
+            diagnostics.extend(found.clone());
+            results.insert(name.clone(), value.clone());
         }
     }
 
     ApiResponse::success_with_diagnostics(results, diagnostics).into_response()
 }
 
+enum Route {
+    Lake {
+        key: String,
+    },
+    Live {
+        source: Arc<dyn CollectionSource>,
+        spec: ConnectionDeclarations,
+        collection: String,
+    },
+}
+
+enum QueryRoute {
+    Lake,
+    Live {
+        source: Arc<dyn CollectionSource>,
+        spec: ConnectionDeclarations,
+    },
+}
+
+struct Ready {
+    plan: Plan,
+    route: QueryRoute,
+}
+
+enum Slot {
+    Failed(Vec<Diagnostic>),
+    Ready(Box<Ready>),
+    Done {
+        value: serde_json::Value,
+        diagnostics: Vec<Diagnostic>,
+    },
+}
+
+enum ConnectFail {
+    Missing(Vec<Diagnostic>),
+    Unavailable(String),
+    Failed(String),
+}
+
+/// After auth: ambiguous is 409, no registration is 501, an undeclared verb
+/// is 400. This does not read connection values and does not validate the body.
+fn open(scope: &CollectionScope, state: &AppState, verb: Verb) -> Result<Route, Response> {
+    if matches!(scope.address.kind, CollectionAddressKind::Ambiguous) {
+        return Err(ambiguous_collection(scope));
+    }
+    let route = route_of(scope, state)?;
+    let caps = match &route {
+        Route::Lake { .. } => state.lake.capabilities(),
+        Route::Live { source, .. } => source.capabilities(),
+    };
+    if !verb_allowed(&caps, verb) {
+        return Err(unsupported_response(&scope.canonical(), verb));
+    }
+    Ok(route)
+}
+
+fn route_of(scope: &CollectionScope, state: &AppState) -> Result<Route, Response> {
+    match scope.address.kind {
+        CollectionAddressKind::Ambiguous => Err(ambiguous_collection(scope)),
+        CollectionAddressKind::Ordinary => {
+            let key = scope.lake_key().ok_or_else(|| no_source(scope))?;
+            Ok(Route::Lake { key })
+        }
+        CollectionAddressKind::Standard { .. } | CollectionAddressKind::Custom => {
+            match source_for(&scope.site.schema, &state.sources, &scope.address) {
+                Some((source, spec)) => Ok(Route::Live {
+                    source,
+                    spec,
+                    collection: scope.address.name.clone(),
+                }),
+                None => Err(no_source(scope)),
+            }
+        }
+    }
+}
+
+/// The type's source, plus the declarations the required-value check uses.
+/// A standard collection's registry key is on the address. A custom
+/// collection's type is the integration's `type_ref`, which may name a
+/// package the caller does not depend on.
+fn source_for(
+    schema: &VersionSchema,
+    sources: &SourceRegistry,
+    address: &CollectionAddress,
+) -> Option<(Arc<dyn CollectionSource>, ConnectionDeclarations)> {
+    let integration = address.integration.as_deref()?;
+    let spec = schema.connection_declarations(&address.project, integration)?;
+    let source = match &address.kind {
+        CollectionAddressKind::Standard {
+            type_project,
+            type_name,
+            ..
+        } => sources.get(type_project, type_name)?,
+        CollectionAddressKind::Custom => {
+            let (project, name) = schema.split(&spec.type_ref);
+            sources.get(project, name)?
+        }
+        CollectionAddressKind::Ordinary | CollectionAddressKind::Ambiguous => return None,
+    };
+    Some((source, spec))
+}
+
+fn connect(
+    state: &AppState,
+    dataset_id: &str,
+    spec: &ConnectionDeclarations,
+) -> Result<Connection, ConnectFail> {
+    let connection = Connection::new(
+        dataset_id.to_string(),
+        spec.clone(),
+        state.secrets.clone(),
+        state.data_adapter.clone(),
+        state.http.clone(),
+    );
+    match connection.missing_required() {
+        Ok(missing) if missing.is_empty() => Ok(connection),
+        Ok(missing) => Err(ConnectFail::Missing(missing)),
+        Err(ActionFailure::Unavailable { message }) => Err(ConnectFail::Unavailable(message)),
+        Err(failure) => Err(ConnectFail::Failed(failure.message().to_string())),
+    }
+}
+
+fn fail_response(fail: ConnectFail) -> Response {
+    match fail {
+        ConnectFail::Missing(diagnostics) => error_response_with_diagnostics(
+            StatusCode::BAD_REQUEST,
+            "required configuration is not set",
+            diagnostics,
+        ),
+        ConnectFail::Unavailable(message) => {
+            error_response(StatusCode::SERVICE_UNAVAILABLE, &message)
+        }
+        ConnectFail::Failed(message) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &message),
+    }
+}
+
+fn connect_query_diags(name: &str, fail: ConnectFail) -> Vec<Diagnostic> {
+    match fail {
+        ConnectFail::Missing(diagnostics) => diagnostics,
+        ConnectFail::Unavailable(message) => {
+            vec![Diagnostic::error(
+                "unavailable",
+                Some(name.to_string()),
+                message,
+            )]
+        }
+        ConnectFail::Failed(message) => {
+            vec![Diagnostic::error("failed", Some(name.to_string()), message)]
+        }
+    }
+}
+
 /// One query → a plan, or the diagnostics that stop it. The outer `Err` is a
 /// site-level failure (the membership lookup), which fails the whole request.
-/// An unknown collection fails inside `target`, before the grant. An
-/// ambiguous address and a missing source are reported after it.
+///
+/// An integration query is planned before the capability check, so a bad
+/// field is `invalid_query` rather than a missing secret. The capability
+/// check comes before the required-value check. No registration is
+/// `no_source` and does not ask for configuration.
 fn plan_one(
     scope: &SiteScope,
+    state: &AppState,
+    dataset_id: &str,
     name: &str,
     raw: &serde_json::Value,
-) -> Result<Result<Plan, Vec<q::Diagnostic>>, Response> {
+) -> Result<Result<Ready, Vec<Diagnostic>>, Response> {
     let target = match q::target(&scope.schema, name, raw) {
         Ok(target) => target,
-        Err(d) => return Ok(Err(vec![d])),
+        Err(diagnostic) => return Ok(Err(vec![diagnostic])),
     };
     if !scope.may_read_collection(&target.local, &target.address_project)? {
         let named = if target.integration.is_some() {
@@ -247,9 +613,6 @@ fn plan_one(
             format!("no read grant on {named}"),
         )]));
     }
-    // The address resolved and the caller may read it. A collision names
-    // both documents; a single integration collection has no source yet
-    // (#125). Neither is a lake read, and neither is an unknown collection.
     if target.ambiguous {
         let address = scope
             .schema
@@ -261,25 +624,198 @@ fn plan_one(
         )]));
     }
     if target.integration.is_some() {
-        let address = scope
+        let address_name = scope
             .schema
             .reference(&target.address_project, &target.local);
-        return Ok(Err(vec![q::Diagnostic::error(
-            q::kind::NO_SOURCE,
-            Some(name.to_string()),
-            format!("no source for collection {address}"),
-        )]));
+        let Some(address) = resolve_address(&scope.schema, &address_name) else {
+            return Ok(Err(vec![no_source_diag(name, &address_name)]));
+        };
+        let Some((source, spec)) = source_for(&scope.schema, &state.sources, &address) else {
+            return Ok(Err(vec![no_source_diag(name, &address_name)]));
+        };
+        let caps = source.capabilities();
+        let plan = match q::plan(&scope.schema, name, raw, target, &default_order(&caps)) {
+            Ok(plan) => plan,
+            Err(diagnostics) => return Ok(Err(diagnostics)),
+        };
+        let problems = unsupported_query(name, &address_name, &caps, &plan.lake);
+        if !problems.is_empty() {
+            return Ok(Err(problems));
+        }
+        if let Err(fail) = connect(state, dataset_id, &spec) {
+            return Ok(Err(connect_query_diags(name, fail)));
+        }
+        return Ok(Ok(Ready {
+            plan,
+            route: QueryRoute::Live { source, spec },
+        }));
     }
-    Ok(q::plan(&scope.schema, name, raw, target))
+
+    let caps = state.lake.capabilities();
+    let plan = match q::plan(&scope.schema, name, raw, target, &default_order(&caps)) {
+        Ok(plan) => plan,
+        Err(diagnostics) => return Ok(Err(diagnostics)),
+    };
+    let problems = unsupported_query(name, &plan.target.key(), &caps, &plan.lake);
+    if !problems.is_empty() {
+        return Ok(Err(problems));
+    }
+    Ok(Ok(Ready {
+        plan,
+        route: QueryRoute::Lake,
+    }))
 }
 
-/// Lake key after the access check, or the response that replaces the lake
-/// read. Ambiguous is 409. An unambiguous integration address is 501.
-fn routed(scope: &CollectionScope) -> Result<String, Response> {
-    if matches!(scope.address.kind, CollectionAddressKind::Ambiguous) {
-        return Err(ambiguous_collection(scope));
+async fn run_live(
+    state: &AppState,
+    schema: &VersionSchema,
+    dataset_id: &str,
+    name: &str,
+    ready: Ready,
+) -> Slot {
+    let QueryRoute::Live { source, spec } = ready.route else {
+        return Slot::Failed(vec![Diagnostic::error(
+            "failed",
+            Some(name.to_string()),
+            "internal error: integration query was not live".into(),
+        )]);
+    };
+    let connection = match connect(state, dataset_id, &spec) {
+        Ok(connection) => connection,
+        Err(fail) => return Slot::Failed(connect_query_diags(name, fail)),
+    };
+    let call = SourceCall {
+        dataset_id,
+        connection: Some(&connection),
+    };
+    let mut lake = ready.plan.lake.clone();
+    lake.collection = ready.plan.target.name.clone();
+    // A cache would sit in front of this call. The sidecar merge (#117)
+    // would run after it, keyed by the integration-qualified address and the
+    // upstream id. Neither is built.
+    let pages = match source.query(call, &[lake]).await {
+        Ok(pages) => pages,
+        Err(err) => return Slot::Failed(source_query_diags(name, err)),
+    };
+    let Some(mut page) = one_page(pages) else {
+        return Slot::Failed(vec![Diagnostic::error(
+            "failed",
+            Some(name.to_string()),
+            "source returned the wrong number of pages".into(),
+        )]);
+    };
+    for record in &mut page.records {
+        if let SourceRecord::Live(live) = record {
+            project_live(live, ready.plan.lake.fields.as_deref());
+        }
     }
-    scope.lake_key().ok_or_else(|| no_source(scope))
+    let (canonical, specs) = inline_specs(schema, &ready.plan);
+    let diagnostics = validate_inline_records(
+        &specs,
+        &canonical,
+        schema.version(),
+        page.records.iter().map(record_parts),
+        ValidationMode::Read,
+        ready.plan.lake.fields.as_deref(),
+    )
+    .prefix_paths(name)
+    .diagnostics;
+    let cursor = page
+        .next
+        .as_ref()
+        .map(|next| q::encode_cursor(&ready.plan.hash, next));
+    Slot::Done {
+        value: json!({ "records": page.records, "cursor": cursor }),
+        diagnostics,
+    }
+}
+
+fn one_page(mut pages: Vec<crate::source::SourcePage>) -> Option<crate::source::SourcePage> {
+    if pages.len() == 1 {
+        pages.pop()
+    } else {
+        None
+    }
+}
+
+fn resolve_address(schema: &VersionSchema, name: &str) -> Option<CollectionAddress> {
+    match schema.collection_address(name) {
+        AddressResolution::Resolved(address) => Some(address),
+        AddressResolution::Missing => None,
+    }
+}
+
+fn inline_specs(
+    schema: &VersionSchema,
+    plan: &Plan,
+) -> (String, Vec<crate::http::version_schema::InlineField>) {
+    let canonical = schema.reference(&plan.target.address_project, &plan.target.local);
+    let specs = match schema.collection_address(&canonical) {
+        AddressResolution::Resolved(address) => schema.integration_fields(&address),
+        AddressResolution::Missing => Vec::new(),
+    };
+    (canonical, specs)
+}
+
+fn record_parts(record: &SourceRecord) -> (&str, &HashMap<String, Value>) {
+    match record {
+        SourceRecord::Lake(record) => (record.id.as_str(), &record.fields),
+        SourceRecord::Live(record) => (record.id.as_str(), &record.fields),
+    }
+}
+
+fn lake_records(records: &[SourceRecord]) -> Vec<Record> {
+    records
+        .iter()
+        .filter_map(|record| match record {
+            SourceRecord::Lake(record) => Some(record.clone()),
+            SourceRecord::Live(_) => None,
+        })
+        .collect()
+}
+
+fn source_query_diags(name: &str, err: SourceError) -> Vec<Diagnostic> {
+    let (kind, message) = match err {
+        SourceError::Upstream { status, message } => {
+            ("upstream", format!("upstream {status}: {message}"))
+        }
+        SourceError::Unavailable { message } => ("unavailable", message),
+        SourceError::Failed { message } => ("failed", message),
+        SourceError::Lake(err) => ("failed", err.to_string()),
+    };
+    vec![Diagnostic::error(kind, Some(name.to_string()), message)]
+}
+
+fn source_error_response(err: SourceError) -> Response {
+    match err {
+        SourceError::Lake(err) => lake_error_to_response(err),
+        SourceError::Upstream { status, message } => error_response(
+            StatusCode::BAD_GATEWAY,
+            &format!("upstream {status}: {message}"),
+        ),
+        SourceError::Unavailable { message } => {
+            error_response(StatusCode::SERVICE_UNAVAILABLE, &message)
+        }
+        SourceError::Failed { message } => {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+        }
+    }
+}
+
+fn unsupported_response(address: &str, verb: Verb) -> Response {
+    error_response_with_diagnostics(
+        StatusCode::BAD_REQUEST,
+        "unsupported",
+        vec![unsupported_verb(address, verb)],
+    )
+}
+
+fn no_source_diag(name: &str, address: &str) -> Diagnostic {
+    Diagnostic::error(
+        q::kind::NO_SOURCE,
+        Some(name.to_string()),
+        format!("no source for collection {address}"),
+    )
 }
 
 /// 409 after auth. The address resolved to `project` and `local`, and both

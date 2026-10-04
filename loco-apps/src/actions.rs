@@ -171,7 +171,7 @@ impl From<ConfigReadError> for ActionFailure {
 /// `secret` and `variable` read that integration's rows on [`Self::dataset_id`]
 /// and nothing else. A loose declaration of the same bare name, and another
 /// integration's row, are not returned. The secret store and the lake adapter
-/// stay private: a later source receives this connection, not every secret on
+/// stay private: a collection source receives this connection, not every secret on
 /// the dataset and not [`DataAdapter`].
 #[derive(Clone)]
 pub struct Connection {
