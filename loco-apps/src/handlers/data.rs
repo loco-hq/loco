@@ -304,8 +304,9 @@ pub async fn update(
 /// fails gets an error result and the rest still run. Lake queries share one
 /// adapter snapshot. An integration query runs on that type's source and does
 /// not share the snapshot. One integration failure stays inside that query's
-/// result. A lake failure still fails the request. The status is 400 only
-/// when the body is not a batch at all.
+/// result. A failure of that snapshot fails the request. A lake error while
+/// reading an integration's connection values is a per-query `failed`.
+/// The status is 400 only when the body is not a batch at all.
 pub async fn query(
     scope: SiteScope,
     State(state): State<Arc<AppState>>,
@@ -358,8 +359,9 @@ pub async fn query(
                     "source returned the wrong number of pages",
                 );
             }
-            // A lake failure fails the request and drops every result, the
-            // same as the adapter error did before sources.
+            // A failure of this snapshot fails the request and drops every
+            // result, the same as the adapter error did before sources. A
+            // lake error while reading connection values stays in `connect`.
             Err(SourceError::Lake(err)) => return lake_error_to_response(err),
             Err(err) => return source_error_response(err),
         };
@@ -401,7 +403,7 @@ pub async fn query(
         let Slot::Ready(ready) = std::mem::replace(slot, Slot::Failed(Vec::new())) else {
             continue;
         };
-        *slot = run_live(&state, &scope.schema, &dataset_id, name, *ready).await;
+        *slot = run_live(&scope.schema, &dataset_id, name, *ready).await;
     }
 
     // Errors first, then successes, each group in the batch's original order.
@@ -444,7 +446,7 @@ enum QueryRoute {
     Lake,
     Live {
         source: Arc<dyn CollectionSource>,
-        spec: ConnectionDeclarations,
+        connection: Connection,
     },
 }
 
@@ -570,14 +572,16 @@ fn connect_query_diags(name: &str, fail: ConnectFail) -> Vec<Diagnostic> {
         ConnectFail::Missing(diagnostics) => diagnostics,
         ConnectFail::Unavailable(message) => {
             vec![Diagnostic::error(
-                "unavailable",
+                q::kind::UNAVAILABLE,
                 Some(name.to_string()),
                 message,
             )]
         }
-        ConnectFail::Failed(message) => {
-            vec![Diagnostic::error("failed", Some(name.to_string()), message)]
-        }
+        ConnectFail::Failed(message) => vec![Diagnostic::error(
+            q::kind::FAILED,
+            Some(name.to_string()),
+            message,
+        )],
     }
 }
 
@@ -642,12 +646,13 @@ fn plan_one(
         if !problems.is_empty() {
             return Ok(Err(problems));
         }
-        if let Err(fail) = connect(state, dataset_id, &spec) {
-            return Ok(Err(connect_query_diags(name, fail)));
-        }
+        let connection = match connect(state, dataset_id, &spec) {
+            Ok(connection) => connection,
+            Err(fail) => return Ok(Err(connect_query_diags(name, fail))),
+        };
         return Ok(Ok(Ready {
             plan,
-            route: QueryRoute::Live { source, spec },
+            route: QueryRoute::Live { source, connection },
         }));
     }
 
@@ -666,23 +671,13 @@ fn plan_one(
     }))
 }
 
-async fn run_live(
-    state: &AppState,
-    schema: &VersionSchema,
-    dataset_id: &str,
-    name: &str,
-    ready: Ready,
-) -> Slot {
-    let QueryRoute::Live { source, spec } = ready.route else {
+async fn run_live(schema: &VersionSchema, dataset_id: &str, name: &str, ready: Ready) -> Slot {
+    let QueryRoute::Live { source, connection } = ready.route else {
         return Slot::Failed(vec![Diagnostic::error(
-            "failed",
+            q::kind::FAILED,
             Some(name.to_string()),
             "internal error: integration query was not live".into(),
         )]);
-    };
-    let connection = match connect(state, dataset_id, &spec) {
-        Ok(connection) => connection,
-        Err(fail) => return Slot::Failed(connect_query_diags(name, fail)),
     };
     let call = SourceCall {
         dataset_id,
@@ -699,7 +694,7 @@ async fn run_live(
     };
     let Some(mut page) = one_page(pages) else {
         return Slot::Failed(vec![Diagnostic::error(
-            "failed",
+            q::kind::FAILED,
             Some(name.to_string()),
             "source returned the wrong number of pages".into(),
         )]);
@@ -777,11 +772,11 @@ fn lake_records(records: &[SourceRecord]) -> Vec<Record> {
 fn source_query_diags(name: &str, err: SourceError) -> Vec<Diagnostic> {
     let (kind, message) = match err {
         SourceError::Upstream { status, message } => {
-            ("upstream", format!("upstream {status}: {message}"))
+            (q::kind::UPSTREAM, format!("upstream {status}: {message}"))
         }
-        SourceError::Unavailable { message } => ("unavailable", message),
-        SourceError::Failed { message } => ("failed", message),
-        SourceError::Lake(err) => ("failed", err.to_string()),
+        SourceError::Unavailable { message } => (q::kind::UNAVAILABLE, message),
+        SourceError::Failed { message } => (q::kind::FAILED, message),
+        SourceError::Lake(err) => (q::kind::FAILED, err.to_string()),
     };
     vec![Diagnostic::error(kind, Some(name.to_string()), message)]
 }

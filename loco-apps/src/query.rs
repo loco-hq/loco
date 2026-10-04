@@ -47,10 +47,12 @@ pub const MAX_DEPTH: usize = 8;
 /// Comparisons in one `where`.
 pub const MAX_COMPARISONS: usize = 100;
 
-/// Diagnostic kinds a query can produce, beside `unknown_field` and
-/// `type_mismatch` from `validation::kind`.
+/// Diagnostic kinds a query can produce. Field and source kinds are the
+/// constants in `validation::kind`; the rest are query-only.
 pub mod kind {
-    pub use crate::validation::kind::{TYPE_MISMATCH, UNKNOWN_FIELD, UNSUPPORTED};
+    pub use crate::validation::kind::{
+        FAILED, TYPE_MISMATCH, UNAVAILABLE, UNKNOWN_FIELD, UNSUPPORTED, UPSTREAM,
+    };
     pub const UNKNOWN_COLLECTION: &str = "unknown_collection";
     pub const INVALID_QUERY: &str = "invalid_query";
     pub const FORBIDDEN: &str = "forbidden";

@@ -28,6 +28,15 @@ pub mod kind {
     /// A verb, filter, order, limit, or cursor the collection's source does
     /// not declare. The result is this error, never a widened page.
     pub const UNSUPPORTED: &str = "unsupported";
+    /// The integration source's upstream call failed. The message is
+    /// `upstream {status}: {message}` and does not include the request URL.
+    pub const UPSTREAM: &str = "upstream";
+    /// Reading connection values needs `LOCO_SECRET_KEY`, and it is unset
+    /// or malformed.
+    pub const UNAVAILABLE: &str = "unavailable";
+    /// The source failed, or a lake read of this integration's connection
+    /// values failed. On a query the latter stays inside that query.
+    pub const FAILED: &str = "failed";
 }
 
 /// The types a collection field may declare. `/schema` field writes reject
@@ -627,6 +636,10 @@ mod tests {
         assert_eq!(kind::TYPE_MISMATCH, "type_mismatch");
         assert_eq!(kind::INVALID_OPTION, "invalid_option");
         assert_eq!(kind::REQUIRED, "required");
+        assert_eq!(kind::UNSUPPORTED, "unsupported");
+        assert_eq!(kind::UPSTREAM, "upstream");
+        assert_eq!(kind::UNAVAILABLE, "unavailable");
+        assert_eq!(kind::FAILED, "failed");
     }
 
     #[test]

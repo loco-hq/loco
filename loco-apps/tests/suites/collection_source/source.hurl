@@ -150,18 +150,21 @@ jsonpath "$.diagnostics[1].kind" == "required"
 jsonpath "$.diagnostics[1].path" == "base_url"
 jsonpath "$.diagnostics[1].message" == "variable 'base_url' is not set"
 
+# An unknown field would be `validation failed` if the body were checked first.
 POST http://127.0.0.1:{{port}}/data/east:items/add
 Authorization: Bearer {{token}}
 X-Project-Id: alice/shop
 X-Site-Id: dev
 Content-Type: application/json
-{}
+{"not_a_field": "x"}
 HTTP 400
 [Asserts]
 jsonpath "$.error" == "unsupported"
 jsonpath "$.diagnostics[0].kind" == "unsupported"
 jsonpath "$.diagnostics[0].message" contains "does not support insert"
 body not contains "is not set"
+body not contains "unknown_field"
+body not contains "validation failed"
 
 POST http://127.0.0.1:{{port}}/data/query
 Authorization: Bearer {{token}}
@@ -273,6 +276,62 @@ Authorization: Bearer {{token}}
 Content-Type: application/json
 {"value": "{{hub}}"}
 HTTP 200
+
+# The cursor binds to the canonical address. The next page follows it.
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: alice/shop
+X-Site-Id: dev
+Content-Type: application/json
+{"queries": {"p": {"collection": "east:items", "limit": 1}}}
+HTTP 200
+[Captures]
+cur: jsonpath "$.data.p.cursor"
+[Asserts]
+jsonpath "$.data.p.records" count == 1
+jsonpath "$.data.p.records[0].id" == "e1"
+jsonpath "$.data.p.cursor" isString
+
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: alice/shop
+X-Site-Id: dev
+Content-Type: application/json
+{"queries": {"p": {"collection": "east:items", "limit": 1, "cursor": "{{cur}}"}}}
+HTTP 200
+[Asserts]
+jsonpath "$.data.p.records" count == 1
+jsonpath "$.data.p.records[0].id" == "e2"
+jsonpath "$.data.p.cursor" == null
+
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: alice/shop
+X-Site-Id: dev
+Content-Type: application/json
+{"queries": {"p": {"collection": "west:items", "cursor": "{{cur}}"}}}
+HTTP 200
+[Asserts]
+jsonpath "$.data.p.error" == "query failed"
+jsonpath "$.data.p.diagnostics[0].kind" == "cursor_mismatch"
+jsonpath "$.data.p.diagnostics[0].path" == "p/cursor"
+
+# `fields` projects a live record. `seen` was not asked for.
+POST http://127.0.0.1:{{port}}/data/query
+Authorization: Bearer {{token}}
+X-Project-Id: alice/shop
+X-Site-Id: dev
+Content-Type: application/json
+{"queries": {"p": {"collection": "east:items", "fields": ["alice/pkg.status"]}}}
+HTTP 200
+[Asserts]
+jsonpath "$.data.p.records" count == 2
+jsonpath "$.data.p.records[0].id" == "e1"
+jsonpath "$.data.p.records[0].fields.status" == "open"
+jsonpath "$.data.p.records[0].fields.seen" not exists
+jsonpath "$.data.p.records[1].id" == "e2"
+jsonpath "$.data.p.records[1].fields.status" == "closed"
+jsonpath "$.data.p.records[1].fields.seen" not exists
 
 GET http://127.0.0.1:{{port}}/data/east:items/list
 Authorization: Bearer {{token}}
