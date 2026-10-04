@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "description": "OK",
+    "message": "OK",
+    "code": 200
+  },
+  "data": {
+    "order_id": 29471234,
+    "date_ordered": "2026-10-03T14:05:11.000Z",
+    "date_status_changed": "2026-10-03T14:05:11.000Z",
+    "seller_name": "brocksbricks",
+    "store_name": "Brock's Bricks",
+    "buyer_name": "ada_bricks",
+    "buyer_email": "ada_bricks@example.test",
+    "require_insurance": false,
+    "status": "PENDING",
+    "is_invoiced": false,
+    "is_filed": false,
+    "drive_thru_sent": false,
+    "total_count": 3,
+    "unique_count": 3,
+    "total_weight": "12.40",
+    "payment": {
+      "method": "PayPal",
+      "currency_code": "USD",
+      "date_paid": "2026-10-03T14:05:11.000Z",
+      "status": "Completed"
+    },
+    "cost": {
+      "currency_code": "USD",
+      "subtotal": "41.2300",
+      "grand_total": "41.2300",
+      "shipping": "0.0000",
+      "insurance": "0.0000",
+      "credit": "0.0000",
+      "coupon": "0.0000",
+      "vat_rate": "0.00",
+      "vat_amount": "0.0000",
+      "etc1": "0.0000",
+      "etc2": "0.0000"
+    }
+  }
+}

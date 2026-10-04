@@ -397,7 +397,9 @@ fn strip_zeros(digits: &[u8]) -> &[u8] {
     &digits[zeros..]
 }
 
-fn equals(stored: &Value, value: &Value) -> bool {
+/// Whether a filter's `eq` (and `in`) would match `stored` against `value`.
+/// Public so a live source filters with the lake's equality.
+pub fn equals(stored: &Value, value: &Value) -> bool {
     compare_same_kind(stored, value) == Some(Ordering::Equal)
 }
 
@@ -440,8 +442,9 @@ pub(crate) fn order_values(order: &[OrderKey], record: &Record) -> Vec<Value> {
     order.iter().map(|key| key.field.value(record)).collect()
 }
 
-/// Compare two effective order-key tuples under `order`.
-pub(crate) fn compare_keys(order: &[OrderKey], a: &[Value], b: &[Value]) -> Ordering {
+/// Compare two effective order-key tuples under `order`. Public so a live
+/// source sorts and pages with the lake's order.
+pub fn compare_keys(order: &[OrderKey], a: &[Value], b: &[Value]) -> Ordering {
     for ((key, x), y) in order.iter().zip(a).zip(b) {
         let ord = sort_cmp(x, y, key.collation);
         let ord = match key.dir {

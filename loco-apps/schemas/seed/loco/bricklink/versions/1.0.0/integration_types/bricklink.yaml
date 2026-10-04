@@ -1,0 +1,87 @@
+label: "BrickLink"
+description: "A BrickLink store, read live through the store API with OAuth 1.0a. Nothing is cached: every read is a call against the store's daily quota."
+secrets:
+  - name: consumer_key
+    label: "Consumer key"
+    required: true
+  - name: consumer_secret
+    label: "Consumer secret"
+    required: true
+  - name: token_value
+    label: "Token"
+    required: true
+  - name: token_secret
+    label: "Token secret"
+    required: true
+variables:
+  - name: base_url
+    label: "API base URL"
+    description: "The store API. A dataset points it at a fixture or a local mock."
+    required: true
+    default: "https://api.bricklink.com/api/store/v1"
+collections:
+  - name: orders
+    label: "Order"
+    label_plural: "Orders"
+    description: "Incoming orders the store has not filed. The record id is the BrickLink order id. Filter by status (eq or in)."
+    fields:
+      - name: status
+        type: string
+        label: "Status"
+      - name: buyer
+        type: string
+        label: "Buyer"
+      - name: date
+        type: string
+        label: "Date"
+        description: "When the order was placed, as BrickLink returns it"
+      - name: totals
+        type: string
+        label: "Totals"
+        description: "Grand total with its currency code"
+  - name: order_items
+    label: "Order item"
+    label_plural: "Order items"
+    description: "Lines on one BrickLink order. Query with an order_id filter (eq or in); there is no list of every item. The record id is {order_id}-{inventory_id}."
+    fields:
+      - name: item_no
+        type: string
+        label: "Item"
+      - name: item_type
+        type: string
+        label: "Item type"
+      - name: color_id
+        type: integer
+        label: "Color id"
+      - name: color_name
+        type: string
+        label: "Color"
+      - name: condition
+        type: string
+        label: "Condition"
+      - name: qty
+        type: integer
+        label: "Quantity"
+      - name: remarks
+        type: string
+        label: "Remarks"
+        description: "The lot's remarks, where the store keeps the bin"
+      - name: inventory_id
+        type: string
+        label: "Inventory"
+      - name: order_id
+        type: string
+        label: "Order"
+actions:
+  - name: set_status
+    label: "Set status"
+    description: "Sets one order's status. The order id is the BrickLink order id. Declared so the address is visible; it has no handler yet."
+    params:
+      - name: order_id
+        type: string
+        label: "Order"
+        required: true
+      - name: status
+        type: string
+        label: "Status"
+        required: true

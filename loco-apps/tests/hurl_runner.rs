@@ -256,6 +256,172 @@ fn suite_collection_source() {
     );
 }
 
+#[test]
+fn suite_bricklink() {
+    // The production registry, as `build_app` ships it: `AppOptions::default()`
+    // registers the BrickLink source. The store's `base_url` points at the
+    // fixture server, so no call leaves the machine.
+    let upstream = start_bricklink_upstream();
+    run_suite_in(
+        &suites_dir().join("bricklink"),
+        AppOptions::default(),
+        &["loco"],
+        &[("bricklink", upstream.as_str())],
+    );
+}
+
+/// The consumer key and secrets the fixture accepts. Any other consumer key
+/// gets `errors/bad_oauth.json`, HTTP 200, as BrickLink answers.
+const BRICKLINK_CONSUMER_KEY: &str = "fixture-consumer-key";
+const BRICKLINK_CONSUMER_SECRET: &str = "fixture-consumer-secret";
+const BRICKLINK_TOKEN_VALUE: &str = "fixture-token";
+const BRICKLINK_TOKEN_SECRET: &str = "fixture-token-secret";
+
+/// Serves `tests/fixtures/bricklink/` (see its README). Every request must
+/// carry an OAuth 1.0a header whose signature matches the request as it
+/// arrived, or it gets a `meta.code` 401.
+fn start_bricklink_upstream() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let _ = answer_bricklink(stream, port);
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+fn answer_bricklink(mut stream: std::net::TcpStream, port: u16) -> std::io::Result<()> {
+    let req = read_request(&mut stream)?;
+    let target = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+    let url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}{target}")).unwrap();
+    let body = bricklink_body(&url, header_value(&req, "authorization"));
+    write_http(&mut stream, 200, "OK", "application/json", &body)
+}
+
+fn bricklink_body(url: &reqwest::Url, authorization: &str) -> String {
+    let dir = crate_dir().join("tests/fixtures/bricklink");
+    let read = |rel: &str| std::fs::read_to_string(dir.join(rel)).ok();
+    let not_found = || read("errors/not_found.json").unwrap();
+
+    let oauth = parse_oauth(authorization);
+    let param = |key: &str| oauth.get(key).map(String::as_str).unwrap_or_default();
+    if param("oauth_consumer_key") != BRICKLINK_CONSUMER_KEY {
+        return read("errors/bad_oauth.json")
+            .unwrap()
+            .replace("{oauth_consumer_key}", param("oauth_consumer_key"));
+    }
+    let creds = loco_apps::bricklink::oauth::Credentials {
+        consumer_key: BRICKLINK_CONSUMER_KEY,
+        consumer_secret: BRICKLINK_CONSUMER_SECRET,
+        token_value: BRICKLINK_TOKEN_VALUE,
+        token_secret: BRICKLINK_TOKEN_SECRET,
+    };
+    let expected = loco_apps::bricklink::oauth::signature(
+        "GET",
+        url,
+        &creds,
+        param("oauth_nonce"),
+        param("oauth_timestamp"),
+    );
+    if param("oauth_signature") != expected
+        || param("oauth_token") != BRICKLINK_TOKEN_VALUE
+        || param("oauth_signature_method") != "HMAC-SHA1"
+    {
+        return serde_json::json!({
+            "meta": {"code": 401, "message": "BAD_OAUTH_REQUEST", "description": "SIGNATURE_INVALID"},
+            "data": {}
+        })
+        .to_string();
+    }
+
+    let path = url.path().trim_matches('/');
+    if path == "orders" {
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        if query.get("direction").map(String::as_str) != Some("in") {
+            return serde_json::json!({
+                "meta": {"code": 400, "message": "INVALID_REQUEST", "description": "direction must be in"},
+                "data": {}
+            })
+            .to_string();
+        }
+        let mut orders: serde_json::Value =
+            serde_json::from_str(&read("orders.json").unwrap()).unwrap();
+        if let Some(status) = query.get("status") {
+            let wanted: Vec<&str> = status.split(',').collect();
+            if let Some(data) = orders["data"].as_array_mut() {
+                data.retain(|order| wanted.contains(&order["status"].as_str().unwrap_or_default()));
+            }
+        }
+        return orders.to_string();
+    }
+    // `/orders/{id}` and `/orders/{id}/items` are files under the same path.
+    let safe = path.split('/').all(|part| {
+        !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    });
+    if !safe {
+        return not_found();
+    }
+    read(&format!("{path}.json")).unwrap_or_else(not_found)
+}
+
+/// `OAuth realm="", key="value", …` → decoded pairs.
+fn parse_oauth(header: &str) -> std::collections::HashMap<String, String> {
+    let rest = header.strip_prefix("OAuth ").unwrap_or_default();
+    rest.split(',')
+        .filter_map(|pair| pair.trim().split_once('='))
+        .map(|(key, value)| {
+            let value = value.trim_matches('"');
+            (key.to_string(), percent_decode(value))
+        })
+        .collect()
+}
+
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(&raw[i + 1..i + 3], 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The request head, up to the blank line.
+fn read_request(stream: &mut std::net::TcpStream) -> std::io::Result<String> {
+    use std::io::Read;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 1024];
+    loop {
+        match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|window| window == b"\r\n\r\n") || buf.len() > 8192 {
+                    break;
+                }
+            }
+            Err(err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                break;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 async fn read_connection(
     ctx: loco_apps::integrations::TypeActionContext,
 ) -> Result<serde_json::Value, loco_apps::actions::ActionFailure> {

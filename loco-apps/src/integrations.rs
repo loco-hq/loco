@@ -76,6 +76,18 @@ pub struct SourceRegistry {
 }
 
 impl SourceRegistry {
+    /// What the server binary registers: the BrickLink store API for
+    /// `loco/bricklink`'s `bricklink` type. [`Default`] is empty.
+    pub fn production() -> Self {
+        let mut sources = Self::default();
+        sources.register(
+            crate::bricklink::PROJECT,
+            crate::bricklink::TYPE,
+            crate::bricklink::BrickLinkSource,
+        );
+        sources
+    }
+
     /// Register `source` for `project`'s integration type `type_name`.
     pub fn register<S>(
         &mut self,

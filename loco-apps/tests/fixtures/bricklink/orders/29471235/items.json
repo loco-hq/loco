@@ -1,0 +1,34 @@
+{
+  "meta": {
+    "description": "OK",
+    "message": "OK",
+    "code": 200
+  },
+  "data": [
+    [
+      {
+        "inventory_id": 358002001,
+        "item": {
+          "no": "3005",
+          "name": "Brick 1 x 1",
+          "type": "PART",
+          "category_id": 5
+        },
+        "color_id": 5,
+        "color_name": "Red",
+        "quantity": 40,
+        "new_or_used": "N",
+        "completeness": "X",
+        "unit_price": "0.2187",
+        "unit_price_final": "0.2187",
+        "disp_unit_price": "0.2187",
+        "disp_unit_price_final": "0.2187",
+        "currency_code": "USD",
+        "disp_currency_code": "USD",
+        "remarks": "A-01-1",
+        "description": "",
+        "weight": "1.16"
+      }
+    ]
+  ]
+}
