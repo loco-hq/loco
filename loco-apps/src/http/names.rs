@@ -10,8 +10,9 @@
 /// the other kinds share it so there is one number to remember.
 const MAX_LEN: usize = 63;
 
-/// Project, dataset, and site names: the account-handle charset, `[a-z0-9_]`,
-/// starting with a letter or `_`.
+/// Project, dataset, site, and account-handle names: `[a-z0-9_]`, starting
+/// with a letter or `_`. A new account handle uses this too. A name already
+/// on disk is not passed through it.
 pub fn check_slug(kind: &str, name: &str) -> Result<(), String> {
     let valid = (1..=MAX_LEN).contains(&name.len())
         && name

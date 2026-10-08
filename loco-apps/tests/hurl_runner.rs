@@ -1307,6 +1307,11 @@ fn parse_rfc3339(session: &serde_json::Value, field: &str) -> chrono::DateTime<c
 }
 
 #[test]
+fn suite_signup_errors() {
+    run_suite(&suites_dir().join("signup_errors"));
+}
+
+#[test]
 fn suite_auth_no_auto_create() {
     // The rest of the suites set LOCO_AUTH_AUTO_CREATE=1 process-wide; this
     // one pins the production default off and checks nothing was squatted.

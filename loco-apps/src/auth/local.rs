@@ -11,6 +11,7 @@ use super::{
     CreateUserRequest, LoginCredentials, OrgMember, OrgRole, ProjectMember, ProjectRole,
     UpdateUserRequest, PUBLIC_USERNAME, TEST_PASSWORD,
 };
+use crate::http::names::check_slug;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct StoredAccount {
@@ -437,17 +438,20 @@ impl LocalAuthAdapter {
             .map(|a| a.account_type)
     }
 
+    /// Account handles share the slug rule in `http/names.rs` (1–63 of
+    /// `a-z`, `0-9`, and `_`, starting with a letter or `_`) and are not
+    /// the reserved name `public`. Called when a handle is created. Load
+    /// does not call this, so a handle already on disk keeps working.
     fn is_valid_handle(handle: &str) -> bool {
-        !handle.is_empty()
-            && handle != PUBLIC_USERNAME
-            && !handle.contains('/')
-            && handle
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
-            && handle
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        Self::reject_handle(handle).is_none()
+    }
+
+    /// `None` when `handle` may be created. `Some` is the 400 sentence.
+    fn reject_handle(handle: &str) -> Option<String> {
+        if handle == PUBLIC_USERNAME {
+            return Some(format!("handle name {handle:?} is reserved"));
+        }
+        check_slug("handle", handle).err()
     }
 
     fn to_auth_user(identity: &StoredIdentity) -> AuthUser {
@@ -721,8 +725,8 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn create_user(&self, req: &CreateUserRequest) -> Result<AuthUser, AuthError> {
-        if !Self::is_valid_handle(&req.username) {
-            return Err(AuthError::InvalidCredentials);
+        if let Some(msg) = Self::reject_handle(&req.username) {
+            return Err(AuthError::InvalidHandle(msg));
         }
         let password = req.password.trim();
         if password.is_empty() {
