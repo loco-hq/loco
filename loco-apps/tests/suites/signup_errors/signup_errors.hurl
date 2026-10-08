@@ -6,8 +6,10 @@
 # text/plain. A taken handle is 409. Login of a wrong password, or of a
 # handle that cannot be created, stays 401 invalid credentials.
 #
-# A 64-character handle already on disk (fixtures/auth) still logs in:
-# the cap is checked when a handle is created, not when it is loaded.
+# A 64-character handle already on disk (fixtures/auth) still logs in, and
+# can still be invited. The cap is checked when a handle is created
+# (signup, a new org handle, login auto-create), not on load and not on
+# member add.
 
 # Hyphen is not in the handle charset.
 POST http://127.0.0.1:{{port}}/auth/users
@@ -130,8 +132,54 @@ POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
 {"username": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "password": "password"}
 HTTP 200
+[Captures]
+long_token: jsonpath "$.data.token"
 [Asserts]
 jsonpath "$.data.user.username" == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+# Inviting that handle succeeds. The cap is not applied to a member add,
+# so a long handle already on disk is not locked out of a project.
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{"username": "alice", "password": "password"}
+HTTP 200
+[Captures]
+alice_token: jsonpath "$.data.token"
+
+POST http://127.0.0.1:{{port}}/config/project
+Authorization: Bearer {{alice_token}}
+Content-Type: application/json
+{"name": "shop", "label": "Shop", "description": "Invite the long handle"}
+HTTP 201
+
+POST http://127.0.0.1:{{port}}/config/member/alice/shop
+Authorization: Bearer {{alice_token}}
+Content-Type: application/json
+{"handle": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "role": "editor"}
+HTTP 201
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data.handle" == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+jsonpath "$.data.role" == "editor"
+jsonpath "$.data.pending" == false
+
+# Creating an org as that person adds them as owner. The cap must not
+# reject the creator after the org account is already stored.
+POST http://127.0.0.1:{{port}}/config/org
+Authorization: Bearer {{long_token}}
+Content-Type: application/json
+{"handle": "longshop"}
+HTTP 201
+[Asserts]
+jsonpath "$.ok" == true
+jsonpath "$.data.handle" == "longshop"
+jsonpath "$.data.type" == "org"
+
+GET http://127.0.0.1:{{port}}/config/org/longshop/member/list
+Authorization: Bearer {{long_token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data[?(@.handle == 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')].role" nth 0 == "owner"
 
 # The other /auth bodies that read JSON use the same rejection.
 POST http://127.0.0.1:{{port}}/auth/api-keys

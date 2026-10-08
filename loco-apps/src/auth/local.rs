@@ -438,10 +438,29 @@ impl LocalAuthAdapter {
             .map(|a| a.account_type)
     }
 
-    /// Account handles share the slug rule in `http/names.rs` (1–63 of
-    /// `a-z`, `0-9`, and `_`, starting with a letter or `_`) and are not
-    /// the reserved name `public`. Called when a handle is created. Load
-    /// does not call this, so a handle already on disk keeps working.
+    /// Charset of a handle that may be named, with no length cap: non-empty,
+    /// not `public`, no `/`, `[a-z0-9_]` starting with a letter or `_`.
+    /// Member add uses this. A handle already on disk can be longer than
+    /// 63, and inviting it — or making that person the owner of a new org —
+    /// must still succeed. A handle that does not exist yet stays a pending
+    /// invite when it passes.
+    fn handle_charset_ok(handle: &str) -> bool {
+        !handle.is_empty()
+            && handle != PUBLIC_USERNAME
+            && !handle.contains('/')
+            && handle
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
+            && handle
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+    }
+
+    /// A handle that may be created: the charset above, at most 63
+    /// characters (`http/names.rs`), and not the reserved name `public`.
+    /// Called from `create_user`, `create_org` (the new org handle), and
+    /// `auto_create_person`. Load, login, and member add do not call this.
     fn is_valid_handle(handle: &str) -> bool {
         Self::reject_handle(handle).is_none()
     }
@@ -953,7 +972,7 @@ impl AuthAdapter for LocalAuthAdapter {
         handle: &str,
         role: ProjectRole,
     ) -> Result<ProjectMember, AuthError> {
-        if !Self::is_valid_handle(handle) || project_id.split_once('/').is_none() {
+        if !Self::handle_charset_ok(handle) || project_id.split_once('/').is_none() {
             return Err(AuthError::InvalidCredentials);
         }
         let key = (project_id.to_string(), handle.to_string());
@@ -1032,7 +1051,7 @@ impl AuthAdapter for LocalAuthAdapter {
         handle: &str,
         role: OrgRole,
     ) -> Result<OrgMember, AuthError> {
-        if !Self::is_valid_handle(handle) || !Self::is_valid_handle(org) {
+        if !Self::handle_charset_ok(handle) || !Self::handle_charset_ok(org) {
             return Err(AuthError::InvalidCredentials);
         }
         match self.account_type(org) {

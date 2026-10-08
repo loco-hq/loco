@@ -11,8 +11,9 @@
 const MAX_LEN: usize = 63;
 
 /// Project, dataset, site, and account-handle names: `[a-z0-9_]`, starting
-/// with a letter or `_`. A new account handle uses this too. A name already
-/// on disk is not passed through it.
+/// with a letter or `_`. A new account handle uses this too (signup, a new
+/// org handle, login auto-create). Inviting a member does not: a handle
+/// already on disk is not passed through it.
 pub fn check_slug(kind: &str, name: &str) -> Result<(), String> {
     let valid = (1..=MAX_LEN).contains(&name.len())
         && name

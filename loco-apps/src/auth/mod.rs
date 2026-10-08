@@ -18,9 +18,10 @@ use crate::server::AppState;
 #[derive(Debug)]
 pub enum AuthError {
     InvalidCredentials,
-    /// A new handle failed the account-name rule. The string is that rule,
-    /// in the words `http/names.rs` uses, or that `public` is reserved.
-    /// Checked on create only — a handle already on disk is not re-checked.
+    /// A new person handle failed the account-name rule. The string is that
+    /// rule, in the words `http/names.rs` uses, or that `public` is reserved.
+    /// Signup only. A handle already on disk is not re-checked, and inviting
+    /// one does not use this error.
     InvalidHandle(String),
     SessionExpired,
     SessionNotFound,
