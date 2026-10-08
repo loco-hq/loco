@@ -33,3 +33,9 @@ tempfile = "3"
 
 [build-dependencies]
 loco-gen-schema = { path = "../loco-gen/crates/loco-gen-schema" }
+
+# The local BrickLink mock (docs/brickos.md). `test = true` runs its tests
+# under `cargo test`, so its bodies stay checked against the fixture shape.
+[[example]]
+name = "bricklink-mock"
+test = true
