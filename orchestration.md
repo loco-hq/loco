@@ -163,11 +163,19 @@ A **third** App (`loco-openai`) slots in later the same way. Do not share one Ap
 
 ### Status
 
-Org, transfer, Apps, installs, token helper, public visibility, and `main` protection are done. Agents must `eval "$(python3 scripts/agent-github/token.py env grok|claude)"` before any `git` / `gh` write. Do not fall back to Ben’s `gh` auth. An App cannot approve its own PR.
+Org, transfer, Apps, installs, token helper, public visibility, and `main` protection are done. Agents must `eval "$(python3 scripts/agent-github/token.py env grok|claude)"` before any `git` / `gh` write. Do not fall back to Ben’s `gh` auth. An App cannot approve its own PR. The eval also routes `git push` to GitHub over HTTPS as the App (`GIT_CONFIG_*` env vars: push-only `pushInsteadOf`, inherited github.com credential helpers cleared, `token.py git-credential` as the helper). `origin` is SSH, so a push from a shell without the eval authenticates as Ben’s SSH key — the commit author is only a claim. To check who pushed a branch, ask the activity API — the events feed lags or omits pushes:
+
+```bash
+gh api 'repos/loco-hq/loco/activity?ref=refs/heads/<branch>' --jq '.[]|{actor:.actor.login,type:.activity_type,after:.after}'
+```
+
+Every push should be `loco-claude[bot]` or `loco-grok[bot]`.
 
 ## Herdr recipes
 
 Herdr kinds we use: `grok`, `claude`. (`codex` if/when an OpenAI subscription exists.)
+
+Two rules every prompt below carries: `git push` only from a shell that ran the `token.py env` eval (otherwise it goes out as Ben’s SSH key), and never stop a process you did not start — stop your own by its PID; no `pkill`, `killall`, or pattern kills. Ben’s dev server on :3000 is his.
 
 Names are live aliases, `[a-z][a-z0-9_-]{0,31}`, unique among running agents. Reuse `impl` / `review` / `orch` so prompts stay short.
 
@@ -184,7 +192,8 @@ worktree=$(printf '%s\n' "$created" | jq -r '.result.worktree.path')
 herdr agent prompt impl "$(cat <<'EOF'
 You are the implementer for loco-hq/loco issue #N.
 Read CLAUDE.md, the issue, and orchestration.md.
-Before any git or gh write: eval "$(python3 scripts/agent-github/token.py env claude)"
+Before any git or gh write, push included, in that same shell: eval "$(python3 scripts/agent-github/token.py env claude)"
+Never stop a process you did not start: stop yours by its PID, never pkill/killall or a pattern. Ben's dev server on :3000 is his.
 Do not push main. Open one PR for this issue. Stop when the PR is up and tests you can run locally have passed.
 CI runs fmt, clippy (`-D warnings`), `cargo test --workspace`, the `loco-client` tests, and the frontend workspace builds on the PR — get it green before you stop. Run the acceptance tests locally too; CI does not exercise the frontends in a browser.
 EOF
@@ -223,6 +232,7 @@ herdr agent start review --kind grok --pane "$review_pane"
 herdr agent prompt review "$(cat <<EOF
 You are the reviewer for PR #M (issue #N). Implementer was Claude.
 eval "\$(python3 scripts/agent-github/token.py env grok)"
+Never stop a process you did not start: stop yours by its PID, never pkill/killall or a pattern. Ben's dev server on :3000 is his.
 Read the diff with gh (not the herdr sidebar).
 Implementer worktree (run tests here, do not dirty main):
   ${worktree}
@@ -279,3 +289,4 @@ Those file edits ship as a **small process PR**, not as uncommitted changes on `
 - **2026-08-29** — Do not PR who is sitting or a term start. Ben will not run two terms concurrently; the session is the source. PRs to this file are process changes only. Dependent follow-up starts when the parent PR is open (stack with `--base`), not after review+merge. Independent issues stay serial. `herdr agent start` can race a just-created worktree pane (`agent_pane_busy`); wait and retry. `herdr workspace close` does not always delete the git worktree; remove the leftover checkout by path.
 - **2026-09-26** — Merging a stacked parent with `gh pr merge --squash --delete-branch` (#44) deleted the child's base, and GitHub closed the child (#45). A closed PR cannot be retargeted, and it would not reopen even after the base ref was pushed back, so the approval was lost and the work was reopened as #46 for a second review of identical code. Rule added to the Dependent follow-up row: retarget children to `main` before merging the parent.
 - **2026-10-04** — Long Claude term (BrickLink order pull milestone: #17, #83, #47, #62, #100–#103, #123–#126, #130). Lessons, folded into the rules above: a squash-merged parent leaves its child conflicting; replay the child with `rebase --onto` and re-approve via `range-diff`. Retarget a stacked child to `main` when its PR opens. Prompts to a working agent queue, so a spec change can land after the PR opens; wait for the rework. Reviewer panes can block on Read-outside-workdir permission prompts; read via Bash/`gh`, cancel with `send-keys Escape`. Parallel independent issues worked when Ben authorized them and the prompts fenced off each other's files. Design issues ran as: session with Ben in chat → brief rewritten into the issue → implementer drafts the doc → reviewer checks fidelity to the brief → Ben approves and answers listed open questions → orchestrator files the implementation issues. A risky non-blocking review note (a process-wide env-var test race) was fixed before merge rather than deferred. When relaying a decision to an implementer, attribute it accurately: Ben's call versus the orchestrator's.
+- **2026-10-08** — Single-vendor Claude term (BrickLink order pull milestone: #104/#135/#105/#106 as PRs #136/#138/#139/#140). `origin` is SSH and the eval set only `GH_TOKEN` and the git author, so every agent `git push` (this term and likely before) authenticated as Ben’s SSH key; commits only claimed the bot. Fixed: the eval now routes pushes over HTTPS as the App via `GIT_CONFIG_*` env vars and a `token.py git-credential` helper. Two agents stopped their own throwaway servers with `pkill -f` on a `target/debug/loco-apps` pattern — the #139 reviewer (2026-10-04) and the #140 implementer — which matches Ben’s dev server too, and the second likely killed it; rule added: stop only what you started, by PID. A second fresh reviewer pane in parallel on a stacked PR worked. Squash-merge replay (`rebase --onto` + `range-diff` re-confirmation) worked for a 3-deep stack. Playwright MCP’s first tab can stop delivering input after sign-in; retest in a fresh tab before calling it an app bug. Whether the App may push `.github/workflows/` is untested; the first push through this path that touches a workflow will tell.
