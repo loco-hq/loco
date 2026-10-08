@@ -10,12 +10,14 @@ Credentials: ~/.config/loco-hq/apps/loco-{vendor}.{json,pem}
 `env` exports GH_TOKEN, the bot as git author and committer, and git config
 through GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, so that in
 that shell, and nowhere else, `git push` to github.com goes over HTTPS as the
-App: pushInsteadOf rewrites git@github.com: to https://github.com/ for pushes
-only (fetches stay on SSH), inherited github.com credential helpers such as
-osxkeychain are cleared, and `git-credential` is the one helper left. It
-answers `get` for github.com with a cached token, re-minted near expiry, so a
-push still works after GH_TOKEN's hour. Nothing is written to a git config
-file or the keychain.
+App: pushInsteadOf rewrites git@github.com: and ssh://git@github.com/ to
+https://github.com/ for pushes only (fetches stay on SSH), inherited github.com
+credential helpers such as osxkeychain are cleared, and `git-credential` is the
+one helper left. It answers `get` for github.com with a cached token, re-minted
+near expiry, so a push still works after GH_TOKEN's hour. Entries are appended
+after any GIT_CONFIG_COUNT the shell already has, and GIT_TERMINAL_PROMPT=0
+makes a failing helper fail the push instead of prompting. Nothing is written
+to a git config file or the keychain.
 """
 
 from __future__ import annotations
@@ -114,6 +116,7 @@ def git_config_env(vendor: str) -> list[tuple[str, str]]:
     helper = f"!python3 {shlex.quote(str(Path(__file__).resolve()))} git-credential {vendor}"
     return [
         ("url.https://github.com/.pushInsteadOf", "git@github.com:"),
+        ("url.https://github.com/.pushInsteadOf", "ssh://git@github.com/"),
         ("credential.https://github.com.helper", ""),
         ("credential.https://github.com.helper", helper),
     ]
@@ -148,10 +151,15 @@ def main() -> None:
             ("GIT_AUTHOR_EMAIL", meta["bot_email"]),
             ("GIT_COMMITTER_NAME", meta["bot_login"]),
             ("GIT_COMMITTER_EMAIL", meta["bot_email"]),
+            ("GIT_TERMINAL_PROMPT", "0"),
         ]
         config = git_config_env(args[1])
-        exports.append(("GIT_CONFIG_COUNT", str(len(config))))
-        for i, (key, value) in enumerate(config):
+        base = os.environ.get("GIT_CONFIG_COUNT", "0")
+        if not base.isdigit():
+            die(f"GIT_CONFIG_COUNT is {base!r}, not a count")
+        base = int(base)
+        exports.append(("GIT_CONFIG_COUNT", str(base + len(config))))
+        for i, (key, value) in enumerate(config, start=base):
             exports.append((f"GIT_CONFIG_KEY_{i}", key))
             exports.append((f"GIT_CONFIG_VALUE_{i}", value))
         for name, value in exports:
