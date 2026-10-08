@@ -1,0 +1,3 @@
+type: "string"
+label: "Item no."
+required: true

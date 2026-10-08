@@ -1,0 +1,15 @@
+label: "Default"
+fields:
+  - pull_run_id
+  - station
+  - walk_order
+  - location_code
+  - item_no
+  - item_type
+  - color_id
+  - color_name
+  - condition
+  - qty
+  - picked_qty
+  - remarks
+auto_add: true

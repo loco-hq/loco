@@ -1,0 +1,10 @@
+type: "string"
+label: "Station"
+required: true
+options:
+  - value: "scale"
+    label: "Scale"
+  - value: "hand"
+    label: "Hand"
+  - value: "unlocated"
+    label: "Unlocated"

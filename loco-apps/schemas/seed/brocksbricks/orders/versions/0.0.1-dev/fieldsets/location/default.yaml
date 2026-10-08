@@ -1,0 +1,6 @@
+label: "Default"
+fields:
+  - code
+  - zone
+  - walk_order
+auto_add: true
