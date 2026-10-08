@@ -62,6 +62,10 @@ jobs:
       - name: loco-client tests
         run: npm test -w loco-client
 
-      # Every workspace with a build script: loco-studio, loco-ui, brickos-inventory.
+      - name: brocksbricks-pull tests
+        run: npm test -w brocksbricks-pull
+
+      # Every workspace with a build script: loco-studio, loco-ui, brickos-inventory,
+      # brocksbricks-pull.
       - name: Build workspaces
         run: npm run build --workspaces --if-present

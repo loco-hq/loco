@@ -52,7 +52,12 @@ npm run deploy --prefix examples/brickos-inventory
                               # LOCO_USER / LOCO_PASSWORD (its README). A
                               # root `npm install` covers it: it is a
                               # workspace, like loco-client
+npm run deploy --prefix examples/brocksbricks-pull
+                              # the Brock's Bricks pulling app as the
+                              # brocksbricks/orders@0.0.1-dev bundle, on the
+                              # docs/brocksbricks.md server (:3200); its README
 npm test -w loco-client       # loco-client unit tests (node --test)
+npm test -w brocksbricks-pull # pull plan builder unit tests (node --test)
 cargo run -p loco-apps --example bricklink-mock
                               # local BrickLink store API on :3100: a seeded
                               # day of generated orders, any OAuth header
@@ -66,8 +71,9 @@ cargo run -p loco-apps --example bricklink-mock
 `.github/workflows/ci.yml` runs on every PR and on pushes to `main`: `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, then `cargo test --workspace` (which
 includes the Hurl suites — the workflow installs the `hurl` binary first). A second, independent
-job runs the frontend workspaces on Node 24: `npm ci` at the root, `npm test -w loco-client`, then
-`npm run build --workspaces --if-present` (loco-studio, loco-ui, brickos-inventory).
+job runs the frontend workspaces on Node 24: `npm ci` at the root, `npm test -w loco-client`,
+`npm test -w brocksbricks-pull`, then `npm run build --workspaces --if-present` (loco-studio,
+loco-ui, brickos-inventory, brocksbricks-pull).
 
 ## Project Structure
 
@@ -83,7 +89,8 @@ loco/
 ├── loco-ui/                                   # Field component library (npm workspace)
 ├── loco-client/                               # Plain-JS API client (npm workspace)
 ├── examples/public-page/                      # Static cross-origin page (no Node)
-└── examples/brickos-inventory/                # Hosted Vite app: BrickOS batch editor
+├── examples/brickos-inventory/                # Hosted Vite app: BrickOS batch editor
+└── examples/brocksbricks-pull/                # Hosted Vite app: Brock's Bricks order pulling
 ```
 
 ### Dependency flow
@@ -433,14 +440,15 @@ All frontend apps use the same stack:
 - **TanStack Query**
 - API client: `loco-client` (below) for new apps. Studio still has its own `src/api.js` (plain JS, not a hook) and `src/auth.js`; moving it onto `loco-client` is a follow-up.
 - Components in `src/components/` as `.jsx` files
-- Dev-only Vite proxy of `/auth` `/config` `/schema` `/data` `/actions` to `localhost:3000` (no `/api` prefix). Studio and `examples/brickos-inventory` both proxy `/actions`. `API_ORIGIN` in `loco-studio/src/config.js` is `''` — same origin — which is what both the proxy and a hosted bundle need; set it absolute only for a deliberately cross-origin build like `examples/public-page`
+- Dev-only Vite proxy of `/auth` `/config` `/schema` `/data` `/actions` to `localhost:3000` (no `/api` prefix). Studio and `examples/brickos-inventory` both proxy `/actions`. `examples/brocksbricks-pull` proxies to `:3200` (its server, `LOCO_ORIGIN` overrides). `API_ORIGIN` in `loco-studio/src/config.js` is `''` — same origin — which is what both the proxy and a hosted bundle need; set it absolute only for a deliberately cross-origin build like `examples/public-page`
 
 ### Frontend locations
 
 - `loco-studio/` — Schema + record UI (port 5174). The token is the person. Schema/config calls do not need site headers. Data calls send `X-Project-Id` / `X-Site-Id` for the browsed site.
 - `loco-ui/` — Reusable field library (no library build; consumed via npm workspaces). Playground at port 5175 (`npm run dev -w loco-ui`).
-- `loco-client/` — API client, consumed the same way. Used by `examples/brickos-inventory`.
+- `loco-client/` — API client, consumed the same way. Used by `examples/brickos-inventory` and `examples/brocksbricks-pull`.
 - `examples/brickos-inventory/` — Hosted BrickOS batch editor (port 5177 in dev). A workspace, so it resolves `loco-client` from the repo.
+- `examples/brocksbricks-pull/` — Hosted Brock's Bricks pulling app (port 5178 in dev, proxied to `:3200`). Plans a pull run from live BrickLink orders in `src/plan.js`, a pure module with a `node --test` test.
 
 ### loco-client
 
