@@ -5,6 +5,17 @@ Credentials: ~/.config/loco-hq/apps/loco-{vendor}.{json,pem}
 
   export GH_TOKEN=$(python3 scripts/agent-github/token.py grok)
   eval "$(python3 scripts/agent-github/token.py env claude)"
+  python3 scripts/agent-github/token.py git-credential claude get   # git calls this
+
+`env` exports GH_TOKEN, the bot as git author and committer, and git config
+through GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, so that in
+that shell, and nowhere else, `git push` to github.com goes over HTTPS as the
+App: pushInsteadOf rewrites git@github.com: to https://github.com/ for pushes
+only (fetches stay on SSH), inherited github.com credential helpers such as
+osxkeychain are cleared, and `git-credential` is the one helper left. It
+answers `get` for github.com with a cached token, re-minted near expiry, so a
+push still works after GH_TOKEN's hour. Nothing is written to a git config
+file or the keychain.
 """
 
 from __future__ import annotations
@@ -12,6 +23,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -98,6 +110,29 @@ def token_for(vendor: str) -> str:
     return body["token"]
 
 
+def git_config_env(vendor: str) -> list[tuple[str, str]]:
+    helper = f"!python3 {shlex.quote(str(Path(__file__).resolve()))} git-credential {vendor}"
+    return [
+        ("url.https://github.com/.pushInsteadOf", "git@github.com:"),
+        ("credential.https://github.com.helper", ""),
+        ("credential.https://github.com.helper", helper),
+    ]
+
+
+def git_credential(vendor: str, op: str) -> None:
+    """git credential helper protocol: answer `get` for github.com, ignore the rest."""
+    attrs = {}
+    for line in sys.stdin:
+        line = line.rstrip("\n")
+        if not line:
+            break
+        key, _, value = line.partition("=")
+        attrs[key] = value
+    if op != "get" or attrs.get("host") != "github.com" or attrs.get("protocol", "https") != "https":
+        return
+    sys.stdout.write(f"username=x-access-token\npassword={token_for(vendor)}\n")
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args or args[0] in {"-h", "--help"}:
@@ -107,11 +142,26 @@ def main() -> None:
         if len(args) != 2:
             die("usage: token.py env grok|claude")
         meta, _ = load(args[1])
-        print(f"export GH_TOKEN={token_for(args[1])}")
-        print(f"export GIT_AUTHOR_NAME='{meta['bot_login']}'")
-        print(f"export GIT_AUTHOR_EMAIL='{meta['bot_email']}'")
-        print(f"export GIT_COMMITTER_NAME='{meta['bot_login']}'")
-        print(f"export GIT_COMMITTER_EMAIL='{meta['bot_email']}'")
+        exports = [
+            ("GH_TOKEN", token_for(args[1])),
+            ("GIT_AUTHOR_NAME", meta["bot_login"]),
+            ("GIT_AUTHOR_EMAIL", meta["bot_email"]),
+            ("GIT_COMMITTER_NAME", meta["bot_login"]),
+            ("GIT_COMMITTER_EMAIL", meta["bot_email"]),
+        ]
+        config = git_config_env(args[1])
+        exports.append(("GIT_CONFIG_COUNT", str(len(config))))
+        for i, (key, value) in enumerate(config):
+            exports.append((f"GIT_CONFIG_KEY_{i}", key))
+            exports.append((f"GIT_CONFIG_VALUE_{i}", value))
+        for name, value in exports:
+            print(f"export {name}={shlex.quote(value)}")
+        return
+    if args[0] == "git-credential":
+        if len(args) != 3:
+            die("usage: token.py git-credential grok|claude get|store|erase")
+        load(args[1])
+        git_credential(args[1], args[2])
         return
     if len(args) != 1:
         die("usage: token.py grok|claude")
