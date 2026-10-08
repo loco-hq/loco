@@ -57,7 +57,7 @@ npm run deploy --prefix examples/brocksbricks-pull
                               # brocksbricks/orders@0.0.1-dev bundle, on the
                               # docs/brocksbricks.md server (:3200); its README
 npm test -w loco-client       # loco-client unit tests (node --test)
-npm test -w brocksbricks-pull # pull plan builder unit tests (not in CI yet)
+npm test -w brocksbricks-pull # pull plan builder unit tests (node --test)
 cargo run -p loco-apps --example bricklink-mock
                               # local BrickLink store API on :3100: a seeded
                               # day of generated orders, any OAuth header
@@ -71,9 +71,9 @@ cargo run -p loco-apps --example bricklink-mock
 `.github/workflows/ci.yml` runs on every PR and on pushes to `main`: `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, then `cargo test --workspace` (which
 includes the Hurl suites — the workflow installs the `hurl` binary first). A second, independent
-job runs the frontend workspaces on Node 24: `npm ci` at the root, `npm test -w loco-client`, then
-`npm run build --workspaces --if-present` (loco-studio, loco-ui, brickos-inventory,
-brocksbricks-pull).
+job runs the frontend workspaces on Node 24: `npm ci` at the root, `npm test -w loco-client`,
+`npm test -w brocksbricks-pull`, then `npm run build --workspaces --if-present` (loco-studio,
+loco-ui, brickos-inventory, brocksbricks-pull).
 
 ## Project Structure
 
