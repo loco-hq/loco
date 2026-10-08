@@ -1007,6 +1007,11 @@ fn suite_hosting() {
 }
 
 #[test]
+fn suite_discovery() {
+    run_suite(&suites_dir().join("discovery"));
+}
+
+#[test]
 fn suite_hosting_apex() {
     // The apex serves a bundle only when a default site names one. Pinned
     // here rather than through the environment so this suite and

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Parts</title>
+</head>
+<body>
+<h1>discovery page</h1>
+<p id="status"></p>
+<ul id="parts"></ul>
+<form id="add">
+<label>SKU <input name="sku" required></label>
+<label>Qty <input name="qty" type="number" required value="1"></label>
+<button type="submit">Add</button>
+</form>
+<script>
+const list = document.getElementById("parts");
+const status = document.getElementById("status");
+
+function show(row) {
+  const li = document.createElement("li");
+  li.textContent = row.fields.sku + " (" + row.fields.qty + ") ";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "+1";
+  button.addEventListener("click", async () => {
+    const res = await fetch("/data/parts/update/" + row.id, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ qty: Number(row.fields.qty) + 1 })
+    });
+    const body = await res.json();
+    if (!body.ok) {
+      status.textContent = body.error || "update failed";
+      return;
+    }
+    load();
+  });
+  li.appendChild(button);
+  list.appendChild(li);
+}
+
+async function load() {
+  const res = await fetch("/data/parts/list");
+  const body = await res.json();
+  if (!body.ok) {
+    status.textContent = body.error || "list failed";
+    return;
+  }
+  status.textContent = "";
+  list.replaceChildren();
+  for (const row of body.data) show(row);
+}
+
+document.getElementById("add").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const res = await fetch("/data/parts/add", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sku: form.sku.value, qty: Number(form.qty.value) })
+  });
+  const body = await res.json();
+  if (!body.ok) {
+    status.textContent = body.error || "add failed";
+    return;
+  }
+  form.sku.value = "";
+  load();
+});
+
+load();
+</script>
+</body>
+</html>
