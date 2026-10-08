@@ -8,7 +8,7 @@ A package that wraps an outside system (BrickLink, Salesforce) serves its collec
 
 | Term | What it is |
 |---|---|
-| **Integration type** | A kind of connection, declared in a package version: `loco/bricklink.bricklink`, `acme/salesforce.salesforce`. Code is registered against the owning project and the type name. First-party Rust, until the TypeScript engine in `FUTURE_IDEAS.md` exists. The production binary's registry starts empty, as the action registry does. |
+| **Integration type** | A kind of connection, declared in a package version: `loco/bricklink.bricklink`, `acme/salesforce.salesforce`. Code is registered against the owning project and the type name. First-party Rust, until the TypeScript engine in `FUTURE_IDEAS.md` exists. The production binary's source registry holds one source, BrickLink for `loco/bricklink.bricklink` ([#104](https://github.com/loco-hq/loco/issues/104)). Its action registries are empty. |
 | **Integration** | One connection of a type to one backend instance. Declared in a version (a name and a type), so a caller can address it and version copy carries it. Connected on a dataset: secret and variable values are set there. A published version does not record which backend a dataset reaches. `dev` can point at a sandbox and `prod` at the real org, on the same version. |
 | **Free integration** | An integration a package declares in its own namespace. No special rules. `loco/bricklink` declares `store`; callers address `loco/bricklink.store:orders`. |
 | **Installer integration** | An integration a depending project declares of a type it did not write (`sf_east`, `sf_west`), with its own values. |
@@ -29,7 +29,7 @@ BrickLink allows about 5,000 calls a day. A load of 50 orders is one list call p
 
 A public read grant on an integration collection spends that quota with the store's credentials: token-less `public` calls BrickLink as the store. A public `update` grant writes upstream. The permission set is still the consuming version's choice, as in [`identity.md`](identity.md).
 
-Record ids are the upstream ids. In `GET /data/loco%2Fbricklink.store:orders/29471234` the id is the BrickLink order id. Other system fields are omitted on a live record; see [CollectionSource](#collectionsource). Lake collections keep the ids `Record::new_for_insert` mints.
+Record ids are the upstream ids. In `GET /data/loco%2Fbricklink.store:orders/get/29471234` the id is the BrickLink order id. Other system fields are omitted on a live record; see [CollectionSource](#collectionsource). Lake collections keep the ids `Record::new_for_insert` mints.
 
 ## Names
 
@@ -80,7 +80,7 @@ The address is one path segment, percent-encoded the way a qualified collection 
 | Address | `GET` or `POST` |
 |---|---|
 | `loco/bricklink.store:orders` | `/data/loco%2Fbricklink.store:orders/list` |
-| `loco/bricklink.store:orders` / `29471234` | `/data/loco%2Fbricklink.store:orders/29471234` |
+| `loco/bricklink.store:orders` / `29471234` | `/data/loco%2Fbricklink.store:orders/get/29471234` |
 | `loco/bricklink.store:set_status` | `/actions/loco%2Fbricklink.store:set_status` |
 | `sf_east:account` | `/data/sf_east:account/list` |
 | `sf_east:invoice__c` | `/data/sf_east:invoice__c/list` |
@@ -182,7 +182,7 @@ collections:
         type: string
         label: Item type
       - name: color_id
-        type: string
+        type: integer
         label: Color id
       - name: color_name
         type: string
@@ -191,7 +191,7 @@ collections:
         type: string
         label: Condition
       - name: qty
-        type: string
+        type: integer
         label: Quantity
       - name: remarks
         type: string
@@ -251,8 +251,8 @@ From a site pinned to `brocksbricks/orders`:
 
 ```
 GET  /data/loco%2Fbricklink.store:orders/list
-GET  /data/loco%2Fbricklink.store:orders/29471234
-GET  /data/loco%2Fbricklink.store:order_items/list
+GET  /data/loco%2Fbricklink.store:orders/get/29471234
+GET  /data/loco%2Fbricklink.store:order_items/get/29471234-1-358001234
 POST /actions/loco%2Fbricklink.store:set_status
 {"input": {"order_id": "29471234", "status": "PENDING"}}
 ```
@@ -273,6 +273,15 @@ A query from that site names the type owner's field:
 ```
 
 Whether BrickLink's source declares that it can honor `eq` on `status` is the capability list on the source. A filter it does not declare is an error result for that query, not a broader list.
+
+What the shipped source ([#104](https://github.com/loco-hq/loco/issues/104), `loco-apps/src/bricklink/`) does:
+
+- **Capabilities.** get, list, and query. One `eq` or `in` condition; no `and`, `or`, `not`, ranges, or `exists`. `$id` is the only system field. Order (`asc` / `desc`, `binary` / `natural`), `limit`, and `cursor` are applied in the source over the whole upstream answer, with the lake's comparison, because BrickLink does not page. Capabilities are per source, not per collection, so a shape they admit that one collection cannot honor is the source's own `unsupported` error: the same 400, or the same query kind.
+- **`orders`** is the store's incoming orders that are not filed (`GET /orders?direction=in`). A `status` filter is passed upstream as BrickLink's `status` parameter. `$id` filters too. Any other field is `unsupported`. `get` of a filed order is not found, so `get` and `list` hold the same set. `totals` is the grand total with its currency code (`USD 41.2300`).
+- **`order_items`** is one order's lines (`GET /orders/{id}/items`). There is no all-items endpoint, so `list`, and a query without an `order_id` filter (`eq` or `in`), is `unsupported`. It is never a fan-out over every order. Read `orders` first, then items with `order_id in […]`: one call per order named. The record id is `{order_id}-{batch}-{inventory_id}`, `batch` counted from 1: one lot can be in more than one batch of an order, and each is its own line. A line with no inventory id is still returned, as `{order_id}-{batch}-x{position}` (`position` counted from 1 within the batch). An id already taken in that order (the same lot twice in one batch) gets `-{position}` appended. The ids depend only on that order's response, so they are stable across reads, and `get` finds a line by reading its order. `qty` and `color_id` are integers. Filtering by a filed order's id still returns its lines.
+- **Read-only.** insert, update, and delete are not declared. `set_status` is declared on the type and has no handler, so it is 501.
+- **Errors.** BrickLink answers most errors as HTTP 200 with the error in `meta.code`. That, or a non-2xx status, is 502 `upstream {code}: {message}: {description}`, with the four credentials, the request's signature, and its nonce (raw or percent-encoded) replaced by `[redacted]`. A response that is not BrickLink JSON is 502 with the status's reason phrase, never its body. Only BrickLink's own `meta.code` 404 is not found (an unknown order). A bare HTTP 404 with no envelope, such as a `base_url` that misses `/api/store/v1`, is 502 `upstream 404: Not Found`. The `orders` list never reads a 404 as "no orders".
+- **Tests.** No test calls BrickLink. The response bodies are files in `loco-apps/tests/fixtures/bricklink/`; the Hurl suite's in-process server serves them and checks each request's OAuth signature, and the source's unit tests parse them.
 
 ### Two Salesforce orgs
 

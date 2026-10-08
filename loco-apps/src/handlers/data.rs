@@ -775,6 +775,7 @@ fn source_query_diags(name: &str, err: SourceError) -> Vec<Diagnostic> {
             (q::kind::UPSTREAM, format!("upstream {status}: {message}"))
         }
         SourceError::Unavailable { message } => (q::kind::UNAVAILABLE, message),
+        SourceError::Unsupported { message } => (q::kind::UNSUPPORTED, message),
         SourceError::Failed { message } => (q::kind::FAILED, message),
         SourceError::Lake(err) => (q::kind::FAILED, err.to_string()),
     };
@@ -791,6 +792,9 @@ fn source_error_response(err: SourceError) -> Response {
         SourceError::Unavailable { message } => {
             error_response(StatusCode::SERVICE_UNAVAILABLE, &message)
         }
+        SourceError::Unsupported { message } => {
+            unsupported_diagnostic_response(Diagnostic::error(q::kind::UNSUPPORTED, None, message))
+        }
         SourceError::Failed { message } => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
         }
@@ -798,11 +802,11 @@ fn source_error_response(err: SourceError) -> Response {
 }
 
 fn unsupported_response(address: &str, verb: Verb) -> Response {
-    error_response_with_diagnostics(
-        StatusCode::BAD_REQUEST,
-        "unsupported",
-        vec![unsupported_verb(address, verb)],
-    )
+    unsupported_diagnostic_response(unsupported_verb(address, verb))
+}
+
+fn unsupported_diagnostic_response(diagnostic: Diagnostic) -> Response {
+    error_response_with_diagnostics(StatusCode::BAD_REQUEST, "unsupported", vec![diagnostic])
 }
 
 fn no_source_diag(name: &str, address: &str) -> Diagnostic {

@@ -10,8 +10,8 @@ pub use adapters::memory::InMemoryAdapter;
 pub use adapters::sqlite::SqliteAdapter;
 pub use error::Error;
 pub use query::{
-    natural_cmp, Collation, CompareOp, Direction, FieldRef, Filter, LakeQuery, OrderKey, Page,
-    SystemField,
+    compare_keys, equals, natural_cmp, Collation, CompareOp, Direction, FieldRef, Filter,
+    LakeQuery, OrderKey, Page, SystemField,
 };
 pub use record::{InsertRequest, Record, UpdatePatch};
 pub use value::Value;

@@ -193,10 +193,17 @@ pub struct SourcePage {
 
 /// Why a source call failed. The HTTP layer maps these the way action
 /// failures map: lake errors keep today's status, upstream is 502, a missing
-/// key is 503, and anything else is 500.
+/// key is 503, and anything else is 500. `Unsupported` is the same 400 (or
+/// per-query `unsupported`) a capability failure gives.
 #[derive(Debug)]
 pub enum SourceError {
     Lake(loco_lake::Error),
+    /// The source cannot honor this call's shape, though its declared
+    /// capabilities admit it: [`Capabilities`] are per source, not per
+    /// collection. The source returns this before it calls upstream.
+    Unsupported {
+        message: String,
+    },
     /// `status` is the upstream status, or `0` when the call got no response.
     /// `message` must not contain the request URL or a credential.
     Upstream {

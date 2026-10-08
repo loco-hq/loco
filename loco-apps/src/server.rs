@@ -43,9 +43,10 @@ pub struct AppState {
     /// The server binary does not.
     pub actions: HandlerRegistry,
     /// Integration-type sources, keyed by owning project and type name.
-    /// Empty in the server binary. A registered source handles that type's
-    /// standard and custom collections. An address with no registration is
-    /// 501 before the required-value check.
+    /// The server binary registers [`SourceRegistry::production`] (BrickLink).
+    /// A registered source handles that type's standard and custom
+    /// collections. An address with no registration is 501 before the
+    /// required-value check.
     pub sources: SourceRegistry,
     /// Type-action handlers, keyed by owning project, type name, and action
     /// name. Empty in the server binary, so a resolved type action is 501.
@@ -77,7 +78,6 @@ fn build_data_adapter(sqlite_path: Option<&Path>) -> Box<dyn DataAdapter> {
 
 /// Overrides a caller can pin instead of reading the environment. Tests use
 /// this so one process can host servers that disagree about a flag.
-#[derive(Default)]
 pub struct AppOptions {
     /// `None` → `LOCO_AUTH_AUTO_CREATE` decides (off unless set).
     pub auth_auto_create: Option<bool>,
@@ -91,7 +91,9 @@ pub struct AppOptions {
     /// what [`build_app`] ships. The Hurl fixture handler is registered by
     /// the test runner, so it is not in the server binary.
     pub actions: HandlerRegistry,
-    /// Sources for integration types. [`Default`] registers none.
+    /// Sources for integration types. [`Default`] is
+    /// [`SourceRegistry::production`], which [`build_app`] ships. A test that
+    /// registers its own fixture source replaces the whole registry.
     pub sources: SourceRegistry,
     /// Handlers for type actions. [`Default`] registers none, so a resolved
     /// type action is 501. A registered handler receives a
@@ -106,6 +108,19 @@ pub struct AppOptions {
     /// [`resolve_sqlite_path`]: joined onto `LOCO_ROOT` only when that
     /// variable is set, and left relative when it is not.
     pub sqlite_path: Option<PathBuf>,
+}
+
+impl Default for AppOptions {
+    fn default() -> Self {
+        Self {
+            auth_auto_create: None,
+            default_site: None,
+            actions: HandlerRegistry::default(),
+            sources: SourceRegistry::production(),
+            type_actions: TypeActionRegistry::default(),
+            sqlite_path: None,
+        }
+    }
 }
 
 /// Default SQLite file name. A relative path. See [`resolve_sqlite_path`].

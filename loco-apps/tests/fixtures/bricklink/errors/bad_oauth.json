@@ -1,0 +1,8 @@
+{
+  "meta": {
+    "description": "consumer key {oauth_consumer_key} is not registered",
+    "message": "BAD_OAUTH_REQUEST",
+    "code": 401
+  },
+  "data": {}
+}

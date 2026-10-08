@@ -1,0 +1,128 @@
+{
+  "meta": {
+    "description": "OK",
+    "message": "OK",
+    "code": 200
+  },
+  "data": [
+    [
+      {
+        "inventory_id": 358001234,
+        "item": {
+          "no": "3001",
+          "name": "Brick 2 x 4",
+          "type": "PART",
+          "category_id": 5
+        },
+        "color_id": 11,
+        "color_name": "Black",
+        "quantity": 250,
+        "new_or_used": "N",
+        "completeness": "X",
+        "unit_price": "0.1200",
+        "unit_price_final": "0.1200",
+        "disp_unit_price": "0.1200",
+        "disp_unit_price_final": "0.1200",
+        "currency_code": "USD",
+        "disp_currency_code": "USD",
+        "remarks": "A-12-3",
+        "description": "",
+        "weight": "1.16"
+      },
+      {
+        "inventory_id": 358001240,
+        "item": {
+          "no": "3023",
+          "name": "Plate 1 x 2",
+          "type": "PART",
+          "category_id": 26
+        },
+        "color_id": 1,
+        "color_name": "White",
+        "quantity": 12,
+        "new_or_used": "U",
+        "completeness": "X",
+        "unit_price": "0.0300",
+        "unit_price_final": "0.0300",
+        "disp_unit_price": "0.0300",
+        "disp_unit_price_final": "0.0300",
+        "currency_code": "USD",
+        "disp_currency_code": "USD",
+        "remarks": "B-02-7",
+        "description": "",
+        "weight": "1.16"
+      }
+    ],
+    [
+      {
+        "inventory_id": 358001299,
+        "item": {
+          "no": "sw0001a",
+          "name": "Luke Skywalker (Tatooine)",
+          "type": "MINIFIG",
+          "category_id": 65
+        },
+        "color_id": 0,
+        "color_name": "(Not Applicable)",
+        "quantity": 1,
+        "new_or_used": "U",
+        "completeness": "X",
+        "unit_price": "9.9900",
+        "unit_price_final": "9.9900",
+        "disp_unit_price": "9.9900",
+        "disp_unit_price_final": "9.9900",
+        "currency_code": "USD",
+        "disp_currency_code": "USD",
+        "remarks": "MF-1",
+        "description": "",
+        "weight": "1.16"
+      },
+      {
+        "inventory_id": 358001234,
+        "item": {
+          "no": "3001",
+          "name": "Brick 2 x 4",
+          "type": "PART",
+          "category_id": 5
+        },
+        "color_id": 11,
+        "color_name": "Black",
+        "quantity": 30,
+        "new_or_used": "N",
+        "completeness": "X",
+        "unit_price": "0.1200",
+        "unit_price_final": "0.1200",
+        "disp_unit_price": "0.1200",
+        "disp_unit_price_final": "0.1200",
+        "currency_code": "USD",
+        "disp_currency_code": "USD",
+        "remarks": "A-12-3",
+        "description": "",
+        "weight": "1.16"
+      },
+      {
+        "inventory_id": null,
+        "item": {
+          "no": "3062b",
+          "name": "Brick, Round 1 x 1 Open Stud",
+          "type": "PART",
+          "category_id": 20
+        },
+        "color_id": 5,
+        "color_name": "Red",
+        "quantity": 8,
+        "new_or_used": "U",
+        "completeness": "X",
+        "unit_price": "0.0300",
+        "unit_price_final": "0.0300",
+        "disp_unit_price": "0.0300",
+        "disp_unit_price_final": "0.0300",
+        "currency_code": "USD",
+        "disp_currency_code": "USD",
+        "remarks": "C-04-1",
+        "description": "",
+        "weight": "1.16"
+      }
+    ]
+  ]
+}

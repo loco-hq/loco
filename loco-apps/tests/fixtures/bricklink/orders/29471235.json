@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "description": "OK",
+    "message": "OK",
+    "code": 200
+  },
+  "data": {
+    "order_id": 29471235,
+    "date_ordered": "2026-10-03T16:40:02.000Z",
+    "date_status_changed": "2026-10-03T16:40:02.000Z",
+    "seller_name": "brocksbricks",
+    "store_name": "Brock's Bricks",
+    "buyer_name": "grace_mocs",
+    "buyer_email": "grace_mocs@example.test",
+    "require_insurance": false,
+    "status": "PENDING",
+    "is_invoiced": false,
+    "is_filed": false,
+    "drive_thru_sent": false,
+    "total_count": 40,
+    "unique_count": 1,
+    "total_weight": "12.40",
+    "payment": {
+      "method": "PayPal",
+      "currency_code": "USD",
+      "date_paid": "2026-10-03T16:40:02.000Z",
+      "status": "Completed"
+    },
+    "cost": {
+      "currency_code": "USD",
+      "subtotal": "8.7500",
+      "grand_total": "8.7500",
+      "shipping": "0.0000",
+      "insurance": "0.0000",
+      "credit": "0.0000",
+      "coupon": "0.0000",
+      "vat_rate": "0.00",
+      "vat_amount": "0.0000",
+      "etc1": "0.0000",
+      "etc2": "0.0000"
+    }
+  }
+}

@@ -1,0 +1,3 @@
+label: "BrickLink store"
+description: "The installing store's BrickLink account. Set its four secrets on the dataset; callers read loco/bricklink.store:orders."
+type: bricklink
