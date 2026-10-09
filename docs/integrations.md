@@ -421,7 +421,7 @@ Connection credentials are declared on the type, not as loose secret and variabl
 
 A version may still declare a secret or variable that is not a connection, on the [#100](https://github.com/loco-hq/loco/issues/100) paths (`${version}/secrets/${name}`, `${version}/variables/${name}`). A license key, a flag, or an ordinary action's credential is not a connection. An integration source and an integration action never read those documents. They read the integration they were called for, so a loose `consumer_key` is not a store's token. An ordinary action keeps the [#102](https://github.com/loco-hq/loco/issues/102) check. A package can put a token on the version instead of the type; the integration's required check then reports that secret as unset.
 
-Values stay on the dataset in the [#101](https://github.com/loco-hq/loco/issues/101) storage (`SecretStore`, `$secrets`, `$variables`). Storage, gates, and purge order are unchanged. A write is allowed when any version of the project declares the name, itself or through a direct dependency (`http/config_values.rs`). Brock's `loco/bricklink.store:consumer_key` is the dependency half of that rule. The list is still the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing. A connection's declaration is one row per integration. Value rows keep `name`, `project`, `set`, `updated_at`, and the variable's `value` and `source`. They add `integration`, the canonical qualified integration (`sf_east`, or `loco/bricklink.store`), so two `consumer_key` rows are distinct. `name` stays the declaration name. A loose declaration is one row, with no `integration`. Version copy still does not copy values.
+Values stay on the dataset in the [#101](https://github.com/loco-hq/loco/issues/101) storage (`SecretStore` over `$secrets`, `VariableStore` over `$variables`). Storage and gates are unchanged. Dataset purge calls the secret store, then the variable store, then `LakeSource::purge_dataset`. A write is allowed when any version of the project declares the name, itself or through a direct dependency (`http/config_values.rs`). Brock's `loco/bricklink.store:consumer_key` is the dependency half of that rule. The list is still the declarations of the versions this dataset's sites pin; a dataset no site pins lists nothing. A connection's declaration is one row per integration. Value rows keep `name`, `project`, `set`, `updated_at`, and the variable's `value` and `source`. They add `integration`, the canonical qualified integration (`sf_east`, or `loco/bricklink.store`), so two `consumer_key` rows are distinct. `name` stays the declaration name. A loose declaration is one row, with no `integration`. Version copy still does not copy values.
 
 The row id changes. It is the qualified integration, then `:`, then the declaration's bare name.
 
@@ -441,11 +441,11 @@ The HTTP client on the connection is the process-wide client actions already use
 
 ## CollectionSource
 
-`DataAdapter` (`loco-lake`, `adapter.rs`) is synchronous, has a method for every verb, and takes no connection. `server.rs` holds one adapter for every collection. An integration collection needs a different trait: the call is HTTP, the credentials differ per integration, and an upstream API does not implement the whole of [`query.md`](query.md).
+`DataAdapter` (`loco-lake`, `adapter.rs`) is synchronous, has a method for every verb, and takes no connection. `AppState` holds one `LakeSource` over that adapter for every ordinary collection. It does not hold the raw adapter. Action handlers take `AppState.variables` through `HandlerDeps`. The raw adapter they still take is `LakeSource::adapter()`, for record patches, pending #120. An integration collection needs a different trait: the call is HTTP, the credentials differ per integration, and an upstream API does not implement the whole of [`query.md`](query.md).
 
 The replacement is an async trait, working name `CollectionSource`. `/data` and `/data/query` call it for every collection, lake included. The lake's implementation is today's adapter behind the trait. Those methods do not await while holding the adapter lock. An integration implementation awaits the HTTP client on the request task, as an action handler does.
 
-Each call receives the connection: the dataset id, the qualified integration, `secret` / `variable` as above, and the HTTP client. The lake implementation has no integration and does not read secrets. `delete_dataset` is not a collection verb. It stays on the lake adapter. A source has no dataset to purge.
+Each call receives the connection: the dataset id, the qualified integration, `secret` / `variable` as above, and the HTTP client. The lake implementation has no integration and does not read secrets. `delete_dataset` is not a collection verb. Dataset purge calls the secret store, then the variable store, then `LakeSource::purge_dataset`. A source has no dataset to purge.
 
 The source declares capabilities:
 
@@ -480,7 +480,7 @@ The sidecar and the cache are not part of v1. The trait's update takes upstream 
 
 The cache, when it exists, sits in front of the source and behind the merge. A hit is still an upstream record, then the sidecar is applied. Callers do not choose cached versus live. v1 always takes the live branch.
 
-[#120](https://github.com/loco-hq/loco/issues/120). A source receives the connection, not `Arc<dyn DataAdapter>` and not every secret on the dataset. Action handlers still receive the site's `VersionSchema` and the raw adapter, which is the reach #120 exists to narrow. This design does not replace that context. It does not give the source a wider one. Sandboxing waits for #120, and for the TypeScript engine. Until then the registry is Rust we review.
+[#120](https://github.com/loco-hq/loco/issues/120). A source receives the connection, not `Arc<dyn DataAdapter>` and not every secret on the dataset. Action handlers still receive the site's `VersionSchema` and the raw adapter (`LakeSource::adapter()`), which is the reach #120 exists to narrow. Variable reads use `AppState.variables`, not that adapter. This design does not replace that context. It does not give the source a wider one. Sandboxing waits for #120, and for the TypeScript engine. Until then the registry is Rust we review.
 
 A live record omits system fields other than `$id`, and `$id` is the upstream id. A timestamp the API returns is a declared field (`date` on a BrickLink order). Filtering or ordering by an undeclared system field is a capability error, the same as any filter the source does not declare. The lake source still declares the full set. A sidecar row's own lake timestamps are not the upstream record's, and v1 has no sidecar row to confuse them with.
 
@@ -489,11 +489,11 @@ A live record omits system fields other than `$id`, and `$id` is the upstream id
 [#100](https://github.com/loco-hq/loco/issues/100) and [#101](https://github.com/loco-hq/loco/issues/101) are merged. They are not reopened. The follow-up is an issue below. What changes:
 
 - A credential that belongs to a connection is declared on the integration type (inline list: `label`, `description`, `required`, and `default` on a variable only). It is not a loose `${version}/secrets/${name}` document.
-- The value row id is `{qualified integration}:{name}` in the existing `$secrets` / `$variables` collections. `SecretStore`'s trait stays `put` / `get` / `delete` / `list` / `delete_dataset` of a dataset id and a name string. The name string grows the integration.
+- The value row id is `{qualified integration}:{name}` in the existing `$secrets` / `$variables` collections. `SecretStore`'s trait stays `put` / `get` / `delete` / `list` / `delete_dataset` of a dataset id and a name string. The name string grows the integration. Variables use `VariableStore` (`set` / `get` / `delete` / `list` / `delete_dataset`) over `$variables`, plaintext, no key.
 - A handler or a source reads only the integration the call was addressed to. An integration action's required-config check is that integration's declarations only. Loose version-level declarations stay for non-connections, and integration code never reads them. An ordinary action still checks them.
 - The list a client sees for a connection is one row per integration per declaration. Value rows add `integration`. Collection and action lists are one row per address, with `project`, `integration`, `name`, and `owner`.
 
-Storage, gates, and purge order are unchanged ([#101](https://github.com/loco-hq/loco/issues/101)).
+Storage and gates are unchanged ([#101](https://github.com/loco-hq/loco/issues/101)). Dataset purge calls the secret store, then the variable store, then `LakeSource::purge_dataset`. A secret-store failure does not purge the lake.
 
 [#104](https://github.com/loco-hq/loco/issues/104) stays the BrickLink package. It is edited in place when this document is accepted. It does not stay a sync into the lake.
 

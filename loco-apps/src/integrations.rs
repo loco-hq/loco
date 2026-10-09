@@ -33,7 +33,8 @@ use crate::validation::validate_type_action_input;
 /// forward to the connection. They do not read a loose declaration, and a
 /// handler written against [`crate::actions::ActionContext`] does not type-check
 /// here. The schema and the lake adapter are the same ones an ordinary action
-/// receives, so a handler can patch records.
+/// receives, so a handler can patch records, pending #120. Variable reads
+/// use the store on [`HandlerDeps`], not a store built on that adapter.
 pub struct TypeActionContext {
     pub dataset_id: String,
     pub data: Arc<dyn DataAdapter>,
@@ -230,7 +231,7 @@ pub(crate) async fn dispatch_type_action(
         dataset_id.to_string(),
         spec,
         deps.secrets,
-        deps.data.clone(),
+        deps.variables,
         deps.http,
     );
     let missing = match connection.missing_required() {
@@ -242,6 +243,9 @@ pub(crate) async fn dispatch_type_action(
     }
     let ctx = TypeActionContext {
         dataset_id: dataset_id.to_string(),
+        // Pending #120: the handler still holds the raw adapter so it can
+        // patch records. Variable reads go through `connection`, which was
+        // given `deps.variables`.
         data: deps.data,
         schema: schema.clone(),
         caller: caller.clone(),
@@ -353,7 +357,8 @@ mod tests {
     use crate::http::version_schema::{AddressResolution, VersionSchema};
     use crate::validation::kind;
     use crate::values::{
-        put_variable, KeyStatus, LakeSecretStore, SecretError, SecretMeta, SecretStore,
+        KeyStatus, LakeSecretStore, LakeVariableStore, SecretError, SecretMeta, SecretStore,
+        VariableStore,
     };
     use crate::{
         Integration, IntegrationAction, IntegrationSecret, IntegrationType, IntegrationVariable,
@@ -548,9 +553,12 @@ mod tests {
         data: std::sync::Arc<dyn loco_lake::DataAdapter>,
         secrets: std::sync::Arc<dyn SecretStore>,
     ) -> HandlerDeps {
+        let variables: std::sync::Arc<dyn VariableStore> =
+            std::sync::Arc::new(LakeVariableStore::new(std::sync::Arc::clone(&data)));
         HandlerDeps {
             data,
             secrets,
+            variables,
             http: crate::actions::http_client(),
         }
     }
@@ -646,7 +654,9 @@ mod tests {
             .put(DATASET, "alice/pkg.store:token", "store-token")
             .unwrap();
         for id in ["sf_east:lane", "sf_west:lane", "alice/pkg.store:lane"] {
-            put_variable(fixture.data.as_ref(), DATASET, id, "1").unwrap();
+            LakeVariableStore::new(std::sync::Arc::clone(&fixture.data))
+                .set(DATASET, id, "1")
+                .unwrap();
         }
 
         ran.store(false, Ordering::SeqCst);
@@ -696,7 +706,9 @@ mod tests {
             .secrets
             .put(DATASET, "sf_east:consumer_key", "east-key")
             .unwrap();
-        put_variable(fixture.data.as_ref(), DATASET, "sf_east:region", "").unwrap();
+        LakeVariableStore::new(std::sync::Arc::clone(&fixture.data))
+            .set(DATASET, "sf_east:region", "")
+            .unwrap();
         let outcome = run(
             &fixture,
             &registry,
@@ -830,7 +842,9 @@ mod tests {
             .secrets
             .put(DATASET, "sf_east:token", "east-token")
             .unwrap();
-        put_variable(fixture.data.as_ref(), DATASET, "sf_east:lane", "1").unwrap();
+        LakeVariableStore::new(std::sync::Arc::clone(&fixture.data))
+            .set(DATASET, "sf_east:lane", "1")
+            .unwrap();
         let outcome = run(
             &fixture,
             &registry,

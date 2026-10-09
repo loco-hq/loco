@@ -3,8 +3,11 @@
 //! The lake implements it ([`LakeSource`]) by calling the synchronous
 //! [`loco_lake::DataAdapter`] and finishing that call before the future
 //! yields, so the adapter lock is not held across an `.await`. An integration
-//! source awaits HTTP on the request task. `delete_dataset` is not a
-//! collection verb and stays on the adapter.
+//! source awaits HTTP on the request task. [`LakeSource::purge_dataset`] is
+//! not a collection verb: dataset delete calls the secret store and the
+//! variable store first, then this. [`LakeSource::adapter`] is the raw
+//! adapter action handlers take so they can patch records, pending #120.
+//! Nothing else in the crate calls it.
 //!
 //! A source declares what it will do. A verb, filter, order, limit, or cursor
 //! it does not declare is an error, never a widened or truncated page.
@@ -26,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::actions::{ConfigReadError, Connection};
 use crate::validation::{kind, Diagnostic};
+use crate::values::{SecretStore, VariableStore};
 
 /// What a source will honor. Anything else is [`kind::UNSUPPORTED`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,6 +308,40 @@ impl LakeSource {
     pub fn new(adapter: Arc<dyn DataAdapter>) -> Self {
         Self { adapter }
     }
+
+    /// The raw adapter. Action handlers take this so they can patch records.
+    /// Pending #120. Nothing else in the crate calls it.
+    pub(crate) fn adapter(&self) -> Arc<dyn DataAdapter> {
+        Arc::clone(&self.adapter)
+    }
+
+    /// Remove every lake row for `dataset_id`, including `$secrets` and
+    /// `$variables`. Dataset purge calls the stores first, so a store that
+    /// is not the lake is cleaned up on the same path. Not a collection verb.
+    pub(crate) fn purge_dataset(&self, dataset_id: &str) -> Result<(), loco_lake::Error> {
+        self.adapter.delete_dataset(dataset_id)
+    }
+}
+
+/// Secrets, then variables, then the lake. A secret-store error leaves the
+/// variable rows and the lake in place. A variable-store error leaves the
+/// lake in place. Each store's `delete_dataset` is what a non-lake impl
+/// cleans up; the lake impls only remove `$secrets` and `$variables` rows
+/// the lake purge deletes anyway.
+pub(crate) fn purge_dataset(
+    secrets: &dyn SecretStore,
+    variables: &dyn VariableStore,
+    lake: &LakeSource,
+    dataset_id: &str,
+) -> Result<(), String> {
+    secrets
+        .delete_dataset(dataset_id)
+        .map_err(|err| err.to_string())?;
+    variables
+        .delete_dataset(dataset_id)
+        .map_err(|err| err.to_string())?;
+    lake.purge_dataset(dataset_id)
+        .map_err(|err| err.to_string())
 }
 
 #[async_trait]
@@ -689,5 +727,131 @@ mod tests {
         let diags = unsupported_query("q", "east:items", &Capabilities::none(), &query);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("does not support query"));
+    }
+}
+
+#[cfg(test)]
+mod purge_order {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use loco_lake::InMemoryAdapter;
+
+    use super::*;
+    use crate::values::{SecretError, SecretMeta, VariableError, VariableMeta};
+
+    const DATASET: &str = "ben/crm/dev";
+
+    struct SecretGate {
+        calls: AtomicUsize,
+        fail: bool,
+    }
+
+    impl SecretStore for SecretGate {
+        fn put(&self, _: &str, _: &str, _: &str) -> Result<SecretMeta, SecretError> {
+            panic!("not used");
+        }
+
+        fn get(&self, _: &str, _: &str) -> Result<Option<String>, SecretError> {
+            panic!("not used");
+        }
+
+        fn delete(&self, _: &str, _: &str) -> Result<(), SecretError> {
+            panic!("not used");
+        }
+
+        fn list(&self, _: &str) -> Result<Vec<SecretMeta>, SecretError> {
+            panic!("not used");
+        }
+
+        fn delete_dataset(&self, _: &str) -> Result<(), SecretError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                Err(SecretError::Failed("secret store failed".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct VariableGate {
+        calls: AtomicUsize,
+        fail: bool,
+    }
+
+    impl VariableStore for VariableGate {
+        fn set(&self, _: &str, _: &str, _: &str) -> Result<VariableMeta, VariableError> {
+            panic!("not used");
+        }
+
+        fn get(&self, _: &str, _: &str) -> Result<Option<String>, VariableError> {
+            panic!("not used");
+        }
+
+        fn delete(&self, _: &str, _: &str) -> Result<(), VariableError> {
+            panic!("not used");
+        }
+
+        fn list(&self, _: &str) -> Result<Vec<VariableMeta>, VariableError> {
+            panic!("not used");
+        }
+
+        fn delete_dataset(&self, _: &str) -> Result<(), VariableError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                Err(VariableError::Lake(loco_lake::Error::Internal(
+                    "variable store failed".into(),
+                )))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn plant(data: &InMemoryAdapter) {
+        let mut fields = HashMap::new();
+        fields.insert("name".into(), Value::String("stay".into()));
+        data.upsert(DATASET, "orders", "row-1", "system", fields)
+            .unwrap();
+    }
+
+    #[test]
+    fn secret_store_failure_skips_the_variable_store_and_the_lake() {
+        let data = Arc::new(InMemoryAdapter::new());
+        plant(&data);
+        let secrets = SecretGate {
+            calls: AtomicUsize::new(0),
+            fail: true,
+        };
+        let variables = VariableGate {
+            calls: AtomicUsize::new(0),
+            fail: false,
+        };
+        let lake = LakeSource::new(data.clone());
+        let err = purge_dataset(&secrets, &variables, &lake, DATASET).unwrap_err();
+        assert!(err.contains("secret store failed"), "{err}");
+        assert_eq!(secrets.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(variables.calls.load(Ordering::SeqCst), 0);
+        assert!(data.get(DATASET, "orders", "row-1").unwrap().is_some());
+    }
+
+    #[test]
+    fn variable_store_failure_leaves_the_lake_row() {
+        let data = Arc::new(InMemoryAdapter::new());
+        plant(&data);
+        let secrets = SecretGate {
+            calls: AtomicUsize::new(0),
+            fail: false,
+        };
+        let variables = VariableGate {
+            calls: AtomicUsize::new(0),
+            fail: true,
+        };
+        let lake = LakeSource::new(data.clone());
+        let err = purge_dataset(&secrets, &variables, &lake, DATASET).unwrap_err();
+        assert!(err.contains("variable store failed"), "{err}");
+        assert_eq!(secrets.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(variables.calls.load(Ordering::SeqCst), 1);
+        assert!(data.get(DATASET, "orders", "row-1").unwrap().is_some());
     }
 }
