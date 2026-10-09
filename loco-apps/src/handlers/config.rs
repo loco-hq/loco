@@ -116,8 +116,9 @@ pub async fn create_project(
     ));
 
     // The version, dataset, and site lines above still discard a failure.
-    // An I/O failure recording the creator as a member removes the project
-    // and is a 500. Already being a member counts as the grant having happened.
+    // A failure persisting the creator's membership removes the project and
+    // is a 500. Already being a member counts as the grant having happened,
+    // including when the file landed and only the directory fsync failed.
     let project_id = format!("{account}/{}", body.name);
     match state.auth_adapter.add_project_member(
         &project_id,

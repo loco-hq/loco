@@ -13,7 +13,7 @@ use crate::error::Error;
 /// Leading `.` plus a name no pathTemplate produces.
 pub(crate) const TEMP_PREFIX: &str = ".loco-";
 
-pub(crate) fn is_temp_name(name: &str) -> bool {
+pub fn is_temp_name(name: &str) -> bool {
     name.starts_with(TEMP_PREFIX)
 }
 
@@ -40,7 +40,7 @@ pub(crate) fn temp_sibling(parent: &Path, tag: &str) -> PathBuf {
 /// On failure the temp file is removed and `path` is untouched — except when
 /// only the directory fsync fails: the rename has happened, so that is
 /// [`Error::NotDurable`], not a failed write.
-pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::InvalidPath(path.display().to_string()))?;

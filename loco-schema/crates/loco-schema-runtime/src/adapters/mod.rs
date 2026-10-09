@@ -14,6 +14,8 @@ mod atomic;
 pub mod file_tree_fs;
 pub mod yaml_fs;
 
+pub use atomic::{is_temp_name, write_file_atomic};
+
 use crate::error::Error;
 use crate::file_tree::{FileTree, FileTreeInstance};
 use crate::store::SchemaInstance;
