@@ -156,11 +156,19 @@ pub struct LocalAuthAdapter {
     org_members_writer: Mutex<()>,
     project_members: RwLock<HashMap<(String, String), StoredProjectMember>>, // (project, handle)
     project_members_writer: Mutex<()>,
-    /// Test seam. The first barrier fires once a read-modify-write has passed
-    /// its slow work and has not yet taken the writer mutex; the second lets
-    /// it continue. Production builds have no field and the wait is a no-op.
+    /// Test seams. The first barrier fires at the pause; the second lets the
+    /// writer continue. Production builds have neither field.
+    ///
+    /// `pause_before_write` is login, after the password check, and
+    /// `update_project_member`, between its read and its persist.
+    /// `pause_after_account_delete` is `delete_user`, between the account
+    /// delete and the identity delete. The login test calls `delete_user`
+    /// while `pause_before_write` is armed, so the two seams stay separate.
     #[cfg(test)]
     pause_before_write: Mutex<Option<std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
+    #[cfg(test)]
+    pause_after_account_delete:
+        Mutex<Option<std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
 }
 
 /// A write that left the new bytes at the target path.
@@ -258,6 +266,8 @@ impl LocalAuthAdapter {
             project_members_writer: Mutex::new(()),
             #[cfg(test)]
             pause_before_write: Mutex::new(None),
+            #[cfg(test)]
+            pause_after_account_delete: Mutex::new(None),
         };
         adapter.load_from_disk().expect("failed to load auth store");
         adapter
@@ -559,23 +569,31 @@ impl LocalAuthAdapter {
         remove_json(&self.project_member_path(project_id, handle))
     }
 
-    /// Lets a test delete or rename between password verification and the
-    /// identity write. No-op unless the test installed barriers.
     #[cfg(test)]
-    fn pause_before_write(&self) {
-        let gates = self
-            .pause_before_write
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone();
+    fn wait_gates(slot: &Mutex<Option<std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)>>>) {
+        let gates = slot.lock().unwrap_or_else(|err| err.into_inner()).clone();
         if let Some(gates) = gates {
             gates.0.wait();
             gates.1.wait();
         }
     }
 
+    /// No-op unless a test installed barriers.
+    #[cfg(test)]
+    fn pause_before_write(&self) {
+        Self::wait_gates(&self.pause_before_write);
+    }
+
+    #[cfg(test)]
+    fn pause_after_account_delete(&self) {
+        Self::wait_gates(&self.pause_after_account_delete);
+    }
+
     #[cfg(not(test))]
     fn pause_before_write(&self) {}
+
+    #[cfg(not(test))]
+    fn pause_after_account_delete(&self) {}
 
     fn to_account(account: &StoredAccount) -> Account {
         Account {
@@ -998,14 +1016,17 @@ impl AuthAdapter for LocalAuthAdapter {
         }
         self.purge_memberships(&handle)?;
         self.revoke_all_sessions(user_id)?;
-        // Account file first. A crash before the identity file is removed
-        // leaves an identity with no account, which grants nothing. The
-        // reverse would leave an account that owns `{handle}/*`.
-        {
-            let _accounts = lock_writer(&self.accounts_writer);
-            self.delete_account_file(&handle)?;
-            self.accounts.write().unwrap().remove(&handle);
-        }
+        // Account file first, and this writer stays held through the identity
+        // delete (accounts → identities, same as `insert_person`). A crash
+        // before the identity file is removed leaves an identity with no
+        // account, which grants nothing. The reverse would leave an account
+        // that owns `{handle}/*`. Releasing the accounts writer between the
+        // two deletes would let a signup of this handle write a new identity,
+        // and the identity delete would remove that person by handle.
+        let _accounts = lock_writer(&self.accounts_writer);
+        self.delete_account_file(&handle)?;
+        self.accounts.write().unwrap().remove(&handle);
+        self.pause_after_account_delete();
         let _identities = lock_writer(&self.identities_writer);
         self.delete_identity_file(&handle)?;
         self.identities.write().unwrap().remove(&handle);
@@ -1233,7 +1254,6 @@ impl AuthAdapter for LocalAuthAdapter {
         handle: &str,
         role: ProjectRole,
     ) -> Result<ProjectMember, AuthError> {
-        self.pause_before_write();
         let _writer = lock_writer(&self.project_members_writer);
         let key = (project_id.to_string(), handle.to_string());
         let member = {
@@ -1242,6 +1262,9 @@ impl AuthAdapter for LocalAuthAdapter {
             member.role = role;
             member
         };
+        // Still holding the writer. A remove that runs here waits, instead of
+        // deleting the row and having this snapshot write it back.
+        self.pause_before_write();
         commit(self.persist_project_member(&member), || {
             self.project_members
                 .write()
@@ -2193,15 +2216,26 @@ mod tests {
         }
     }
 
-    /// Two barriers. The writer waits on the first after its slow work and
-    /// before its mutex; the test thread does the racing mutation, then both
-    /// pass the second.
+    /// Two barriers. The caller waits on the first at its pause; the test
+    /// thread does the racing work, then both pass the second.
+    fn install_gates(
+        slot: &Mutex<Option<std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
+    ) -> std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)> {
+        let gates = std::sync::Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+        *slot.lock().unwrap() = Some(std::sync::Arc::clone(&gates));
+        gates
+    }
+
     fn install_pause(
         adapter: &LocalAuthAdapter,
     ) -> std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)> {
-        let gates = std::sync::Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
-        *adapter.pause_before_write.lock().unwrap() = Some(std::sync::Arc::clone(&gates));
-        gates
+        install_gates(&adapter.pause_before_write)
+    }
+
+    fn install_pause_after_account_delete(
+        adapter: &LocalAuthAdapter,
+    ) -> std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)> {
+        install_gates(&adapter.pause_after_account_delete)
     }
 
     #[test]
@@ -2237,6 +2271,81 @@ mod tests {
         assert!(adapter.sessions.read().unwrap().is_empty());
         assert!(!dir.path().join("identities/carol.json").exists());
         assert!(!dir.path().join("accounts/carol.json").exists());
+    }
+
+    /// Signup of the deleted handle, landing after the account file is gone
+    /// and before the identity file is removed. The accounts writer is held
+    /// across both, so the signup cannot write until the old identity is
+    /// gone. If that writer is released in between, the signup commits and
+    /// the identity delete removes the new person by handle.
+    #[test]
+    fn delete_does_not_drop_a_signup_of_the_same_handle() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let (dir, adapter) = adapter_without_auto_create();
+        let adapter = Arc::new(adapter);
+        let user = adapter
+            .create_user(&CreateUserRequest {
+                username: "carol".to_string(),
+                name: "Carol".to_string(),
+                password: "secret".to_string(),
+            })
+            .unwrap();
+        let old_id = user.id.clone();
+        let gates = install_pause_after_account_delete(&adapter);
+        let deleting = Arc::clone(&adapter);
+        let user_id = user.id;
+        let delete_thread = thread::spawn(move || deleting.delete_user(&user_id));
+        gates.0.wait();
+
+        let accounts_held = adapter.accounts_writer.try_lock().is_err();
+        let signing_up = Arc::clone(&adapter);
+        let signup = thread::spawn(move || {
+            signing_up.create_user(&CreateUserRequest {
+                username: "carol".to_string(),
+                name: "Carol Again".to_string(),
+                password: "other-secret".to_string(),
+            })
+        });
+        // Signup takes the accounts writer before it writes. When delete
+        // still holds that writer, signup has to run after delete finishes.
+        // When delete has released it, finish the signup first so the
+        // identity delete removes the new person and the assertion fails.
+        let new_user = if accounts_held {
+            gates.1.wait();
+            delete_thread.join().expect("delete thread").unwrap();
+            signup.join().expect("signup thread").unwrap()
+        } else {
+            let created = signup.join().expect("signup thread").unwrap();
+            gates.1.wait();
+            delete_thread.join().expect("delete thread").unwrap();
+            created
+        };
+
+        assert_ne!(new_user.id, old_id);
+        let identity = adapter
+            .identities
+            .read()
+            .unwrap()
+            .get("carol")
+            .cloned()
+            .expect("signup identity");
+        assert_eq!(identity.id, new_user.id);
+        assert_eq!(identity.name, "Carol Again");
+        let on_disk: StoredIdentity = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("identities/carol.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(on_disk.id, new_user.id);
+        assert!(dir.path().join("accounts/carol.json").exists());
+        let session = adapter
+            .login(&LoginCredentials {
+                username: "carol".to_string(),
+                password: Some("other-secret".to_string()),
+            })
+            .unwrap();
+        assert_eq!(session.user.id, new_user.id);
     }
 
     #[test]
@@ -2295,15 +2404,33 @@ mod tests {
             updating.update_project_member("alice/shop", "bob", ProjectRole::Developer)
         });
         gates.0.wait();
-        adapter.remove_project_member("alice/shop", "bob").unwrap();
-        gates.1.wait();
-
-        let err = join.join().expect("update thread").unwrap_err();
-        assert!(matches!(err, AuthError::UserNotFound));
-        assert!(adapter
-            .list_project_members("alice/shop")
-            .unwrap()
-            .is_empty());
+        // The pause is between the read and the persist. The writer is still
+        // held, so remove waits and cannot lose to the snapshot. On c184b5a
+        // nothing is held there: remove finishes, then the update writes the
+        // row back.
+        let writer_held = adapter.project_members_writer.try_lock().is_err();
+        let removing = Arc::clone(&adapter);
+        let removed = thread::spawn(move || removing.remove_project_member("alice/shop", "bob"));
+        if writer_held {
+            gates.1.wait();
+            join.join().expect("update thread").unwrap();
+            removed.join().expect("remove thread").unwrap();
+        } else {
+            removed.join().expect("remove thread").unwrap();
+            gates.1.wait();
+            let _ = join.join().expect("update thread");
+        }
+        assert!(
+            adapter
+                .list_project_members("alice/shop")
+                .unwrap()
+                .is_empty(),
+            "removed row was written back"
+        );
+        assert!(
+            writer_held,
+            "update released the project-members writer between the read and the persist"
+        );
         assert!(!dir
             .path()
             .join("project_members/alice/shop/bob.json")
