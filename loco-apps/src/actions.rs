@@ -193,8 +193,7 @@ struct BoundVariable {
 
 /// Which declarations a connection is allowed to read.
 ///
-/// One fact, stored once. The undeclared-name message matches on it, and the
-/// action runner prepares the same enum.
+/// One fact, stored once. The undeclared-name message matches on it.
 #[derive(Clone, Debug)]
 pub enum ConnectionScope {
     /// The owning package's loose declarations. `owner` is the action's
@@ -624,8 +623,18 @@ pub enum Dispatch {
 
 struct Prepared {
     key: ActionKey,
-    scope: ConnectionScope,
+    scope: Scope,
     input: HashMap<String, Value>,
+}
+
+/// What `prepare` resolved, before a connection is built.
+///
+/// An integration arm holds the declarations `prepare` already read.
+/// [`ConnectionScope`] is built from this when the connection is, and is not
+/// a second copy of the same lists.
+enum Scope {
+    Package { owner: String },
+    Integration(ConnectionDeclarations),
 }
 
 /// Validate `address`'s input, refuse a run whose connection is missing a
@@ -654,17 +663,14 @@ pub async fn dispatch(
     let Some(handler) = registry.get(&prepared.key) else {
         return no_handler(&prepared.key);
     };
-    let connection = match connect(
+    let connection = connect(
         schema,
         dataset_id,
         prepared.scope,
         deps.secrets,
         deps.variables,
         deps.http,
-    ) {
-        Ok(connection) => connection,
-        Err(outcome) => return outcome,
-    };
+    );
     let missing = match connection.missing_required() {
         Ok(missing) => missing,
         Err(failure) => return Dispatch::Failed(failure),
@@ -710,7 +716,7 @@ fn prepare(
                     project: owner.clone(),
                     name: action.name().to_string(),
                 },
-                scope: ConnectionScope::Package { owner },
+                scope: Scope::Package { owner },
                 input,
             })
         }
@@ -737,50 +743,33 @@ fn prepare(
                     type_name: type_name.clone(),
                     name: action.name().to_string(),
                 },
-                scope: ConnectionScope::Integration {
-                    integration: spec.integration,
-                    type_ref: spec.type_ref,
-                },
+                scope: Scope::Integration(spec),
                 input,
             })
         }
     }
 }
 
-/// Build the connection `prepare` named.
-///
-/// An integration's declarations are read again from `schema`. The canonical
-/// name on the scope is what [`VersionSchema::split`] turns back into the
-/// project and the bare name, including a bare name that itself contains `.`.
+/// Build the connection from the declarations `prepare` already resolved.
 fn connect(
     schema: &VersionSchema,
     dataset_id: &str,
-    scope: ConnectionScope,
+    scope: Scope,
     secrets: Arc<dyn SecretStore>,
     variables: Arc<dyn VariableStore>,
     http: reqwest::Client,
-) -> Result<Connection, Dispatch> {
+) -> Connection {
     match scope {
-        ConnectionScope::Package { owner } => Ok(Connection::for_package(
+        Scope::Package { owner } => Connection::for_package(
             dataset_id.to_string(),
             schema,
             &owner,
             secrets,
             variables,
             http,
-        )),
-        ConnectionScope::Integration { integration, .. } => {
-            let (project, name) = schema.split(&integration);
-            let Some(spec) = schema.connection_declarations(project, name) else {
-                return Err(Dispatch::NotFound);
-            };
-            Ok(Connection::new(
-                dataset_id.to_string(),
-                spec,
-                secrets,
-                variables,
-                http,
-            ))
+        ),
+        Scope::Integration(spec) => {
+            Connection::new(dataset_id.to_string(), spec, secrets, variables, http)
         }
     }
 }
