@@ -183,10 +183,11 @@ Every host answers the whole API, as today, except password login and signup on 
 
 - The cookie session lasts 7 days with no refresh, like today's sessions.
 - Arriving at Studio with `?return=` while already logged in continues straight to the app, with no confirmation step.
+- Deleting a site releases every name on it, claimed ones included; no 409. To keep a name, move it to another site first.
 
 ## Open for Ben
 
-1. **Deleting a site releases its names**, claimed ones included (no 409). Issue #162 proposed the opposite: a claimed name blocks site delete, like a pinned version. Releasing is simpler; a name you care about, you move first. Confirm.
+None.
 
 ## Implementation issues
 
