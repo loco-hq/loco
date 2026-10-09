@@ -364,7 +364,7 @@
       "username": "lego_reseller"
     },
     "content_type": "application/json",
-    "failure": "401 {\"ok\": false, \"error\": \"invalid credentials\"} for a wrong password, an empty password, or an unknown handle. Login does not create an account. A body that is not JSON, or that omits username, is 400 {\"ok\": false, \"error\": \"...\"} and the error names the field. That 400 is the body check. It is not the signup error \"password is required\".",
+    "failure": "401 {\"ok\": false, \"error\": \"invalid credentials\"} for a wrong password, an empty password, an unknown handle, an illegal handle, or an org handle. Those are the same body. Login does not create an account and does not say which of those it was. A body that is not JSON, or that omits username, is 400 {\"ok\": false, \"error\": \"...\"} and the error names the field. That 400 is the body check. It is not the signup error \"password is required\".",
     "method": "POST",
     "path": "/auth/login",
     "session": "A session lasts 7 days. There is no refresh. Log in again. POST /auth/logout with the bearer token ends it.",
@@ -375,6 +375,8 @@
     "collection": "One or more of a-z, 0-9, '_', '.', and '-'. '$' is reserved and is rejected. parts is legal.",
     "field_and_permission_set": "Use lowercase letters and underscores: sku, qty, parts_public.",
     "handle": "The username you sign up with. 1-63 characters of a-z, 0-9, and _, starting with a letter or _. public is reserved. lego_reseller is legal. lego-reseller, Lego, and 1lego are not. The display name may contain spaces and capitals. The project account is the handle, not the user UUID.",
+    "member": "POST /config/org/{org}/member and POST /config/member/{account}/{project} add an account that already exists. An account already on disk is accepted whatever its charset, including a hyphen or more than 63 characters. A missing illegal handle such as bad-handle is 400 and the error quotes the charset a-z, 0-9, and _, starting with a letter or _. public is reserved. A well-formed handle that names no account is 404 unknown account: {handle}. Signup answers 409 user already exists, with no token, for a handle that passes the signup rule. POST /config/project with account set to the handle answers 404 unknown account or 403 to any authenticated caller, including a legacy or over-63 handle. Success is 201.",
+    "org": "POST /config/org with {\"handle\": \"acme\"}. The new handle uses the signup rule: 1-63 characters of a-z, 0-9, and _, starting with a letter or _. public is reserved. An illegal handle is 400 and the error quotes that rule. handle name \"my-org\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. Nothing is stored. A taken handle is 409 user already exists. Success is 201 and the caller is the owner.",
     "project_dataset_site": "1-63 characters of a-z, 0-9, and _, starting with a letter or _. A bad name is 400 and the error quotes this rule. inventory, dev, and www are legal.",
     "version": "1-63 characters of a-z, 0-9, '.', '_', and '-', not starting with '.'. No '@'. A name that ends in -dev is a draft and accepts /schema writes. Any other name is published and refuses /schema writes. 0.0.1-dev and 0.0.1 are the names this guide uses."
   },
@@ -389,7 +391,7 @@
     },
     {
       "prefix": "/config",
-      "summary": "Projects, datasets, sites, and versions. Bearer token. No site headers."
+      "summary": "Projects, datasets, sites, versions, orgs, and members. Bearer token. No site headers. Org create and member-add errors are names.org and names.member."
     },
     {
       "prefix": "/auth",

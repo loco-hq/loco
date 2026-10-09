@@ -1317,6 +1317,19 @@ fn suite_signup_errors() {
 }
 
 #[test]
+fn suite_org_member_errors() {
+    // Auto-create stays off so an unknown well-formed handle is not created
+    // by the login requests that lock the 401 body.
+    run_suite_with(
+        &suites_dir().join("org_member_errors"),
+        AppOptions {
+            auth_auto_create: Some(false),
+            ..AppOptions::default()
+        },
+    );
+}
+
+#[test]
 fn suite_auth_no_auto_create() {
     // The rest of the suites set LOCO_AUTH_AUTO_CREATE=1 process-wide; this
     // one pins the production default off and checks nothing was squatted.

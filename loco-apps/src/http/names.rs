@@ -10,20 +10,33 @@
 /// the other kinds share it so there is one number to remember.
 const MAX_LEN: usize = 63;
 
-/// Project, dataset, site, and account-handle names: `[a-z0-9_]`, starting
-/// with a letter or `_`. A new account handle uses this too (signup, a new
-/// org handle, login auto-create). Inviting a member does not: a handle
-/// already on disk is not passed through it.
-pub fn check_slug(kind: &str, name: &str) -> Result<(), String> {
-    let valid = (1..=MAX_LEN).contains(&name.len())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
+/// `[a-z0-9_]`, starting with a letter or `_`. No length cap. Empty is
+/// false. [`check_slug`] adds the 63-character cap. A missing member
+/// handle that fails this is [`member_handle_charset_sentence`]. An
+/// account already on disk is accepted without this check.
+pub fn slug_charset_ok(name: &str) -> bool {
+    name.chars()
+        .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
         && name
             .chars()
             .next()
-            .is_some_and(|c| c.is_ascii_lowercase() || c == '_');
-    if valid {
+            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+}
+
+/// The 400 sentence for a member handle that names no account and fails
+/// [`slug_charset_ok`]. No length cap: the cap applies when the handle is
+/// created. `public` is reserved separately.
+pub fn member_handle_charset_sentence(name: &str) -> String {
+    format!("handle name {name:?} must be a-z, 0-9, and _, starting with a letter or _")
+}
+
+/// Project, dataset, site, and account-handle names: [`slug_charset_ok`]
+/// and at most 63 characters. A new account handle uses this too (signup,
+/// a new org handle, login auto-create). Inviting a member does not apply
+/// the cap: an account already on disk is accepted, and a missing handle
+/// uses [`member_handle_charset_sentence`].
+pub fn check_slug(kind: &str, name: &str) -> Result<(), String> {
+    if name.len() <= MAX_LEN && slug_charset_ok(name) {
         Ok(())
     } else {
         Err(format!(
@@ -74,6 +87,26 @@ mod tests {
         ] {
             assert!(check_slug("project", bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn charset_has_no_length_cap() {
+        let long = "a".repeat(64);
+        assert!(slug_charset_ok(&long));
+        assert!(slug_charset_ok("my_app"));
+        for bad in ["", "my-app", "2app", "My", "a/b"] {
+            assert!(!slug_charset_ok(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn member_sentence_has_no_length_cap() {
+        let msg = member_handle_charset_sentence("bad-handle");
+        assert_eq!(
+            msg,
+            "handle name \"bad-handle\" must be a-z, 0-9, and _, starting with a letter or _"
+        );
+        assert!(!msg.contains("1-63"));
     }
 
     #[test]

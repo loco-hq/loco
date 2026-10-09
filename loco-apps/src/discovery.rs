@@ -386,6 +386,21 @@ mod tests {
         let login = doc["login"]["failure"].as_str().unwrap();
         assert!(login.contains("401"), "{login}");
         assert!(login.contains("invalid credentials"), "{login}");
+        assert!(login.contains("illegal handle"), "{login}");
+        assert!(login.contains("org handle"), "{login}");
+        let org = doc["names"]["org"].as_str().unwrap();
+        assert!(org.contains("POST /config/org"), "{org}");
+        assert!(org.contains("400") && org.contains("409"), "{org}");
+        assert!(org.contains("handle name \"my-org\""), "{org}");
+        let member = doc["names"]["member"].as_str().unwrap();
+        assert!(member.contains("400") && member.contains("404"), "{member}");
+        assert!(member.contains("unknown account:"), "{member}");
+        assert!(member.contains("bad-handle"), "{member}");
+        assert!(member.contains("201"), "{member}");
+        assert!(member.contains("user already exists"), "{member}");
+        assert!(member.contains("POST /config/project"), "{member}");
+        assert!(!member.contains("lists project members"), "{member}");
+        assert!(!member.contains("lists org members"), "{member}");
         assert_eq!(doc["routes"].as_array().unwrap().len(), routes().len());
         for route in doc["routes"].as_array().unwrap() {
             assert!(!route_method(route).is_empty());

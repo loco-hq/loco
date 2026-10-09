@@ -11,7 +11,7 @@ use super::{
     CreateUserRequest, LoginCredentials, OrgMember, OrgRole, ProjectMember, ProjectRole,
     UpdateUserRequest, PUBLIC_USERNAME, TEST_PASSWORD,
 };
-use crate::http::names::check_slug;
+use crate::http::names::{check_slug, member_handle_charset_sentence, slug_charset_ok};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct StoredAccount {
@@ -438,29 +438,38 @@ impl LocalAuthAdapter {
             .map(|a| a.account_type)
     }
 
-    /// Charset of a handle that may be named, with no length cap: non-empty,
-    /// not `public`, no `/`, `[a-z0-9_]` starting with a letter or `_`.
-    /// Member add uses this. A handle already on disk can be longer than
-    /// 63, and inviting it — or making that person the owner of a new org —
-    /// must still succeed. A handle that does not exist yet stays a pending
-    /// invite when it passes.
-    fn handle_charset_ok(handle: &str) -> bool {
-        !handle.is_empty()
-            && handle != PUBLIC_USERNAME
-            && !handle.contains('/')
-            && handle
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
-            && handle
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+    /// Charset of a missing member handle, with no length cap. `public` is
+    /// reserved. A hyphen, a leading digit, or an empty name is
+    /// [`member_handle_charset_sentence`]. Called only when the handle names
+    /// no account: an account already on disk is accepted whatever its charset.
+    fn reject_member_handle(handle: &str) -> Option<String> {
+        if handle == PUBLIC_USERNAME {
+            return Some(format!("handle name {handle:?} is reserved"));
+        }
+        if slug_charset_ok(handle) {
+            return None;
+        }
+        Some(member_handle_charset_sentence(handle))
     }
 
-    /// A handle that may be created: the charset above, at most 63
-    /// characters (`http/names.rs`), and not the reserved name `public`.
-    /// Called from `create_user`, `create_org` (the new org handle), and
+    /// An account already on disk may be added, whatever its charset. A
+    /// missing handle is 400 when illegal and 404 when well-formed.
+    fn require_member_account(&self, handle: &str) -> Result<(), AuthError> {
+        if self.account_type(handle).is_some() {
+            return Ok(());
+        }
+        if let Some(msg) = Self::reject_member_handle(handle) {
+            return Err(AuthError::InvalidHandle(msg));
+        }
+        Err(AuthError::UnknownAccount(handle.to_string()))
+    }
+
+    /// A handle that may be created: the slug charset, at most 63 characters
+    /// (`http/names.rs`), and not the reserved name `public`. Called from
+    /// `create_user`, `create_org` (the new org handle), and
     /// `auto_create_person`. Load, login, and member add do not call this.
+    /// `auto_create_person` turns a rejection into `InvalidCredentials`, so
+    /// login does not gain a handle oracle.
     fn is_valid_handle(handle: &str) -> bool {
         Self::reject_handle(handle).is_none()
     }
@@ -904,28 +913,35 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn create_org(&self, handle: &str, creator_handle: &str) -> Result<Account, AuthError> {
-        if !Self::is_valid_handle(handle) {
-            return Err(AuthError::InvalidCredentials);
+        if let Some(msg) = Self::reject_handle(handle) {
+            return Err(AuthError::InvalidHandle(msg));
         }
-        if !self.identities.read().unwrap().contains_key(creator_handle) {
-            return Err(AuthError::UserNotFound);
-        }
-        if self.accounts.read().unwrap().contains_key(handle) {
-            return Err(AuthError::UserAlreadyExists);
-        }
-
-        let account = StoredAccount {
-            handle: handle.to_string(),
-            account_type: AccountType::Org,
-            created_at: chrono::Utc::now().to_rfc3339(),
+        // The creator and the taken-name check share this write with the
+        // insert. The guard is dropped before the owner row: `add_org_member`
+        // takes the same lock, and this request does not remove an account.
+        let account = {
+            let mut accounts = self.accounts.write().unwrap();
+            let creator_ready = accounts.contains_key(creator_handle)
+                && self.identities.read().unwrap().contains_key(creator_handle);
+            if !creator_ready {
+                return Err(AuthError::UserNotFound);
+            }
+            if accounts.contains_key(handle) {
+                return Err(AuthError::UserAlreadyExists);
+            }
+            let account = StoredAccount {
+                handle: handle.to_string(),
+                account_type: AccountType::Org,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            accounts.insert(handle.to_string(), account.clone());
+            self.persist_account(&account);
+            account
         };
-        self.persist_account(&account);
-        self.accounts
-            .write()
-            .unwrap()
-            .insert(handle.to_string(), account.clone());
-        self.add_org_member(handle, creator_handle, OrgRole::Owner)?;
-        Ok(Self::to_account(&account))
+        match self.add_org_member(handle, creator_handle, OrgRole::Owner) {
+            Ok(_) | Err(AuthError::UserAlreadyExists) => Ok(Self::to_account(&account)),
+            Err(err) => Err(err),
+        }
     }
 
     fn org_role(&self, identity_handle: &str, account: &str) -> Result<Option<OrgRole>, AuthError> {
@@ -972,8 +988,11 @@ impl AuthAdapter for LocalAuthAdapter {
         handle: &str,
         role: ProjectRole,
     ) -> Result<ProjectMember, AuthError> {
-        if !Self::handle_charset_ok(handle) || project_id.split_once('/').is_none() {
-            return Err(AuthError::InvalidCredentials);
+        self.require_member_account(handle)?;
+        if project_id.split_once('/').is_none() {
+            return Err(AuthError::Internal(format!(
+                "project id {project_id} is not account/name"
+            )));
         }
         let key = (project_id.to_string(), handle.to_string());
         if self.project_members.read().unwrap().contains_key(&key) {
@@ -1051,9 +1070,7 @@ impl AuthAdapter for LocalAuthAdapter {
         handle: &str,
         role: OrgRole,
     ) -> Result<OrgMember, AuthError> {
-        if !Self::handle_charset_ok(handle) || !Self::handle_charset_ok(org) {
-            return Err(AuthError::InvalidCredentials);
-        }
+        self.require_member_account(handle)?;
         match self.account_type(org) {
             Some(AccountType::Org) => {}
             Some(AccountType::Person) => return Err(AuthError::Unauthorized),
@@ -1508,6 +1525,13 @@ mod tests {
             .add_org_member("acme", "bob", OrgRole::Member)
             .unwrap();
         adapter
+            .create_user(&CreateUserRequest {
+                username: "carol".to_string(),
+                name: "Carol".to_string(),
+                password: TEST_PASSWORD.to_string(),
+            })
+            .unwrap();
+        adapter
             .add_project_member("acme/_", "carol", ProjectRole::Developer)
             .unwrap();
 
@@ -1557,14 +1581,166 @@ mod tests {
     }
 
     #[test]
-    fn invite_unknown_handle_is_pending() {
+    fn invite_unknown_handle_is_not_a_member() {
         let (_dir, adapter) = adapter();
-        let member = adapter
+        adapter.create_org("acme", "alice").unwrap();
+
+        let missing = adapter
             .add_project_member("alice/testapp", "carol", ProjectRole::Editor)
+            .unwrap_err();
+        assert!(matches!(missing, AuthError::UnknownAccount(handle) if handle == "carol"));
+        assert!(adapter
+            .list_project_members("alice/testapp")
+            .unwrap()
+            .is_empty());
+
+        let illegal = adapter
+            .add_project_member("alice/testapp", "bad-handle", ProjectRole::Editor)
+            .unwrap_err();
+        assert!(
+            matches!(illegal, AuthError::InvalidHandle(msg) if msg.contains("bad-handle") && !msg.contains("1-63"))
+        );
+
+        let long = "c".repeat(64);
+        let unknown_long = adapter
+            .add_org_member("acme", &long, OrgRole::Member)
+            .unwrap_err();
+        assert!(matches!(unknown_long, AuthError::UnknownAccount(handle) if handle == long));
+
+        let reserved = adapter
+            .add_org_member("acme", PUBLIC_USERNAME, OrgRole::Member)
+            .unwrap_err();
+        assert!(matches!(reserved, AuthError::InvalidHandle(msg) if msg.contains("reserved")));
+
+        let member = adapter
+            .add_project_member("alice/testapp", "bob", ProjectRole::Editor)
             .unwrap();
-        assert!(member.pending);
-        let listed = adapter.list_project_members("alice/testapp").unwrap();
-        assert!(listed.iter().any(|m| m.handle == "carol" && m.pending));
+        assert!(!member.pending);
+    }
+
+    fn write_legacy_person(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir.join("accounts")).unwrap();
+        std::fs::create_dir_all(dir.join("identities")).unwrap();
+        std::fs::write(
+            dir.join("accounts/lego-reseller.json"),
+            r#"{"handle":"lego-reseller","type":"person","created_at":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("identities/lego-reseller.json"),
+            r#"{"id":"legacy","handle":"lego-reseller","name":"Legacy","password":"password","created_at":"2020-01-01T00:00:00Z","last_login_at":null}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn legacy_account_can_be_a_member() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write_legacy_person(dir.path());
+        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), false);
+
+        let project = adapter
+            .add_project_member("alice/shop", "lego-reseller", ProjectRole::Developer)
+            .unwrap();
+        assert_eq!(project.handle, "lego-reseller");
+        assert!(!project.pending);
+
+        adapter.accounts.write().unwrap().insert(
+            "old-org".to_string(),
+            StoredAccount {
+                handle: "old-org".to_string(),
+                account_type: AccountType::Org,
+                created_at: "2020-01-01T00:00:00Z".to_string(),
+            },
+        );
+        let org = adapter
+            .add_org_member("old-org", "lego-reseller", OrgRole::Member)
+            .unwrap();
+        assert_eq!(org.org, "old-org");
+        assert_eq!(org.handle, "lego-reseller");
+        assert!(!org.pending);
+    }
+
+    #[test]
+    fn create_org_rejects_illegal_handle_and_stores_nothing() {
+        let (dir, adapter) = adapter();
+        let err = adapter.create_org("my-org", "alice").unwrap_err();
+        assert!(
+            matches!(err, AuthError::InvalidHandle(msg) if msg.contains("my-org") && msg.contains("1-63"))
+        );
+        assert!(!adapter.accounts.read().unwrap().contains_key("my-org"));
+        assert!(!dir.path().join("accounts/my-org.json").exists());
+    }
+
+    #[test]
+    fn legacy_creator_owns_the_org() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write_legacy_person(dir.path());
+        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), false);
+
+        let org = adapter.create_org("acme", "lego-reseller").unwrap();
+        assert_eq!(org.handle, "acme");
+        assert_eq!(org.account_type, AccountType::Org);
+        assert!(adapter.accounts.read().unwrap().contains_key("acme"));
+        assert!(dir.path().join("accounts/acme.json").exists());
+        assert_eq!(
+            adapter.org_role("lego-reseller", "acme").unwrap(),
+            Some(OrgRole::Owner)
+        );
+        assert!(adapter
+            .accounts
+            .read()
+            .unwrap()
+            .contains_key("lego-reseller"));
+    }
+
+    #[test]
+    fn create_org_missing_creator_stores_nothing() {
+        let (dir, adapter) = adapter();
+        let missing = adapter.create_org("acme", "carol").unwrap_err();
+        assert!(matches!(missing, AuthError::UserNotFound));
+        assert!(!adapter.accounts.read().unwrap().contains_key("acme"));
+        assert!(!dir.path().join("accounts/acme.json").exists());
+
+        // An org account has no identity, so it cannot be recorded as owner.
+        let org_creator = adapter.create_org("shoporg", "loco").unwrap_err();
+        assert!(matches!(org_creator, AuthError::UserNotFound));
+        assert!(!adapter.accounts.read().unwrap().contains_key("shoporg"));
+        assert!(!dir.path().join("accounts/shoporg.json").exists());
+    }
+
+    fn assert_invalid_credentials(
+        adapter: &LocalAuthAdapter,
+        username: &str,
+        password: Option<&str>,
+    ) {
+        let err = adapter
+            .login(&LoginCredentials {
+                username: username.to_string(),
+                password: password.map(str::to_string),
+            })
+            .unwrap_err();
+        let message = err.to_string();
+        assert_eq!(message, "invalid credentials", "{username}");
+        assert!(matches!(err, AuthError::InvalidCredentials));
+    }
+
+    #[test]
+    fn login_failures_are_one_error() {
+        let (_dir, off) = adapter_without_auto_create();
+        assert_invalid_credentials(&off, "alice", Some("nope"));
+        assert_invalid_credentials(&off, "nobody", Some(TEST_PASSWORD));
+        assert_invalid_credentials(&off, "loco", Some(TEST_PASSWORD));
+        assert_invalid_credentials(&off, "lego-reseller", Some(TEST_PASSWORD));
+        assert!(!off.accounts.read().unwrap().contains_key("nobody"));
+        assert!(!off.accounts.read().unwrap().contains_key("lego-reseller"));
+
+        // Auto-create still refuses an illegal handle as invalid credentials
+        // and does not store it. An org handle is the same refusal.
+        let (_dir, on) = adapter();
+        assert_invalid_credentials(&on, "lego-reseller", Some(TEST_PASSWORD));
+        assert!(!on.accounts.read().unwrap().contains_key("lego-reseller"));
+        assert_invalid_credentials(&on, "loco", Some(TEST_PASSWORD));
     }
 
     #[test]

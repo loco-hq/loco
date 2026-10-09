@@ -6,8 +6,9 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use crate::auth::{auth_error_to_response, OrgRole, ProjectRole};
+use crate::auth::{auth_error_to_response, AuthError, OrgRole, ProjectRole};
 use crate::http::names::check_slug;
+use crate::http::project_config::ProjectConfig;
 use crate::http::response::{
     config_error_to_response, error_response, schema_error_to_response, ApiResponse,
 };
@@ -114,14 +115,38 @@ pub async fn create_project(
         "dev".to_string(),
     ));
 
+    // The version, dataset, and site lines above still discard a failure.
+    // An I/O failure recording the creator as a member removes the project
+    // and is a 500. Already being a member counts as the grant having happened.
     let project_id = format!("{account}/{}", body.name);
-    let _ = state.auth_adapter.add_project_member(
+    match state.auth_adapter.add_project_member(
         &project_id,
         scope.username(),
         ProjectRole::Developer,
-    );
+    ) {
+        Ok(_) | Err(AuthError::UserAlreadyExists) => {}
+        Err(err) => {
+            return creator_membership_failed(&pc, state.as_ref(), &project_id, &err);
+        }
+    }
 
     (StatusCode::CREATED, ApiResponse::success(project)).into_response()
+}
+
+fn creator_membership_failed(
+    pc: &ProjectConfig,
+    state: &AppState,
+    project_id: &str,
+    err: &AuthError,
+) -> Response {
+    let rollback = pc.delete_project(|name| purge_dataset(state, &format!("{project_id}/{name}")));
+    let msg = match &rollback {
+        Ok(()) => format!("could not record the creator as a member: {err}"),
+        Err(delete_err) => format!(
+            "could not record the creator as a member: {err}; project {project_id} was left in place: {delete_err}"
+        ),
+    };
+    error_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
 }
 
 fn require_can_create_under(
