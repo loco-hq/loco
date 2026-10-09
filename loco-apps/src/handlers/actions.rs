@@ -100,9 +100,11 @@ async fn run_action(
     let dataset_id = scope.dataset_id();
     // Pending #120: action handlers still receive the raw `DataAdapter` so
     // they can patch records. `LakeSource::adapter` is that one path.
+    // Variable reads use `state.variables`.
     let deps = HandlerDeps {
         data: state.lake.adapter(),
         secrets: state.secrets.clone(),
+        variables: state.variables.clone(),
         http: state.http.clone(),
     };
     // A type action reads the connection it was addressed to. An ordinary

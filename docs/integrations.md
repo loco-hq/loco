@@ -441,7 +441,7 @@ The HTTP client on the connection is the process-wide client actions already use
 
 ## CollectionSource
 
-`DataAdapter` (`loco-lake`, `adapter.rs`) is synchronous, has a method for every verb, and takes no connection. `AppState` holds one `LakeSource` over that adapter for every ordinary collection. It does not hold the raw adapter. Action handlers still take `LakeSource::adapter()`, pending #120. An integration collection needs a different trait: the call is HTTP, the credentials differ per integration, and an upstream API does not implement the whole of [`query.md`](query.md).
+`DataAdapter` (`loco-lake`, `adapter.rs`) is synchronous, has a method for every verb, and takes no connection. `AppState` holds one `LakeSource` over that adapter for every ordinary collection. It does not hold the raw adapter. Action handlers take `AppState.variables` through `HandlerDeps`. The raw adapter they still take is `LakeSource::adapter()`, for record patches, pending #120. An integration collection needs a different trait: the call is HTTP, the credentials differ per integration, and an upstream API does not implement the whole of [`query.md`](query.md).
 
 The replacement is an async trait, working name `CollectionSource`. `/data` and `/data/query` call it for every collection, lake included. The lake's implementation is today's adapter behind the trait. Those methods do not await while holding the adapter lock. An integration implementation awaits the HTTP client on the request task, as an action handler does.
 
@@ -480,7 +480,7 @@ The sidecar and the cache are not part of v1. The trait's update takes upstream 
 
 The cache, when it exists, sits in front of the source and behind the merge. A hit is still an upstream record, then the sidecar is applied. Callers do not choose cached versus live. v1 always takes the live branch.
 
-[#120](https://github.com/loco-hq/loco/issues/120). A source receives the connection, not `Arc<dyn DataAdapter>` and not every secret on the dataset. Action handlers still receive the site's `VersionSchema` and the raw adapter (`LakeSource::adapter()`), which is the reach #120 exists to narrow. This design does not replace that context. It does not give the source a wider one. Sandboxing waits for #120, and for the TypeScript engine. Until then the registry is Rust we review.
+[#120](https://github.com/loco-hq/loco/issues/120). A source receives the connection, not `Arc<dyn DataAdapter>` and not every secret on the dataset. Action handlers still receive the site's `VersionSchema` and the raw adapter (`LakeSource::adapter()`), which is the reach #120 exists to narrow. Variable reads use `AppState.variables`, not that adapter. This design does not replace that context. It does not give the source a wider one. Sandboxing waits for #120, and for the TypeScript engine. Until then the registry is Rust we review.
 
 A live record omits system fields other than `$id`, and `$id` is the upstream id. A timestamp the API returns is a declared field (`date` on a BrickLink order). Filtering or ordering by an undeclared system field is a capability error, the same as any filter the source does not declare. The lake source still declares the full set. A sidecar row's own lake timestamps are not the upstream record's, and v1 has no sidecar row to confuse them with.
 

@@ -22,7 +22,8 @@ pub struct AppState {
     /// for an integration collection's registered source.
     /// [`LakeSource::purge_dataset`] removes a dataset's rows after the
     /// secret and variable stores. [`LakeSource::adapter`] is the raw adapter
-    /// action handlers still take, pending #120.
+    /// action handlers take so they can patch records, pending #120. Nothing
+    /// else in the crate calls it. Variable reads use [`Self::variables`].
     pub lake: Arc<LakeSource>,
     pub auth_adapter: Box<dyn AuthAdapter>,
     pub schema: Arc<SchemaStore>,

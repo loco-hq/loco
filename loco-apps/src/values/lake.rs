@@ -11,7 +11,9 @@ use base64::Engine;
 use loco_lake::{DataAdapter, Record, Value};
 
 use super::seal::{open, seal, secret_aad, OpenError};
-use super::{check_name, meta_from, upsert, SecretError, SecretMeta, SecretStore, SECRETS};
+use super::{
+    check_name, delete_all, meta_from, upsert, SecretError, SecretMeta, SecretStore, SECRETS,
+};
 use crate::values::KeyStatus;
 
 const NONCE: &str = "nonce";
@@ -80,24 +82,7 @@ impl SecretStore for LakeSecretStore {
     }
 
     fn delete_dataset(&self, dataset_id: &str) -> Result<(), SecretError> {
-        let names: Vec<String> = self
-            .data
-            .list(dataset_id, SECRETS)?
-            .into_iter()
-            .map(|record| record.id)
-            .collect();
-        let mut first = None;
-        for name in names {
-            if let Err(err) = self.data.delete(dataset_id, SECRETS, &name) {
-                if first.is_none() {
-                    first = Some(SecretError::from(err));
-                }
-            }
-        }
-        match first {
-            Some(err) => Err(err),
-            None => Ok(()),
-        }
+        delete_all(self.data.as_ref(), dataset_id, SECRETS).map_err(Into::into)
     }
 }
 

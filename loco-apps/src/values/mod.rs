@@ -173,6 +173,32 @@ fn meta_from(record: &Record) -> SecretMeta {
     }
 }
 
+/// Delete every row of `collection` in `dataset_id`. Both lake stores share
+/// this. The first error is kept, and the remaining deletes still run.
+pub(crate) fn delete_all(
+    data: &dyn DataAdapter,
+    dataset_id: &str,
+    collection: &str,
+) -> Result<(), LakeError> {
+    let names: Vec<String> = data
+        .list(dataset_id, collection)?
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+    let mut first = None;
+    for name in names {
+        if let Err(err) = data.delete(dataset_id, collection, &name) {
+            if first.is_none() {
+                first = Some(err);
+            }
+        }
+    }
+    match first {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
 fn upsert(
     data: &dyn DataAdapter,
     dataset_id: &str,

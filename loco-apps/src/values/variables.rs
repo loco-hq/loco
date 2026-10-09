@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use loco_lake::{DataAdapter, Record, Value};
 
-use super::{check_name, upsert, VariableError, VariableMeta, VariableStore, VARIABLES};
+use super::{
+    check_name, delete_all, upsert, VariableError, VariableMeta, VariableStore, VARIABLES,
+};
 
 /// A stored value wins, including `""`. A missing row uses `default` when it
 /// is non-empty, and is absent when `default` is empty.
@@ -69,24 +71,7 @@ impl VariableStore for LakeVariableStore {
     }
 
     fn delete_dataset(&self, dataset_id: &str) -> Result<(), VariableError> {
-        let names: Vec<String> = self
-            .data
-            .list(dataset_id, VARIABLES)?
-            .into_iter()
-            .map(|record| record.id)
-            .collect();
-        let mut first = None;
-        for name in names {
-            if let Err(err) = self.data.delete(dataset_id, VARIABLES, &name) {
-                if first.is_none() {
-                    first = Some(VariableError::from(err));
-                }
-            }
-        }
-        match first {
-            Some(err) => Err(err),
-            None => Ok(()),
-        }
+        delete_all(self.data.as_ref(), dataset_id, VARIABLES).map_err(Into::into)
     }
 }
 

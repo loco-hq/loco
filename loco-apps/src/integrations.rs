@@ -33,7 +33,8 @@ use crate::validation::validate_type_action_input;
 /// forward to the connection. They do not read a loose declaration, and a
 /// handler written against [`crate::actions::ActionContext`] does not type-check
 /// here. The schema and the lake adapter are the same ones an ordinary action
-/// receives, so a handler can patch records.
+/// receives, so a handler can patch records, pending #120. Variable reads
+/// use the store on [`HandlerDeps`], not a store built on that adapter.
 pub struct TypeActionContext {
     pub dataset_id: String,
     pub data: Arc<dyn DataAdapter>,
@@ -226,17 +227,11 @@ pub(crate) async fn dispatch_type_action(
             name: action.name().to_string(),
         };
     };
-    // Pending #120: the handler still holds the raw adapter. The connection
-    // reads variables through the lake store on that adapter, the same rows
-    // `AppState::variables` stores.
-    let variables = Arc::new(crate::values::LakeVariableStore::new(Arc::clone(
-        &deps.data,
-    )));
     let connection = Connection::new(
         dataset_id.to_string(),
         spec,
         deps.secrets,
-        variables,
+        deps.variables,
         deps.http,
     );
     let missing = match connection.missing_required() {
@@ -248,6 +243,9 @@ pub(crate) async fn dispatch_type_action(
     }
     let ctx = TypeActionContext {
         dataset_id: dataset_id.to_string(),
+        // Pending #120: the handler still holds the raw adapter so it can
+        // patch records. Variable reads go through `connection`, which was
+        // given `deps.variables`.
         data: deps.data,
         schema: schema.clone(),
         caller: caller.clone(),
@@ -555,9 +553,12 @@ mod tests {
         data: std::sync::Arc<dyn loco_lake::DataAdapter>,
         secrets: std::sync::Arc<dyn SecretStore>,
     ) -> HandlerDeps {
+        let variables: std::sync::Arc<dyn VariableStore> =
+            std::sync::Arc::new(LakeVariableStore::new(std::sync::Arc::clone(&data)));
         HandlerDeps {
             data,
             secrets,
+            variables,
             http: crate::actions::http_client(),
         }
     }

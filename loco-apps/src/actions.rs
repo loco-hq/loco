@@ -36,7 +36,7 @@ use serde_json::Map;
 use crate::auth::AuthUser;
 use crate::http::version_schema::{ConnectionDeclarations, VersionSchema};
 use crate::validation::{kind, validate_action_input, Diagnostic, ValidationReport};
-use crate::values::{with_default, LakeVariableStore, SecretError, SecretStore, VariableStore};
+use crate::values::{with_default, SecretError, SecretStore, VariableMeta, VariableStore};
 
 /// TCP connect budget for one outbound call.
 pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -308,11 +308,11 @@ impl Connection {
                 .list(&self.dataset_id)
                 .map_err(variable_failure)?;
             for variable in variables {
-                let set = stored
-                    .iter()
-                    .any(|row| row.name == self.row_id(&variable.name))
-                    || !variable.default_value.is_empty();
-                if set {
+                if variable_is_set(
+                    &stored,
+                    &self.row_id(&variable.name),
+                    &variable.default_value,
+                ) {
                     continue;
                 }
                 missing.push(missing_diag("variable", &variable.name));
@@ -340,6 +340,7 @@ pub struct ActionContext {
     pub caller: AuthUser,
     pub input: HashMap<String, Value>,
     secrets: Arc<dyn SecretStore>,
+    variables: Arc<dyn VariableStore>,
     /// Owning project. The registry key.
     owner: String,
     http: reqwest::Client,
@@ -365,6 +366,7 @@ impl ActionContext {
             caller,
             input,
             secrets: deps.secrets,
+            variables: deps.variables,
             owner,
             http: deps.http,
         }
@@ -412,10 +414,7 @@ impl ActionContext {
             });
         };
         let id = self.schema.reference(&self.owner, decl.name());
-        // Pending #120: the handler still holds the raw adapter. Variable
-        // rows are the lake store on that adapter, the same rows
-        // `AppState::variables` stores.
-        match LakeVariableStore::new(Arc::clone(&self.data)).get(&self.dataset_id, &id) {
+        match self.variables.get(&self.dataset_id, &id) {
             Ok(stored) => Ok(with_default(stored, decl.default())),
             Err(err) => Err(ConfigReadError::Failed(err.to_string())),
         }
@@ -477,11 +476,17 @@ impl HandlerRegistry {
     }
 }
 
-/// Lake, secret store, and HTTP client one run needs. The `Arc`s and the
-/// client are cloned onto the handler so it can hold them across `.await`.
+/// Record adapter, secret store, variable store, and HTTP client one run needs.
+/// The `Arc`s and the client are cloned onto the handler so it can hold them
+/// across `.await`.
+///
+/// `data` is the raw adapter so a handler can patch records, pending #120.
+/// `variables` is the store `AppState` holds. A run does not build another
+/// store on `data`.
 pub struct HandlerDeps {
     pub data: Arc<dyn DataAdapter>,
     pub secrets: Arc<dyn SecretStore>,
+    pub variables: Arc<dyn VariableStore>,
     pub http: reqwest::Client,
 }
 
@@ -587,14 +592,10 @@ fn missing_configuration(
     variables.retain(|variable| variable.required());
     variables.sort_by(|a, b| a.name().cmp(b.name()));
     if !variables.is_empty() {
-        // Same adapter the handler holds (pending #120). The list is the
-        // lake variable store on it.
-        let stored = LakeVariableStore::new(Arc::clone(&deps.data))
-            .list(dataset_id)
-            .map_err(variable_failure)?;
+        let stored = deps.variables.list(dataset_id).map_err(variable_failure)?;
         for variable in variables {
             let id = schema.reference(owner, variable.name());
-            if stored.iter().any(|row| row.name == id) || !variable.default().is_empty() {
+            if variable_is_set(&stored, &id, variable.default()) {
                 continue;
             }
             missing.push(missing_diag("variable", variable.name()));
@@ -602,6 +603,12 @@ fn missing_configuration(
     }
 
     Ok(missing)
+}
+
+/// A variable counts as set when a row named `id` exists, or when `default`
+/// is non-empty. An empty stored value is a row, so it counts.
+fn variable_is_set(stored: &[VariableMeta], id: &str, default: &str) -> bool {
+    stored.iter().any(|row| row.name == id) || !default.is_empty()
 }
 
 fn missing_diag(noun: &str, name: &str) -> Diagnostic {
@@ -693,7 +700,10 @@ mod tests {
 
     use super::*;
     use crate::validation::kind;
-    use crate::values::{KeyStatus, LakeSecretStore, LakeVariableStore, SecretMeta, VariableStore};
+    use crate::values::{
+        KeyStatus, LakeSecretStore, LakeVariableStore, SecretMeta, VariableError, VariableMeta,
+        VariableStore,
+    };
     use crate::{Action, ActionParam, ActionParamOption, Manifest, SchemaStore, Secret, Variable};
 
     const PROJECT: &str = "ben/crm";
@@ -781,9 +791,11 @@ mod tests {
     }
 
     fn deps(data: Arc<dyn DataAdapter>, secrets: Arc<dyn SecretStore>) -> HandlerDeps {
+        let variables: Arc<dyn VariableStore> = Arc::new(LakeVariableStore::new(Arc::clone(&data)));
         HandlerDeps {
             data,
             secrets,
+            variables,
             http: test_http(),
         }
     }
@@ -1307,6 +1319,81 @@ mod tests {
         let text = body.to_string();
         assert!(!text.contains("installer-token"), "{text}");
         assert!(!text.contains("store-own-token"), "{text}");
+    }
+
+    /// The handler reads `HandlerDeps.variables`. A row on the raw adapter is
+    /// not that store, so a later non-lake store stays what the handler sees.
+    #[tokio::test]
+    async fn handler_reads_the_variable_store_not_the_raw_adapter() {
+        let world = World::new();
+        LakeVariableStore::new(Arc::clone(&world.data))
+            .set(STORE_DATASET, "alice/pkg.region", "from-the-lake")
+            .unwrap();
+        world
+            .secrets
+            .put(STORE_DATASET, "alice/pkg.token", "installer-token")
+            .unwrap();
+        let variables: Arc<dyn VariableStore> = Arc::new(FixedVariables {
+            rows: vec![VariableMeta {
+                name: "alice/pkg.region".into(),
+                value: "from-the-store".into(),
+                updated_at: "t".into(),
+            }],
+        });
+        let mut registry = HandlerRegistry::default();
+        registry.register(PKG, "pull", |ctx| async move {
+            Ok(json!({ "region": ctx.variable("region")? }))
+        });
+        let schema = world.store_schema();
+        let outcome = dispatch(
+            &schema,
+            &registry,
+            STORE_DATASET,
+            HandlerDeps {
+                data: world.data.clone(),
+                secrets: world.secrets.clone(),
+                variables,
+                http: test_http(),
+            },
+            &caller(),
+            "alice/pkg.pull",
+            &Map::new(),
+        )
+        .await;
+        let Dispatch::Done(body) = outcome else {
+            panic!("expected the handler to run, got {outcome:?}");
+        };
+        assert_eq!(body["region"], "from-the-store");
+    }
+
+    struct FixedVariables {
+        rows: Vec<VariableMeta>,
+    }
+
+    impl VariableStore for FixedVariables {
+        fn set(&self, _: &str, _: &str, _: &str) -> Result<VariableMeta, VariableError> {
+            panic!("not used");
+        }
+
+        fn get(&self, _: &str, name: &str) -> Result<Option<String>, VariableError> {
+            Ok(self
+                .rows
+                .iter()
+                .find(|row| row.name == name)
+                .map(|row| row.value.clone()))
+        }
+
+        fn delete(&self, _: &str, _: &str) -> Result<(), VariableError> {
+            panic!("not used");
+        }
+
+        fn list(&self, _: &str) -> Result<Vec<VariableMeta>, VariableError> {
+            Ok(self.rows.clone())
+        }
+
+        fn delete_dataset(&self, _: &str) -> Result<(), VariableError> {
+            panic!("not used");
+        }
     }
 
     #[tokio::test]

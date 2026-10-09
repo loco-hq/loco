@@ -14,6 +14,7 @@ use crate::http::response::{
 };
 use crate::http::scope::{ConfigProjectScope, ConfigUserScope};
 use crate::server::AppState;
+use crate::source::purge_dataset;
 use crate::{Dataset, DatasetUpdate, ProjectUpdate, Site, SiteUpdate};
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -140,7 +141,14 @@ fn creator_membership_failed(
     project_id: &str,
     err: &AuthError,
 ) -> Response {
-    let rollback = pc.delete_project(|name| purge_dataset(state, &format!("{project_id}/{name}")));
+    let rollback = pc.delete_project(|name| {
+        purge_dataset(
+            state.secrets.as_ref(),
+            state.variables.as_ref(),
+            state.lake.as_ref(),
+            &format!("{project_id}/{name}"),
+        )
+    });
     let msg = match &rollback {
         Ok(()) => format!("could not record the creator as a member: {err}"),
         Err(delete_err) => format!(
@@ -205,10 +213,14 @@ pub async fn delete_project(
     // Records are purged inside the cascade, before each dataset row goes, so
     // a failure leaves that dataset in place and the 500 names it.
     let project_id = scope.project_id();
-    match scope
-        .config
-        .delete_project(|name| purge_dataset(state.as_ref(), &format!("{project_id}/{name}")))
-    {
+    match scope.config.delete_project(|name| {
+        purge_dataset(
+            state.secrets.as_ref(),
+            state.variables.as_ref(),
+            state.lake.as_ref(),
+            &format!("{project_id}/{name}"),
+        )
+    }) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => config_error_to_response(e),
     }
@@ -257,31 +269,18 @@ pub async fn delete_dataset(
     Path((_, _, name)): Path<(String, String, String)>,
 ) -> Response {
     let qualified = format!("{}/{name}", scope.project_id());
-    let purge = || purge_dataset(state.as_ref(), &qualified);
+    let purge = || {
+        purge_dataset(
+            state.secrets.as_ref(),
+            state.variables.as_ref(),
+            state.lake.as_ref(),
+            &qualified,
+        )
+    };
     match scope.config.delete_dataset(&name, purge) {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(e) => config_error_to_response(e),
     }
-}
-
-/// Secrets, then variables, then the lake. A secret-store error leaves the
-/// variable rows and the lake in place. A variable-store error leaves the
-/// lake in place. Each store's `delete_dataset` is what a non-lake impl
-/// cleans up; the lake impls only remove `$secrets` and `$variables` rows
-/// the purge deletes anyway.
-fn purge_dataset(state: &AppState, dataset_id: &str) -> Result<(), String> {
-    state
-        .secrets
-        .delete_dataset(dataset_id)
-        .map_err(|err| err.to_string())?;
-    state
-        .variables
-        .delete_dataset(dataset_id)
-        .map_err(|err| err.to_string())?;
-    state
-        .lake
-        .purge_dataset(dataset_id)
-        .map_err(|err| err.to_string())
 }
 
 // --- site ---
