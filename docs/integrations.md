@@ -437,7 +437,7 @@ Handlers and sources read values only through the integration the address resolv
 
 Before a source call or an integration action runs, every required secret and variable of **this** integration must be set on the dataset, or the call is 400 `required configuration is not set`, one diagnostic per missing name. The check is this integration's declarations only. It does not also require the owning project's loose declarations. Those stay for non-connections, and an ordinary action still checks them. A non-empty variable default counts as set. The check uses `list` and does not decrypt, so an empty stored secret counts as set and the 400 does not contain plaintext. That is the [#102](https://github.com/loco-hq/loco/issues/102) check, scoped to the one integration.
 
-The HTTP client on the connection is the process-wide client actions already use: 5s to connect, 30s for the call, no proxy, same-host redirects, at most ten.
+The HTTP client on the connection is the one `build_app` stores on `AppState` for that server: 5s to connect, 30s for the call, no proxy, same-host redirects, at most ten. Each server builds its own.
 
 ## CollectionSource
 

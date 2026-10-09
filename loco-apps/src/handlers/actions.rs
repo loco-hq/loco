@@ -22,8 +22,7 @@ use crate::http::response::{
     error_response, error_response_with_diagnostics, validation_error_response, ApiResponse,
 };
 use crate::http::scope::SiteScope;
-use crate::http::version_schema::{ActionAddressKind, AddressResolution};
-use crate::integrations::dispatch_type_action;
+use crate::http::version_schema::AddressResolution;
 use crate::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -105,33 +104,18 @@ async fn run_action(
         data: state.lake.adapter(),
         secrets: state.secrets.clone(),
         variables: state.variables.clone(),
-        http: state.http.clone(),
+        http: reqwest::Client::clone(state.http.as_ref()),
     };
-    // A type action reads the connection it was addressed to. An ordinary
-    // action keeps the loose-declaration path.
-    let outcome = if matches!(address.kind, ActionAddressKind::Type { .. }) {
-        dispatch_type_action(
-            &scope.schema,
-            &state.type_actions,
-            &dataset_id,
-            deps,
-            scope.user(),
-            &address,
-            &body.input,
-        )
-        .await
-    } else {
-        dispatch(
-            &scope.schema,
-            &state.actions,
-            &dataset_id,
-            deps,
-            scope.user(),
-            &name,
-            &body.input,
-        )
-        .await
-    };
+    let outcome = dispatch(
+        &scope.schema,
+        &state.extensions.actions,
+        &dataset_id,
+        deps,
+        scope.user(),
+        &address,
+        &body.input,
+    )
+    .await;
     dispatch_response(&name, outcome)
 }
 

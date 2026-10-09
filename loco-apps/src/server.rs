@@ -5,12 +5,12 @@ use tower_http::cors::{Any, CorsLayer};
 
 use loco_lake::{DataAdapter, LakeConfig};
 
-use crate::actions::HandlerRegistry;
+use crate::actions::ActionRegistry;
 use crate::auth::AuthAdapter;
 use crate::config::Config;
 use crate::handlers;
 use crate::http::host;
-use crate::integrations::{SourceRegistry, TypeActionRegistry};
+use crate::integrations::SourceRegistry;
 use crate::seed;
 use crate::source::LakeSource;
 use crate::values::{KeyStatus, LakeSecretStore, LakeVariableStore, SecretStore, VariableStore};
@@ -33,60 +33,55 @@ pub struct AppState {
     /// Plaintext. The lake impl stores `$variables`. Handlers clone this `Arc`.
     /// See `crate::values`.
     pub variables: Arc<dyn VariableStore>,
-    /// Shared by action handlers. No proxy. A redirect that changes scheme,
-    /// host, or port is not followed. See [`crate::actions::http_client`].
-    pub http: reqwest::Client,
+    /// This server's client, built once in [`build_app`]. No proxy. A redirect
+    /// that changes scheme, host, or port is not followed. See
+    /// [`crate::actions::http_client`].
+    pub http: Arc<reqwest::Client>,
     /// The site the apex serves at `/`, as `({account}/{project}, {site})`.
     /// `None` is the API-only process. A host that names a site of its own
     /// always wins over this.
     pub default_site: Option<(String, String)>,
-    /// Declared-action handlers, keyed by owning project and bare name.
-    /// Empty unless the [`Extensions`] passed to [`build_app`] registers some.
-    /// The server binary passes [`Extensions::default`].
-    pub actions: HandlerRegistry,
-    /// Integration-type sources, keyed by owning project and type name.
-    /// The server binary passes [`Extensions::default`], which registers
-    /// [`SourceRegistry::production`] (BrickLink).
-    /// A registered source handles that type's standard and custom
-    /// collections. An address with no registration is 501 before the
-    /// required-value check.
-    pub sources: SourceRegistry,
-    /// Type-action handlers, keyed by owning project, type name, and action
-    /// name. Empty in [`Extensions::default`], so a resolved type action is 501.
-    /// A registered handler runs with a [`crate::integrations::TypeActionContext`]
-    /// whose connection is the integration the address named.
-    pub type_actions: TypeActionRegistry,
+    /// The registries [`build_app`] was given. Call sites read
+    /// [`Extensions::actions`] and [`Extensions::sources`] here.
+    pub extensions: Extensions,
 }
 
 /// Handler and source registries. Not configuration: [`Default`] is what the
 /// server binary ships, and a test builds its own.
+///
+/// [`Self::actions`] is empty in [`Default`]. The Hurl fixture handlers are
+/// registered by the test runner, so they are not in the server binary. An
+/// ordinary handler is [`crate::actions::ActionKey::Package`]. A type action
+/// is [`crate::actions::ActionKey::Type`]. Both receive an
+/// [`crate::actions::ActionContext`]. An ordinary action's connection is the
+/// owning package's loose declarations. A type action's connection is the
+/// integration the address named. A resolved action with no handler is 501
+/// before the required-value check.
+///
+/// [`Self::sources`] is [`SourceRegistry::production`] in [`Default`]
+/// (BrickLink). A test that registers its own fixture source replaces the
+/// whole registry. A registered source handles that type's standard and
+/// custom collections. An address with no registration is 501 before the
+/// required-value check.
 pub struct Extensions {
-    /// Handlers for declared actions. [`Default`] registers none. The Hurl
-    /// fixture handlers are registered by the test runner, so they are not
-    /// in the server binary.
-    pub actions: HandlerRegistry,
-    /// Sources for integration types. [`Default`] is
-    /// [`SourceRegistry::production`]. A test that registers its own fixture
-    /// source replaces the whole registry.
+    pub actions: ActionRegistry,
     pub sources: SourceRegistry,
-    /// Handlers for type actions. [`Default`] registers none, so a resolved
-    /// type action is 501. A registered handler receives a
-    /// [`crate::integrations::TypeActionContext`] whose connection is the
-    /// integration the address named.
-    pub type_actions: TypeActionRegistry,
 }
 
 impl Default for Extensions {
     fn default() -> Self {
         Self {
-            actions: HandlerRegistry::default(),
+            actions: ActionRegistry::default(),
             sources: SourceRegistry::production(),
-            type_actions: TypeActionRegistry::default(),
         }
     }
 }
 
 pub fn build_app(config: &Config, extensions: Extensions) -> Router {
+    router(build_state(config, extensions))
+}
+
+fn build_state(config: &Config, extensions: Extensions) -> Arc<AppState> {
     // Seed committed projects the store lacks, then load the store. Writes
     // go only to `schemas/instances/`; `schemas/seed/` is read, never written.
     let root = &config.root;
@@ -119,12 +114,12 @@ pub fn build_app(config: &Config, extensions: Extensions) -> Router {
         config.secret_key.clone(),
     ));
     let variables: Arc<dyn VariableStore> = Arc::new(LakeVariableStore::new(adapter));
-    let http = crate::actions::http_client();
+    let http = Arc::new(crate::actions::http_client());
     let auth_adapter = config.auth.open();
     warn_projects_without_account(&schema, auth_adapter.as_ref());
     let default_site = resolve_default_site(&schema, config.default_site.as_deref());
 
-    let state = Arc::new(AppState {
+    Arc::new(AppState {
         lake,
         auth_adapter,
         schema,
@@ -132,11 +127,11 @@ pub fn build_app(config: &Config, extensions: Extensions) -> Router {
         variables,
         http,
         default_site,
-        actions: extensions.actions,
-        sources: extensions.sources,
-        type_actions: extensions.type_actions,
-    });
+        extensions,
+    })
+}
 
+fn router(state: Arc<AppState>) -> Router {
     Router::new()
         // Registered here, not under a nest, so a site bundle cannot shadow
         // them. Every host answers these two GETs, including one that is
@@ -239,4 +234,41 @@ fn cors_layer() -> CorsLayer {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use loco_lake::LakeConfig;
+
+    use super::{build_state, AppState, Config, Extensions};
+    use crate::auth::AuthConfig;
+    use crate::values::KeyStatus;
+
+    #[test]
+    fn two_servers_store_distinct_http_clients() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let a = boot(dir_a.path());
+        let b = boot(dir_b.path());
+        assert!(!Arc::ptr_eq(&a.http, &b.http));
+        let again = Arc::clone(&a.http);
+        assert!(Arc::ptr_eq(&a.http, &again));
+    }
+
+    fn boot(root: &std::path::Path) -> Arc<AppState> {
+        let config = Config {
+            root: root.to_path_buf(),
+            port: 0,
+            lake: LakeConfig::Memory,
+            auth: AuthConfig::Local {
+                dir: root.join("auth"),
+                auto_create: false,
+            },
+            default_site: None,
+            secret_key: KeyStatus::Missing,
+        };
+        build_state(&config, Extensions::default())
+    }
 }

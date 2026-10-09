@@ -495,7 +495,11 @@ fn route_of(scope: &CollectionScope, state: &AppState) -> Result<Route, Response
             Ok(Route::Lake { key })
         }
         CollectionAddressKind::Standard { .. } | CollectionAddressKind::Custom => {
-            match source_for(&scope.site.schema, &state.sources, &scope.address) {
+            match source_for(
+                &scope.site.schema,
+                &state.extensions.sources,
+                &scope.address,
+            ) {
                 Some((source, spec)) => Ok(Route::Live {
                     source,
                     spec,
@@ -543,7 +547,7 @@ fn connect(
         spec.clone(),
         state.secrets.clone(),
         Arc::clone(&state.variables),
-        state.http.clone(),
+        reqwest::Client::clone(state.http.as_ref()),
     );
     match connection.missing_required() {
         Ok(missing) if missing.is_empty() => Ok(connection),
@@ -634,7 +638,8 @@ fn plan_one(
         let Some(address) = resolve_address(&scope.schema, &address_name) else {
             return Ok(Err(vec![no_source_diag(name, &address_name)]));
         };
-        let Some((source, spec)) = source_for(&scope.schema, &state.sources, &address) else {
+        let Some((source, spec)) = source_for(&scope.schema, &state.extensions.sources, &address)
+        else {
             return Ok(Err(vec![no_source_diag(name, &address_name)]));
         };
         let caps = source.capabilities();

@@ -1,71 +1,19 @@
-//! Registries for integration types.
+//! Sources for integration types.
 //!
-//! A source is keyed by the owning project and the type name. A type action
-//! is keyed by the owning project, the type name, and the action name.
-//! Ordinary actions stay [`crate::actions::HandlerRegistry`], keyed by
-//! `(project, name)` only.
+//! A source is keyed by the owning project and the type name. Type actions
+//! are handlers on [`crate::actions::ActionRegistry`], keyed by
+//! [`crate::actions::ActionKey::Type`]. An ordinary action is
+//! [`crate::actions::ActionKey::Package`]. Both kinds receive an
+//! [`crate::actions::ActionContext`].
 //!
-//! Both registries are empty in the production binary. A source is a
+//! [`SourceRegistry::default`] registers nothing. [`SourceRegistry::production`]
+//! registers BrickLink, which is what the server binary ships. A source is a
 //! [`crate::source::CollectionSource`]: `/data` dispatches it for that type's
 //! standard and custom collections. An address with no registration is 501
-//! before the required-value check. A resolved type action with no handler
-//! is 501. One with a handler runs with a [`TypeActionContext`] for the
-//! integration the address named. That context's connection reads the
-//! integration's values. It does not read the type project's loose secrets.
+//! before the required-value check.
 
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
-
-use loco_lake::{DataAdapter, Value};
-use serde_json::Map;
-
-use crate::actions::{ActionFailure, ConfigReadError, Connection, Dispatch, HandlerDeps};
-use crate::auth::AuthUser;
-use crate::http::version_schema::{ActionAddress, ActionAddressKind, VersionSchema};
-use crate::validation::validate_type_action_input;
-
-/// What a type-action handler receives.
-///
-/// `connection` is the integration the address named. It is not optional.
-/// This context has no secret store. [`Self::secret`] and [`Self::variable`]
-/// forward to the connection. They do not read a loose declaration, and a
-/// handler written against [`crate::actions::ActionContext`] does not type-check
-/// here. The schema and the lake adapter are the same ones an ordinary action
-/// receives, so a handler can patch records, pending #120. Variable reads
-/// use the store on [`HandlerDeps`], not a store built on that adapter.
-pub struct TypeActionContext {
-    pub dataset_id: String,
-    pub data: Arc<dyn DataAdapter>,
-    pub schema: VersionSchema,
-    pub caller: AuthUser,
-    pub input: HashMap<String, Value>,
-    pub connection: Connection,
-}
-
-impl TypeActionContext {
-    /// This connection's plaintext for the type's bare declaration `name`.
-    ///
-    /// Forwards to [`Connection::secret`]. A loose declaration of the same
-    /// name is not read. A name the type does not declare names that type.
-    pub fn secret(&self, name: &str) -> Result<Option<String>, ConfigReadError> {
-        self.connection.secret(name)
-    }
-
-    /// This connection's value for the type's bare declaration `name`.
-    ///
-    /// Forwards to [`Connection::variable`]. A loose declaration of the same
-    /// name is not read.
-    pub fn variable(&self, name: &str) -> Result<Option<String>, ConfigReadError> {
-        self.connection.variable(name)
-    }
-
-    /// The process-wide client. The same one [`Connection::http`] returns.
-    pub fn http(&self) -> &reqwest::Client {
-        self.connection.http()
-    }
-}
 
 /// Sources keyed by `(owning project, type name)`.
 ///
@@ -115,146 +63,6 @@ impl SourceRegistry {
     pub fn contains(&self, project: &str, type_name: &str) -> bool {
         self.sources
             .contains_key(&(project.to_string(), type_name.to_string()))
-    }
-}
-
-type TypeActionFuture =
-    Pin<Box<dyn Future<Output = Result<serde_json::Value, ActionFailure>> + Send>>;
-
-trait TypeActionHandler: Send + Sync {
-    fn call(&self, ctx: TypeActionContext) -> TypeActionFuture;
-}
-
-impl<F, Fut> TypeActionHandler for F
-where
-    F: Fn(TypeActionContext) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<serde_json::Value, ActionFailure>> + Send + 'static,
-{
-    fn call(&self, ctx: TypeActionContext) -> TypeActionFuture {
-        Box::pin(self(ctx))
-    }
-}
-
-/// Type-action handlers keyed by `(owning project, type name, action name)`.
-#[derive(Clone, Default)]
-pub struct TypeActionRegistry {
-    handlers: HashMap<(String, String, String), Arc<dyn TypeActionHandler>>,
-}
-
-impl TypeActionRegistry {
-    /// Register `handler` for `project`'s type `type_name`, action `name`.
-    ///
-    /// The handler receives a [`TypeActionContext`]. `secret` and `variable`
-    /// read that context's connection. A same-named action on another type,
-    /// or an ordinary action of the same name, does not call it.
-    pub fn register<F, Fut>(
-        &mut self,
-        project: impl Into<String>,
-        type_name: impl Into<String>,
-        name: impl Into<String>,
-        handler: F,
-    ) where
-        F: Fn(TypeActionContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<serde_json::Value, ActionFailure>> + Send + 'static,
-    {
-        let handler: Arc<dyn TypeActionHandler> = Arc::new(handler);
-        self.handlers
-            .insert((project.into(), type_name.into(), name.into()), handler);
-    }
-
-    pub fn contains(&self, project: &str, type_name: &str, name: &str) -> bool {
-        self.handlers
-            .contains_key(&(project.to_string(), type_name.to_string(), name.to_string()))
-    }
-
-    fn get(
-        &self,
-        project: &str,
-        type_name: &str,
-        name: &str,
-    ) -> Option<Arc<dyn TypeActionHandler>> {
-        self.handlers
-            .get(&(project.to_string(), type_name.to_string(), name.to_string()))
-            .cloned()
-    }
-}
-
-/// Validate `input`, then run the handler registered for the type action
-/// `address` resolved to.
-///
-/// The caller has already resolved the address and checked access. A missing
-/// handler is [`Dispatch::NoHandler`] before the required-value check, the
-/// same as [`crate::actions::dispatch`]: an action with no handler does not
-/// demand configuration. Once a handler exists, every required secret and
-/// variable of **this** integration must be set on `dataset_id`. Loose
-/// version-level declarations are not part of that check and are not read.
-/// The handler receives a [`TypeActionContext`]. Its connection reads only
-/// that integration. The context has no secret store.
-pub(crate) async fn dispatch_type_action(
-    schema: &VersionSchema,
-    registry: &TypeActionRegistry,
-    dataset_id: &str,
-    deps: HandlerDeps,
-    caller: &AuthUser,
-    address: &ActionAddress,
-    input: &Map<String, serde_json::Value>,
-) -> Dispatch {
-    let ActionAddressKind::Type {
-        type_project,
-        type_name,
-        action,
-    } = &address.kind
-    else {
-        return Dispatch::NotFound;
-    };
-    let action_ref = schema.reference(&address.project, &address.local);
-    let input = match validate_type_action_input(schema, &action_ref, action, input) {
-        Ok(input) => input,
-        Err(report) => return Dispatch::Invalid(report),
-    };
-    let Some(integration_name) = address.integration.as_deref() else {
-        return Dispatch::NotFound;
-    };
-    let Some(spec) = schema.connection_declarations(&address.project, integration_name) else {
-        return Dispatch::NotFound;
-    };
-    let Some(handler) = registry.get(type_project, type_name, action.name()) else {
-        return Dispatch::NoHandler {
-            // The HTTP line is `no handler for action {project}.{name}`.
-            // `{type_project}.{type_name}` keeps the three-part form
-            // `{type_project}.{type_name}.{action}`.
-            project: format!("{type_project}.{type_name}"),
-            name: action.name().to_string(),
-        };
-    };
-    let connection = Connection::new(
-        dataset_id.to_string(),
-        spec,
-        deps.secrets,
-        deps.variables,
-        deps.http,
-    );
-    let missing = match connection.missing_required() {
-        Ok(missing) => missing,
-        Err(failure) => return Dispatch::Failed(failure),
-    };
-    if !missing.is_empty() {
-        return Dispatch::MissingConfig(missing);
-    }
-    let ctx = TypeActionContext {
-        dataset_id: dataset_id.to_string(),
-        // Pending #120: the handler still holds the raw adapter so it can
-        // patch records. Variable reads go through `connection`, which was
-        // given `deps.variables`.
-        data: deps.data,
-        schema: schema.clone(),
-        caller: caller.clone(),
-        input,
-        connection,
-    };
-    match handler.call(ctx).await {
-        Ok(value) => Dispatch::Done(value),
-        Err(failure) => Dispatch::Failed(failure),
     }
 }
 
@@ -332,19 +140,6 @@ mod tests {
         assert!(sources.contains("alice/pkg", "bricklink"));
         assert!(sources.contains("alice/pkg", "warehouse"));
         assert!(!sources.contains("alice/shop", "bricklink"));
-
-        let mut type_actions = TypeActionRegistry::default();
-        assert!(!type_actions.contains("alice/pkg", "bricklink", "set_status"));
-        type_actions.register("alice/pkg", "bricklink", "set_status", |_| async {
-            Ok(serde_json::json!({"type": "bricklink"}))
-        });
-        type_actions.register("alice/pkg", "warehouse", "set_status", |_| async {
-            Ok(serde_json::json!({"type": "warehouse"}))
-        });
-        assert!(type_actions.contains("alice/pkg", "bricklink", "set_status"));
-        assert!(type_actions.contains("alice/pkg", "warehouse", "set_status"));
-        assert!(!type_actions.contains("alice/pkg", "bricklink", "other"));
-        assert!(!type_actions.contains("alice/shop", "bricklink", "set_status"));
     }
 
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -352,7 +147,7 @@ mod tests {
     use loco_lake::InMemoryAdapter;
     use serde_json::{json, Map};
 
-    use crate::actions::HandlerDeps;
+    use crate::actions::{dispatch, ActionRegistry, Dispatch, HandlerDeps};
     use crate::auth::AuthUser;
     use crate::http::version_schema::{AddressResolution, VersionSchema};
     use crate::validation::kind;
@@ -572,7 +367,7 @@ mod tests {
 
     async fn run(
         fixture: &Fixture,
-        registry: &TypeActionRegistry,
+        registry: &ActionRegistry,
         secrets: std::sync::Arc<dyn SecretStore>,
         name: &str,
         input: serde_json::Value,
@@ -580,7 +375,7 @@ mod tests {
         let schema = fixture.schema();
         let address = address(&schema, name);
         let input = input.as_object().cloned().unwrap_or_else(Map::new);
-        dispatch_type_action(
+        dispatch(
             &schema,
             registry,
             DATASET,
@@ -592,9 +387,9 @@ mod tests {
         .await
     }
 
-    fn read_registry(flag: std::sync::Arc<AtomicBool>) -> TypeActionRegistry {
-        let mut registry = TypeActionRegistry::default();
-        registry.register(PKG, "warehouse", "read", move |ctx| {
+    fn read_registry(flag: std::sync::Arc<AtomicBool>) -> ActionRegistry {
+        let mut registry = ActionRegistry::default();
+        registry.register_type_action(PKG, "warehouse", "read", move |ctx| {
             let flag = std::sync::Arc::clone(&flag);
             async move {
                 flag.store(true, Ordering::SeqCst);
@@ -612,10 +407,10 @@ mod tests {
                 }))
             }
         });
-        registry.register("alice/pkg", "other", "read", |_| async {
+        registry.register_type_action("alice/pkg", "other", "read", |_| async {
             Ok(json!({"which": "other"}))
         });
-        registry.register("alice/shop", "warehouse", "read", |_| async {
+        registry.register_type_action("alice/shop", "warehouse", "read", |_| async {
             Ok(json!({"which": "shop"}))
         });
         registry
@@ -788,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn missing_handler_does_not_require_configuration() {
         let fixture = Fixture::new();
-        let registry = TypeActionRegistry::default();
+        let registry = ActionRegistry::default();
         let listed: std::sync::Arc<dyn SecretStore> = std::sync::Arc::new(ListOnly {
             names: Vec::new(),
             allow_list: false,
