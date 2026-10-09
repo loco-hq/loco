@@ -1,0 +1,734 @@
+{
+  "auth_values": {
+    "bearer": "Authorization: Bearer <token>. Auth routes other than signup and login, plus /config and /schema.",
+    "none": "No token. Signup, login, this document, and /llms.txt.",
+    "site": "X-Project-Id: {account}/{project} and X-Site-Id: {site}, unless Host is the site URL, which fills those headers in. A header that names a different site than the URL is 400. A bearer token is required for a member when public has no grant. Token-less public may call a /data verb only when the pinned version's manifest assigns a permission set that grants it. /actions is never public."
+  },
+  "discovery": "/.well-known/loco.json",
+  "docs": [],
+  "envelope": {
+    "auth_header": "Authorization: Bearer <token>",
+    "auth_header_note": "One space after Bearer. No Authorization header means the caller is public. A header that is present but malformed, unknown, expired, or revoked is 401 and is never treated as public. Missing: \"missing auth: use Authorization: Bearer <token> header\". Malformed: \"malformed Authorization header: use Bearer <token>\". Bad or expired: \"invalid or expired session\". 403 means \"you do not have access to this resource\".",
+    "cors": "*",
+    "shape": "A success is {\"ok\": true, \"data\": ...}. An error is {\"ok\": false, \"error\": \"...\"}. A rejected record or action input is 400, error \"validation failed\", and diagnostics is a list of {severity, kind, path, message}. Read message. A required string that is missing, null, or \"\" fails. An integer is a JSON number, including 0, not a string."
+  },
+  "guide": [
+    {
+      "do": "GET this document and follow the steps below in order. Do not guess a path. If you are unsure, look at routes. A 404 whose error is \"no such endpoint: {path}\" means that path is not mounted; read see and try the route this document names instead.",
+      "n": 1,
+      "requests": [
+        {
+          "auth": "none",
+          "method": "GET",
+          "path": "/.well-known/loco.json",
+          "success": "200 JSON. name is loco. version is a string. docs is an empty array."
+        },
+        {
+          "auth": "none",
+          "method": "GET",
+          "path": "/llms.txt",
+          "success": "200 text/plain. The body contains /.well-known/loco.json."
+        }
+      ],
+      "title": "Read this document"
+    },
+    {
+      "do": "POST /auth/users. username is the handle (see signup.handle). name is a display name. password is any non-empty string. A 400 whose error quotes the handle rule means the handle was rejected: change username and retry. The reserved handle public is 400 and the error says that name is reserved. A 400 whose error names username or name means that JSON field was missing, or the body was not JSON. A 400 password is required means the password was missing or blank. A 409 user already exists means the handle is taken. Success is 201 and does not include a token. Remember data.username (the account) and data.id (only for later user update or delete).",
+      "n": 2,
+      "requests": [
+        {
+          "auth": "none",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "name": "Lego Reseller",
+            "password": "any-non-empty",
+            "username": "lego_reseller"
+          },
+          "method": "POST",
+          "path": "/auth/users",
+          "success": "201. data.username is lego_reseller. data.id is a UUID. No token."
+        }
+      ],
+      "title": "Create an account"
+    },
+    {
+      "do": "POST /auth/login with the same username and password. Save data.token. From here, send Authorization: Bearer <token> on /config and /schema calls. A session lasts 7 days. There is no refresh. When you are finished, POST /auth/logout with the token. An API key is optional and is not required for this app: POST /auth/api-keys returns data.key once, and that string is sent the same way as the session token. Do not log out between these steps. Login of an unknown user does not create an account.",
+      "n": 3,
+      "requests": [
+        {
+          "auth": "none",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "password": "any-non-empty",
+            "username": "lego_reseller"
+          },
+          "method": "POST",
+          "path": "/auth/login",
+          "success": "200. data.token is the secret to send. data.user.username is the handle."
+        }
+      ],
+      "title": "Log in"
+    },
+    {
+      "do": "POST /config/project with the bearer token. Omit account: the project is created under your handle. name is a slug such as inventory (see names.project_dataset_site). The response is the project. The id you will use is {handle}/{name}, for example lego_reseller/inventory. The server also creates version 0.0.1-dev, dataset dev, and site dev. Site dev pins that version and that dataset. 0.0.1-dev ends in -dev, so it is a draft and accepts /schema writes. Confirm the pin with GET /config/site/lego_reseller/inventory/dev: data.version is 0.0.1-dev and data.dataset is dev. You are the developer of every project under your handle.",
+      "n": 4,
+      "requests": [
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "description": "A parts list",
+            "label": "Inventory",
+            "name": "inventory"
+          },
+          "method": "POST",
+          "path": "/config/project",
+          "success": "201. The project id is lego_reseller/inventory."
+        },
+        {
+          "auth": "bearer",
+          "method": "GET",
+          "path": "/config/site/{account}/{project}/{name}",
+          "success": "200 for /config/site/lego_reseller/inventory/dev. data.version is 0.0.1-dev. data.dataset is dev."
+        }
+      ],
+      "title": "Create a project"
+    },
+    {
+      "do": "Write schema on the draft: /schema/lego_reseller/inventory/0.0.1-dev/.... Create the collection first, then its fields. A collection name is one or more of a-z, 0-9, '_', '.', and '-'. parts is legal. A field type is one of string, integer, float, boolean. Anything else is 400 and the error says unknown field type. required true means a create must send a value: missing, null, or \"\" for a string is an error, and the message looks like field 'qty' is required. An update checks a required field only when the patch names it. options, a list of {value, label}, is only for a string field; omit it to allow any string. You do not manage fieldsets. The server creates the default one.",
+      "n": 5,
+      "requests": [
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "label": "Part",
+            "label_plural": "Parts",
+            "name": "parts"
+          },
+          "method": "POST",
+          "path": "/schema/{account}/{project}/{version}/collection",
+          "success": "201. data.name is parts."
+        },
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "collection": "parts",
+            "label": "SKU",
+            "name": "sku",
+            "required": true,
+            "type": "string"
+          },
+          "method": "POST",
+          "path": "/schema/{account}/{project}/{version}/field",
+          "success": "201. data.name is sku. data.type is string."
+        },
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "collection": "parts",
+            "label": "Quantity",
+            "name": "qty",
+            "required": true,
+            "type": "integer"
+          },
+          "method": "POST",
+          "path": "/schema/{account}/{project}/{version}/field",
+          "success": "201. data.name is qty. data.type is integer."
+        }
+      ],
+      "title": "Declare the collection and its fields"
+    },
+    {
+      "do": "A hosted page sends no token. Public can list, add, and update only if you grant those verbs and assign the set on the manifest. Create a permission set whose collections entry names the bare collection parts (this project's own collection, not account/project@version). Set read, create, and update to true. A verb you omit is false. Leave delete false. delete true means anyone who can open the site can delete every row. Then PUT the manifest with public_permission_sets set to that set's name. Policy lives on the version, so every site that pins this version shares it. PUT of the permission set later replaces the collections list; send the whole list you want to keep.",
+      "n": 6,
+      "requests": [
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "collections": [
+              {
+                "collection": "parts",
+                "create": true,
+                "delete": false,
+                "read": true,
+                "update": true
+              }
+            ],
+            "label": "Public parts",
+            "name": "parts_public"
+          },
+          "method": "POST",
+          "path": "/schema/{account}/{project}/{version}/permission_set",
+          "success": "201. data.name is parts_public. data.collections[0].delete is false."
+        },
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "collections": [
+              {
+                "collection": "parts",
+                "create": true,
+                "delete": false,
+                "read": true,
+                "update": true
+              }
+            ],
+            "label": "Public parts"
+          },
+          "method": "PUT",
+          "path": "/schema/{account}/{project}/{version}/permission_set/{name}",
+          "success": "200 when you need to replace the grants. The path name is parts_public."
+        },
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "public_permission_sets": [
+              "parts_public"
+            ]
+          },
+          "method": "PUT",
+          "path": "/schema/{account}/{project}/{version}/manifest",
+          "success": "200. data.public_permission_sets[0] is parts_public."
+        }
+      ],
+      "title": "Let visitors read and edit"
+    },
+    {
+      "do": "Records are site-scoped. Send the bearer token plus X-Project-Id: lego_reseller/inventory and X-Site-Id: dev. The add body is the fields themselves: {\"sku\": \"3001\", \"qty\": 2}. qty is a number. The response record is {id, dataset_id, created_at, created_by, updated_at, updated_by, owner, fields}. Read data.fields.sku. data.id is the record id for get, update, and delete. List returns every row: data is an array, and each row has the same shape. Update is a partial patch: {\"qty\": 3} changes qty and leaves sku. Query is optional. POST /data/query with {\"queries\": {\"parts\": {\"collection\": \"parts\", \"limit\": 50}}} returns data.parts.records (the same record shape) and data.parts.cursor (null when there are no further rows). Limit defaults to 50 and cannot exceed 500. GET /data/parts/fields returns labels and options for a hosted page that does not know its version. An unknown field, a string where an integer belongs, or a string outside options is 400 validation failed plus diagnostics.",
+      "n": 7,
+      "requests": [
+        {
+          "auth": "site",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "qty": 2,
+            "sku": "3001"
+          },
+          "method": "POST",
+          "path": "/data/{collection}/add",
+          "success": "201 with X-Project-Id: lego_reseller/inventory and X-Site-Id: dev. data.fields.sku is 3001. data.fields.qty is 2. Save data.id."
+        },
+        {
+          "auth": "site",
+          "method": "GET",
+          "path": "/data/{collection}/list",
+          "success": "200. data is an array. data[0].fields.sku is the SKU. Same site headers."
+        },
+        {
+          "auth": "site",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "qty": 3
+          },
+          "method": "PUT",
+          "path": "/data/{collection}/update/{id}",
+          "success": "200. data.fields.qty is 3 and data.fields.sku is still 3001. {id} is the record id."
+        },
+        {
+          "auth": "site",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "queries": {
+              "parts": {
+                "collection": "parts",
+                "limit": 50
+              }
+            }
+          },
+          "method": "POST",
+          "path": "/data/query",
+          "success": "200. data.parts.records is an array. data.parts.records[0].fields.sku is the SKU. data.parts.cursor is null when the page is the last one."
+        },
+        {
+          "auth": "site",
+          "method": "GET",
+          "path": "/data/{collection}/fields",
+          "success": "200. data is the field list for the pinned version, including label, type, required, and options."
+        }
+      ],
+      "title": "Write a record"
+    },
+    {
+      "do": "Save index_html as a file named index.html. From the directory that contains that file, zip it so the archive entry is index.html and not dist/index.html. On a Mac or Linux shell: zip bundle.zip index.html. PUT the raw zip bytes to the draft bundle URL. Content-Type is application/zip. Do not send JSON and do not base64-encode the zip. Success is 200, not 201, and data is {hash, uploaded_at, size, files}. GET of the same path returns that metadata, not the files. A missing bundle is 404 and the error is no bundle for {project} at version {version}. The PUT is refused at 32 MiB of body, 64 MiB unpacked, 16 MiB in one file, or 2000 files, and when an entry contains .., is absolute, is a symlink, or when index.html is not at the zip root. Only a draft accepts the PUT. The page fetches /data/parts/list, POST /data/parts/add, and PUT /data/parts/update/{id} on the same origin, with no token and no site headers. It works only when a visitor loads it from the site URL in the next step, and only because step 6 granted public read, create, and update.",
+      "index_html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Parts</title>\n</head>\n<body>\n<h1>discovery page</h1>\n<p id=\"status\"></p>\n<ul id=\"parts\"></ul>\n<form id=\"add\">\n<label>SKU <input name=\"sku\" required></label>\n<label>Qty <input name=\"qty\" type=\"number\" required value=\"1\"></label>\n<button type=\"submit\">Add</button>\n</form>\n<script>\nconst list = document.getElementById(\"parts\");\nconst status = document.getElementById(\"status\");\n\nfunction show(row) {\n  const li = document.createElement(\"li\");\n  li.textContent = row.fields.sku + \" (\" + row.fields.qty + \") \";\n  const button = document.createElement(\"button\");\n  button.type = \"button\";\n  button.textContent = \"+1\";\n  button.addEventListener(\"click\", async () => {\n    const res = await fetch(\"/data/parts/update/\" + row.id, {\n      method: \"PUT\",\n      headers: { \"Content-Type\": \"application/json\" },\n      body: JSON.stringify({ qty: Number(row.fields.qty) + 1 })\n    });\n    const body = await res.json();\n    if (!body.ok) {\n      status.textContent = body.error || \"update failed\";\n      return;\n    }\n    load();\n  });\n  li.appendChild(button);\n  list.appendChild(li);\n}\n\nasync function load() {\n  const res = await fetch(\"/data/parts/list\");\n  const body = await res.json();\n  if (!body.ok) {\n    status.textContent = body.error || \"list failed\";\n    return;\n  }\n  status.textContent = \"\";\n  list.replaceChildren();\n  for (const row of body.data) show(row);\n}\n\ndocument.getElementById(\"add\").addEventListener(\"submit\", async (event) => {\n  event.preventDefault();\n  const form = event.currentTarget;\n  const res = await fetch(\"/data/parts/add\", {\n    method: \"POST\",\n    headers: { \"Content-Type\": \"application/json\" },\n    body: JSON.stringify({ sku: form.sku.value, qty: Number(form.qty.value) })\n  });\n  const body = await res.json();\n  if (!body.ok) {\n    status.textContent = body.error || \"add failed\";\n    return;\n  }\n  form.sku.value = \"\";\n  load();\n});\n\nload();\n</script>\n</body>\n</html>\n",
+      "n": 8,
+      "requests": [
+        {
+          "auth": "bearer",
+          "body": "Raw zip bytes of index.html at the zip root.",
+          "headers": {
+            "Content-Type": "application/zip"
+          },
+          "method": "PUT",
+          "path": "/schema/{account}/{project}/{version}/bundle",
+          "success": "200 on /schema/lego_reseller/inventory/0.0.1-dev/bundle. data.files is at least 1. data.hash is a string."
+        },
+        {
+          "auth": "bearer",
+          "method": "GET",
+          "path": "/schema/{account}/{project}/{version}/bundle",
+          "success": "200. data.hash, data.uploaded_at, data.size, and data.files. Not the HTML."
+        }
+      ],
+      "title": "Upload the page"
+    },
+    {
+      "do": "Site dev already pins 0.0.1-dev and dataset dev, so there is nothing to re-pin. Open http://dev.inventory.lego_reseller.{listen-host}/. The page heading is discovery page. The list is loaded by the browser with no token. 127.0.0.1 and the bare hostname are not that site. If you curl an IP, send Host: dev.inventory.lego_reseller.{listen-host} and you will get the HTML. A curl of the site host to GET /data/parts/list, with only that Host and no token, is 200 and data is the array of rows. GET /.well-known/loco.json on that same host is still this JSON, not the HTML.",
+      "n": 9,
+      "requests": [],
+      "title": "Open the site"
+    },
+    {
+      "do": "POST /config/version/lego_reseller/inventory with {\"version\": \"0.0.1\", \"from\": \"0.0.1-dev\"}. That copies the schema and the bundle into 0.0.1. It does not copy records, datasets, sites, or secret values. The public grants are part of the copied manifest, so they come along. 0.0.1 does not end in -dev, so it is published: further /schema writes to it are refused, and its hashed assets are cached as immutable while index.html revalidates. Then create site www with {\"name\": \"www\", \"label\": \"Public\", \"version\": \"0.0.1\", \"dataset\": \"dev\"}. Reusing dataset dev keeps the rows you already wrote. Open http://www.inventory.lego_reseller.{listen-host}/. To change the published site, edit 0.0.1-dev (or a new draft), copy to a new version name such as 0.0.2, and PUT /config/site/lego_reseller/inventory/www with {\"version\": \"0.0.2\", \"dataset\": \"dev\"}. Copying onto a version that already exists is 409 and the error starts with already exists. Publish the next snapshot under a new name.",
+      "n": 10,
+      "requests": [
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "from": "0.0.1-dev",
+            "version": "0.0.1"
+          },
+          "method": "POST",
+          "path": "/config/version/{account}/{project}",
+          "success": "201. data.version is 0.0.1. The bundle and the public grants were copied. The records were not."
+        },
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "dataset": "dev",
+            "label": "Public",
+            "name": "www",
+            "version": "0.0.1"
+          },
+          "method": "POST",
+          "path": "/config/site/{account}/{project}",
+          "success": "201. Open http://www.inventory.lego_reseller.{listen-host}/."
+        }
+      ],
+      "title": "Publish"
+    },
+    {
+      "do": "GET /auth, GET /schema, GET /data, or GET /config is 404. The error names that prefix's routes and does not say no such endpoint. see is /.well-known/loco.json. GET /actions is not that catalog: it is the action list, and without site headers it is 400 missing project: use X-Project-Id header. An unknown path under a prefix, such as GET /schema/foo, is 404 and the error is \"no such endpoint: /schema/foo\", with see set to this document. The same pointer is on a 404 from a host that names no site, including GET / and GET /help. A missing file inside a site's bundle does not set see. This server registers no action handlers. POST /actions/{name} on an app you just created is 501. Keep the list-and-edit UI on /data. Do not look for a CLI.",
+      "n": 11,
+      "requests": [
+        {
+          "auth": "site",
+          "method": "GET",
+          "path": "/actions",
+          "success": "400 missing project on a host that is not a site, or the action list when the site headers are present. Not a prefix catalog."
+        }
+      ],
+      "title": "When a path is wrong"
+    }
+  ],
+  "login": {
+    "api_key": "Optional. POST /auth/api-keys with {\"label\": \"agent\"} returns data.key once and data.id. GET /auth/api-keys/list does not show the secret. DELETE /auth/api-keys/{id} revokes it, using data.id. A key does not expire until it is revoked. Send it as the same Bearer token. Org accounts cannot log in and are not needed for a first app.",
+    "body": {
+      "password": "the password from signup",
+      "username": "lego_reseller"
+    },
+    "content_type": "application/json",
+    "failure": "401 {\"ok\": false, \"error\": \"invalid credentials\"} for a wrong password, an empty password, or an unknown handle. Login does not create an account. A body that is not JSON, or that omits username, is 400 {\"ok\": false, \"error\": \"...\"} and the error names the field. That 400 is the body check. It is not the signup error \"password is required\".",
+    "method": "POST",
+    "path": "/auth/login",
+    "session": "A session lasts 7 days. There is no refresh. Log in again. POST /auth/logout with the bearer token ends it.",
+    "success": "200. data.token is the session. data.user.username is the handle. data.user.id is the same UUID as signup. Use the token as Authorization: Bearer <token>."
+  },
+  "name": "loco",
+  "names": {
+    "collection": "One or more of a-z, 0-9, '_', '.', and '-'. '$' is reserved and is rejected. parts is legal.",
+    "field_and_permission_set": "Use lowercase letters and underscores: sku, qty, parts_public.",
+    "handle": "The username you sign up with. 1-63 characters of a-z, 0-9, and _, starting with a letter or _. public is reserved. lego_reseller is legal. lego-reseller, Lego, and 1lego are not. The display name may contain spaces and capitals. The project account is the handle, not the user UUID.",
+    "project_dataset_site": "1-63 characters of a-z, 0-9, and _, starting with a letter or _. A bad name is 400 and the error quotes this rule. inventory, dev, and www are legal.",
+    "version": "1-63 characters of a-z, 0-9, '.', '_', and '-', not starting with '.'. No '@'. A name that ends in -dev is a draft and accepts /schema writes. Any other name is published and refuses /schema writes. 0.0.1-dev and 0.0.1 are the names this guide uses."
+  },
+  "prefixes": [
+    {
+      "prefix": "/data",
+      "summary": "Records. Site headers, or the site's own host. Public may call a verb the pinned version grants."
+    },
+    {
+      "prefix": "/schema",
+      "summary": "Draft metadata: manifest, collections, fields, permission sets, and the bundle. Bearer token. Path includes account, project, and version."
+    },
+    {
+      "prefix": "/config",
+      "summary": "Projects, datasets, sites, and versions. Bearer token. No site headers."
+    },
+    {
+      "prefix": "/auth",
+      "summary": "Sign up, log in, the signed-in user, and API keys. No site headers."
+    },
+    {
+      "prefix": "/actions",
+      "summary": "Declared actions. GET /actions is this list. A new app's records go through /data, because a declared action with no handler is 501."
+    }
+  ],
+  "read_this": "Read guide in order. A path containing {account} or another {name} is a pattern: substitute your handle, project, version, collection, and ids. The do text of each step gives the concrete URLs for the parts example. There is no OpenAPI document, no /docs page, and no loco command on this server. docs is empty. Fieldsets, secrets, variables, integrations, and declared actions exist and are not required to publish a list-and-edit page. When a JSON error includes see, GET that path and read it again. Send Content-Type: application/json on every JSON body. CORS allows every origin, method, and header. Responses are JSON.",
+  "routes": [
+    {
+      "auth": "none",
+      "method": "GET",
+      "path": "/.well-known/loco.json",
+      "summary": "This document. Served on every host. A bundle cannot shadow it."
+    },
+    {
+      "auth": "none",
+      "method": "GET",
+      "path": "/llms.txt",
+      "summary": "Plain text that points here. Served on every host."
+    },
+    {
+      "auth": "none",
+      "method": "POST",
+      "path": "/auth/login",
+      "summary": "Log in. Body {username, password}. 200 data.token. Does not create an account."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/auth/logout",
+      "summary": "End the session named by the bearer token."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/auth/me",
+      "summary": "The signed-in user."
+    },
+    {
+      "auth": "none",
+      "method": "POST",
+      "path": "/auth/users",
+      "summary": "Sign up. Body {username, name, password}. 201 and no token. Log in next."
+    },
+    {
+      "auth": "bearer",
+      "method": "PUT",
+      "path": "/auth/users/{id}",
+      "summary": "Change the signed-in user's name. {id} is data.id from signup, not the handle."
+    },
+    {
+      "auth": "bearer",
+      "method": "DELETE",
+      "path": "/auth/users/{id}",
+      "summary": "Delete the signed-in user. {id} is data.id from signup, not the handle."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/auth/api-keys",
+      "summary": "Create an API key. Body {label}. data.key is returned once."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/auth/api-keys/list",
+      "summary": "List API keys. The secret is not included."
+    },
+    {
+      "auth": "bearer",
+      "method": "DELETE",
+      "path": "/auth/api-keys/{id}",
+      "summary": "Revoke an API key. {id} is data.id from create, not the secret."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/config/project",
+      "summary": "Create a project. Bootstraps version 0.0.1-dev, dataset dev, and site dev."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/config/project/list",
+      "summary": "Projects the caller can see."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/config/project/{account}/{project}",
+      "summary": "One project. {account} is the handle. {project} is the project name."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/config/dataset/{account}/{project}",
+      "summary": "Create a dataset. The bootstrap dataset dev is enough for a first app."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/config/dataset/{account}/{project}/list",
+      "summary": "Datasets of the project."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/config/dataset/{account}/{project}/{name}",
+      "summary": "One dataset."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/config/site/{account}/{project}",
+      "summary": "Create a site. Body {name, label, version, dataset}."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/config/site/{account}/{project}/list",
+      "summary": "Sites of the project."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/config/site/{account}/{project}/{name}",
+      "summary": "One site, including the version and dataset it pins."
+    },
+    {
+      "auth": "bearer",
+      "method": "PUT",
+      "path": "/config/site/{account}/{project}/{name}",
+      "summary": "Re-pin a site. Body {version, dataset}."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/config/version/{account}/{project}",
+      "summary": "Create a version. Body {version, from} copies schema and the bundle, not records."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/config/version/{account}/{project}/list",
+      "summary": "Versions of the project."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/schema/{account}/{project}/{version}/manifest",
+      "summary": "The version's dependencies and public_permission_sets."
+    },
+    {
+      "auth": "bearer",
+      "method": "PUT",
+      "path": "/schema/{account}/{project}/{version}/manifest",
+      "summary": "Update the manifest. {\"public_permission_sets\":[\"parts_public\"]} assigns that set to public."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/schema/{account}/{project}/{version}/collection",
+      "summary": "Create a collection. Body {name, label, label_plural}. Draft version only."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/schema/{account}/{project}/{version}/collection/list",
+      "summary": "Collections in the version."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/schema/{account}/{project}/{version}/collection/{name}",
+      "summary": "One collection."
+    },
+    {
+      "auth": "bearer",
+      "method": "PUT",
+      "path": "/schema/{account}/{project}/{version}/collection/{name}",
+      "summary": "Update a collection's label. Draft version only."
+    },
+    {
+      "auth": "bearer",
+      "method": "DELETE",
+      "path": "/schema/{account}/{project}/{version}/collection/{name}",
+      "summary": "Delete a collection document. Records in the dataset are separate."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/schema/{account}/{project}/{version}/field",
+      "summary": "Create a field. Body {collection, name, type, label, required}. Draft only."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/schema/{account}/{project}/{version}/field/{collection}/list",
+      "summary": "Fields of a collection, in display order."
+    },
+    {
+      "auth": "bearer",
+      "method": "PUT",
+      "path": "/schema/{account}/{project}/{version}/field/{collection}/{name}",
+      "summary": "Update a field. Draft version only."
+    },
+    {
+      "auth": "bearer",
+      "method": "DELETE",
+      "path": "/schema/{account}/{project}/{version}/field/{collection}/{name}",
+      "summary": "Delete a field. Draft version only."
+    },
+    {
+      "auth": "bearer",
+      "method": "POST",
+      "path": "/schema/{account}/{project}/{version}/permission_set",
+      "summary": "Create a permission set. Body {name, label, collections}. Draft only."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/schema/{account}/{project}/{version}/permission_set/list",
+      "summary": "Permission sets in the version."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/schema/{account}/{project}/{version}/permission_set/{name}",
+      "summary": "One permission set."
+    },
+    {
+      "auth": "bearer",
+      "method": "PUT",
+      "path": "/schema/{account}/{project}/{version}/permission_set/{name}",
+      "summary": "Replace a permission set. Sending collections replaces that list."
+    },
+    {
+      "auth": "bearer",
+      "method": "PUT",
+      "path": "/schema/{account}/{project}/{version}/bundle",
+      "summary": "Upload a zip as the version's frontend. Draft only. 200 and metadata."
+    },
+    {
+      "auth": "bearer",
+      "method": "GET",
+      "path": "/schema/{account}/{project}/{version}/bundle",
+      "summary": "Metadata for the uploaded frontend (hash, uploaded_at, size, files), not the files."
+    },
+    {
+      "auth": "bearer",
+      "method": "DELETE",
+      "path": "/schema/{account}/{project}/{version}/bundle",
+      "summary": "Remove the frontend from a draft. 200."
+    },
+    {
+      "auth": "site",
+      "method": "POST",
+      "path": "/data/{collection}/add",
+      "summary": "Create a record. The body is the fields object itself. 201. data.id is the record id."
+    },
+    {
+      "auth": "site",
+      "method": "GET",
+      "path": "/data/{collection}/list",
+      "summary": "Every record. data is an array. Read data[0].fields.sku, not data[0].sku."
+    },
+    {
+      "auth": "site",
+      "method": "GET",
+      "path": "/data/{collection}/get/{id}",
+      "summary": "One record. {id} is data.id from add."
+    },
+    {
+      "auth": "site",
+      "method": "PUT",
+      "path": "/data/{collection}/update/{id}",
+      "summary": "Patch a record. The body is the fields you are changing. 200."
+    },
+    {
+      "auth": "site",
+      "method": "DELETE",
+      "path": "/data/{collection}/delete/{id}",
+      "summary": "Delete one record."
+    },
+    {
+      "auth": "site",
+      "method": "GET",
+      "path": "/data/{collection}/fields",
+      "summary": "Field metadata for the site's pinned version: name, type, label, required, options."
+    },
+    {
+      "auth": "site",
+      "method": "POST",
+      "path": "/data/query",
+      "summary": "Batched reads. Records for a query named parts are at data.parts.records."
+    },
+    {
+      "auth": "site",
+      "method": "GET",
+      "path": "/actions",
+      "summary": "List actions. This path is a route. It is not the prefix catalog."
+    },
+    {
+      "auth": "site",
+      "method": "GET",
+      "path": "/actions/{name}",
+      "summary": "One action and its params."
+    },
+    {
+      "auth": "site",
+      "method": "POST",
+      "path": "/actions/{name}",
+      "summary": "Run an action. Body {input}. A new app has no handler, so this is 501. Use /data."
+    }
+  ],
+  "signup": {
+    "body": {
+      "name": "Lego Reseller",
+      "password": "any-non-empty",
+      "username": "lego_reseller"
+    },
+    "content_type": "application/json",
+    "handle": "username is the handle. It must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. The reserved word public is refused. lego_reseller is legal. lego-reseller, Lego, 1lego, and a 64-character handle are not. name may contain spaces and capitals. There is no password complexity rule. A hyphen in the password is fine.",
+    "method": "POST",
+    "missing_field": "A JSON body that does not parse, or that omits a required field, is 400 {\"ok\": false, \"error\": \"...\"} and the error names the field. On POST /auth/users the required JSON fields are username and name. Send both. The same 400 applies to POST /auth/login when username is missing, to PUT /auth/users/{id} when the body is not JSON, and to POST /auth/api-keys when label is missing. A missing, empty, or whitespace-only password on signup is 400 {\"ok\": false, \"error\": \"password is required\"}.",
+    "path": "/auth/users",
+    "rejected_handle": "400. error is handle name \"lego-reseller\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. The message quotes the handle you sent. The reserved word public is 400 and error is handle name \"public\" is reserved. Change the handle and retry. A wrong password or an unknown user on POST /auth/login is 401 and error is invalid credentials.",
+    "success": "201. data.username is the handle. data.id is a UUID. Use that UUID only for PUT and DELETE /auth/users/{id}. There is no token in this response. Call POST /auth/login next. The project account is data.username, not data.id.",
+    "taken": "409 {\"ok\": false, \"error\": \"user already exists\"}. Pick a different handle."
+  },
+  "site": {
+    "example": "http://dev.inventory.lego_reseller.{listen-host}/",
+    "note": "site.example and the open-the-site URLs in guide steps 9 and 10 are built from the Host of this response, so they name this server. A name ending in .localhost resolves to the machine serving the response. When that Host is an IP address, those URLs use localhost and the same port, because an IP is not a site host. Curling an IP serves the API only, unless you also send Host: dev.inventory.lego_reseller.{listen-host}. The host with no site labels is the API only. After you publish, http://{listen-host}/ is still JSON. Open the three-label host. A deployment needs those site hostnames to resolve to this server, with wildcard DNS for the three labels in front of the listen host, or it sets LOCO_DEFAULT_SITE to {account}/{project}/{site} and serves that site at the apex. Issue #145 will replace these three-level site hosts. Hosted files are public. Do not put a bearer token in the page.",
+    "url": "http://{site}.{project}.{account}.{listen-host}/"
+  },
+  "summary": "Loco is an HTTP API. You declare a collection, store records in it, upload a static page, and open that page on a site URL. This JSON is the whole interface. Follow guide from n=1. Do not invent paths.",
+  "version": ""
+}

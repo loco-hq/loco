@@ -255,6 +255,17 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
     });
 
     Router::new()
+        // Registered here, not under a nest, so a site bundle cannot shadow
+        // them. Every host answers these two GETs, including one that is
+        // serving `index.html` at `/`.
+        .route(
+            crate::discovery::DISCOVERY_PATH,
+            axum::routing::get(crate::discovery::document),
+        )
+        .route(
+            crate::discovery::LLMS_PATH,
+            axum::routing::get(crate::discovery::llms_txt),
+        )
         .nest("/data", handlers::data::router())
         .nest("/schema", handlers::schema::router())
         .nest("/config", handlers::config::router())

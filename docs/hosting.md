@@ -142,6 +142,10 @@ Reserved prefixes always win, on every host:
 
 `/data` `/schema` `/config` `/auth` `/actions`
 
+`GET /.well-known/loco.json` and `GET /llms.txt` are routes on the root router, served on every host, and they are not part of the bundle. A site's `index.html` cannot shadow them. A bundle file at either path is never served: the server answers both on every host, and those routes shadow the bundle.
+
+A request for `/auth`, `/schema`, `/data`, or `/config` itself — nothing is mounted on that exact path — is a JSON 404 that names that prefix's routes and sets `see` to `/.well-known/loco.json`. `GET /actions` is the action list, so it is that route and not this catalog. Any other unknown path under a reserved prefix is `404 {"ok":false,"error":"no such endpoint: {path}","see":"/.well-known/loco.json"}`. A host that names no site uses that same body, including `see`. A miss inside a site's bundle (a missing hashed asset, a missing bundle, a non-GET to a static path on a site host) stays `no such endpoint` and does not set `see`.
+
 There is no `/host` prefix. The bundle is schema. Deploy is a draft write:
 
 | Method | Path | Who | What |
@@ -182,7 +186,7 @@ Request routing:
    The listen host is not configured anywhere, and must not be: a host is a *site* host exactly when its first three labels name a site that exists, so `localhost:3000`, `127.0.0.1:3000`, and a real domain all work with no extra flag.
 
    Both cases fill in absent `X-Project-Id` / `X-Site-Id`, so a hosted frontend never has to know its own address. They differ on headers the client *does* send: a subdomain is an assertion about which site this is, so a header naming another site is a 400 — one site's URL can never reach another site's data. `LOCO_DEFAULT_SITE` is a default rather than a constraint, so there a sent header wins, which is what keeps the apex usable by Studio and by local Vite apps talking to it about whichever site they are browsing.
-3. Fallback after API nests: files from the **pinned version's bundle**. SPA fallback to that tree's `index.html` for extensionless / `Accept: text/html` misses. Missing hashed assets 404. Missing bundle 404s `/`, does not fail boot.
+3. Fallback after API nests: files from the **pinned version's bundle**. SPA fallback to that tree's `index.html` for extensionless / `Accept: text/html` misses. Missing hashed assets 404. Missing bundle 404s `/`, does not fail boot. Those bundle misses do not set `see`. An unknown path under a reserved prefix, and a miss on a host that names no site, is a JSON 404 with `see` set to `/.well-known/loco.json`. `GET /.well-known/loco.json` and `GET /llms.txt` are served on every host and are not part of the bundle.
 
 Apex without a default site is today's API-only process. Vite-dev talks to the apex with headers (or its proxy). Hosting is not involved.
 
@@ -224,14 +228,14 @@ That is serving *a pinned version's bundle* at a URL, with reserved prefixes win
 |---|---|
 | `ServeDir` after API nests | Fallback after reserved prefixes, files from the site's pinned version |
 | Unmatched non-API path → `index.html` | SPA fallback on that version's bundle |
-| Mistyped `/data/...` stays JSON 404 | Reserved prefixes always win |
+| Mistyped `/data/...` stays JSON 404 | Reserved prefixes always win, and that 404 sets `see` to `/.well-known/loco.json` |
 | Missing `dist/` logs and skip | Missing bundle: boot succeeds, `/` 404s |
 | `cargo run` + built `dist/` is API + Studio at `:3000` | Apex + `LOCO_DEFAULT_SITE=loco/studio/studio`, that site pinning a version that has a bundle |
 | Vite-dev on `:5174` unchanged | Local column. Hosting is not involved |
 
 Do not read `loco-studio/dist` from `server.rs`. Do not default `LOCO_DEFAULT_SITE` inside the binary. The README can show Studio as the apex default for people working on Loco; a blog process sets it to `ben/blog/www`. Close #30 when a site URL serves a version's file tree with those rules — not when a `ServeDir` lands.
 
-**Built.** `http/host.rs` resolves the host to a site before routing; `handlers/hosting.rs` is the router fallback that serves the pinned version's tree. `server.rs` names no frontend. A published version's assets go out `immutable`; `index.html` and everything in a draft revalidate, because the pin is what moves.
+**Built.** `http/host.rs` resolves the host to a site before routing; `handlers/hosting.rs` is the router fallback that serves the pinned version's tree. `server.rs` names no frontend. A published version's assets go out `immutable`; `index.html` and everything in a draft revalidate, because the pin is what moves. `GET /.well-known/loco.json` is served on every host and is not part of the bundle. API 404s on a reserved prefix or on a host with no site point at it. A miss inside a bundle does not.
 
 ## Studio
 

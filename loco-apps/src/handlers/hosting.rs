@@ -10,15 +10,24 @@
 //! 1. **Reserved prefixes always win.** `/data` `/schema` `/config` `/auth`
 //!    `/actions` answer JSON here, never HTML, so a mistyped API path stays
 //!    a JSON 404 instead of quietly returning an SPA shell that a client
-//!    then tries to parse.
+//!    then tries to parse. A request for `/auth`, `/schema`, `/data`, or
+//!    `/config` itself names that prefix's routes. Any other miss under a
+//!    prefix keeps `no such endpoint` and adds `see`. `GET /actions` is the
+//!    action list, so it never reaches this fallback.
 //! 2. **No site, no files.** Without a [`RequestSite`] (the apex with no
 //!    `LOCO_DEFAULT_SITE`) this is the API-only process it has always been.
+//!    Those JSON 404s also carry `see`, pointing at the discovery document.
 //! 3. **SPA fallback** to the tree's `index.html` when the miss looks like a
 //!    navigation: an extensionless path, or one whose `Accept` asks for HTML.
 //!    A missing hashed asset is a 404 — answering it with HTML turns a bad
-//!    deploy into a syntax error in the browser console.
+//!    deploy into a syntax error in the browser console. A miss inside a
+//!    bundle does not carry `see`.
 //! 4. **A missing bundle 404s.** It is not a boot failure; a version that has
 //!    not been built yet is an ordinary state.
+//!
+//! `GET /.well-known/loco.json` and `GET /llms.txt` are routes on the root
+//! router, so they are answered before this fallback and a bundle cannot
+//! shadow them.
 //!
 //! Nothing here knows about any particular app. Studio is a bundle on a
 //! `loco/studio` version like any other frontend.
@@ -31,24 +40,36 @@ use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use crate::bundle::ENTRY_FILE;
+use crate::discovery;
 use crate::http::authz::is_draft_version;
 use crate::http::host::RequestSite;
 use crate::http::response::error_response;
 use crate::server::AppState;
 use crate::{Bundle, Site};
 
-/// Paths the API owns. A request under one of these never sees the bundle.
-const RESERVED_PREFIXES: [&str; 5] = ["/data", "/schema", "/config", "/auth", "/actions"];
-
 pub async fn serve_site_files(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let path = req.uri().path().to_string();
+    let reserved = is_reserved(&path);
+    // A write to a static path is not an endpoint. On a site host that stays
+    // the plain bundle 404. On a host with no site it is an API miss, so it
+    // carries the discovery pointer along with every other apex 404.
+    let reads_files = matches!(*req.method(), Method::GET | Method::HEAD);
 
-    if is_reserved(&path) || !matches!(*req.method(), Method::GET | Method::HEAD) {
-        return no_such_endpoint(&path);
+    if reserved {
+        return discovery::api_miss(&path);
     }
 
-    let Some(site_ref) = req.extensions().get::<RequestSite>().cloned() else {
-        return no_such_endpoint(&path);
+    let site = req.extensions().get::<RequestSite>().cloned();
+    if !reads_files {
+        return if site.is_none() {
+            discovery::api_miss(&path)
+        } else {
+            no_such_endpoint(&path)
+        };
+    }
+
+    let Some(site_ref) = site else {
+        return discovery::api_miss(&path);
     };
 
     let Some(site) = state
@@ -84,9 +105,7 @@ pub async fn serve_site_files(State(state): State<Arc<AppState>>, req: Request) 
 }
 
 fn is_reserved(path: &str) -> bool {
-    RESERVED_PREFIXES
-        .iter()
-        .any(|p| path == *p || path.starts_with(&format!("{p}/")))
+    discovery::reserved_prefix(path).is_some()
 }
 
 /// JSON, always — the one 404 shape every client already parses.

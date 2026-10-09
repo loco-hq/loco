@@ -25,6 +25,7 @@ HTTP 404
 header "Content-Type" contains "application/json"
 jsonpath "$.ok" == false
 jsonpath "$.error" contains "no such endpoint"
+jsonpath "$.see" == "/.well-known/loco.json"
 
 # 2. Neither does a site whose version was never built.
 GET http://127.0.0.1:{{port}}/
@@ -89,6 +90,7 @@ HTTP 404
 [Asserts]
 header "Content-Type" contains "application/json"
 jsonpath "$.ok" == false
+jsonpath "$.see" not exists
 
 # 8. Reserved prefixes win on a site host too — JSON, never the shell.
 GET http://127.0.0.1:{{port}}/data/does-not-exist/list
@@ -133,6 +135,7 @@ HTTP 404
 [Asserts]
 header "Content-Type" contains "application/json"
 jsonpath "$.error" contains "no such endpoint"
+jsonpath "$.see" == "/.well-known/loco.json"
 body not contains "draft blog"
 
 # 9. The host filled in the site headers, which is why step 8 got as far as
@@ -195,6 +198,7 @@ Host: www.blog.alice.localhost:{{port}}
 HTTP 404
 [Asserts]
 jsonpath "$.error" contains "no such endpoint"
+jsonpath "$.see" not exists
 
 # 14. Nothing escapes the tree, encoded or not.
 GET http://127.0.0.1:{{port}}/assets/%2e%2e%2f%2e%2e%2fmanifest.yaml
