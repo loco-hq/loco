@@ -17,7 +17,7 @@ jsonpath "$.signup.rejected_handle" contains "400"
 jsonpath "$.signup.rejected_handle" contains "1-63"
 jsonpath "$.signup.missing_field" contains "400"
 jsonpath "$.signup.missing_field" contains "password is required"
-jsonpath "$.routes" count == 51
+jsonpath "$.routes" count == 54
 jsonpath "$.prefixes" count == 5
 jsonpath "$.prefixes[0].routes" not exists
 jsonpath "$.site.example" == "http://dev.shelf.book_club.localhost:{{port}}/"
@@ -31,10 +31,16 @@ jsonpath "$.guide[8].do" not contains "{port}"
 jsonpath "$.site.example" not contains ":3000"
 jsonpath "$.guide[5].do" contains "editor"
 jsonpath "$.guide[5].do" contains "anyone with the URL"
+jsonpath "$.guide[5].do" contains "list anonymously"
+jsonpath "$.guide[7].do" contains "loco_session:same-origin"
+jsonpath "$.guide[7].do" contains "401"
 jsonpath "$.guide[7].index_html" contains "/auth/login"
 jsonpath "$.guide[7].index_html" contains "Authorization"
 jsonpath "$.guide[7].index_html" contains "Bearer"
 jsonpath "$.guide[7].index_html" contains "/auth/logout"
+jsonpath "$.guide[7].index_html" contains "loco_session:same-origin"
+jsonpath "$.guide[7].index_html" contains "status === 401"
+jsonpath "$.guide[9].do" contains "only after copying a new version and re-pinning"
 jsonpath "$.routes[0].method" == "GET"
 jsonpath "$.routes[0].path" == "/.well-known/loco.json"
 body not contains "lego_reseller"
@@ -558,6 +564,24 @@ status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/version/x/x/list
+HTTP *
+[Asserts]
+status != 405
+body not contains "no such endpoint"
+
+POST http://127.0.0.1:{{port}}/config/org
+HTTP *
+[Asserts]
+status != 405
+body not contains "no such endpoint"
+
+POST http://127.0.0.1:{{port}}/config/org/x/member
+HTTP *
+[Asserts]
+status != 405
+body not contains "no such endpoint"
+
+POST http://127.0.0.1:{{port}}/config/member/x/x
 HTTP *
 [Asserts]
 status != 405

@@ -436,7 +436,9 @@ mod tests {
         assert!(INDEX_HTML.contains("Authorization"));
         assert!(INDEX_HTML.contains("Bearer"));
         assert!(INDEX_HTML.contains("localStorage"));
-        assert!(INDEX_HTML.contains("location.origin"));
+        assert!(INDEX_HTML.contains("loco_session:same-origin"));
+        assert!(INDEX_HTML.contains("status === 401"));
+        assert!(!INDEX_HTML.contains("location.origin"));
         assert!(INDEX_HTML.contains("/data/books/list"));
         assert!(INDEX_HTML.contains("/data/books/add"));
         assert!(INDEX_HTML.contains("/data/books/update/"));
@@ -465,6 +467,24 @@ mod tests {
             members.contains("lets anyone with the URL change the data"),
             "{members}"
         );
+        assert!(
+            members.contains(
+                "lists only after login, so public read helps a page built to list anonymously"
+            ),
+            "{members}"
+        );
+        let publish = doc["guide"][9]["do"].as_str().unwrap();
+        assert!(
+            publish.contains("only after copying a new version and re-pinning"),
+            "{publish}"
+        );
+        let page = doc["guide"][7]["do"].as_str().unwrap();
+        assert!(page.contains("loco_session:same-origin"), "{page}");
+        assert!(page.contains("401"), "{page}");
+        let paths: Vec<&str> = routes().iter().map(route_path).collect();
+        assert!(paths.contains(&"/config/org"));
+        assert!(paths.contains(&"/config/org/{org}/member"));
+        assert!(paths.contains(&"/config/member/{account}/{project}"));
     }
 
     #[test]

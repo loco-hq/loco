@@ -17,7 +17,7 @@
 <button>Add</button>
 </form>
 <script>
-const key = "loco_session:" + location.origin;
+const key = "loco_session:same-origin";
 const list = document.getElementById("books");
 const status = document.getElementById("status");
 const loginForm = document.getElementById("login");
@@ -30,8 +30,21 @@ function headers(json) {
   if (json) h["Content-Type"] = "application/json";
   return h;
 }
+function signedIn(on) {
+  loginForm.hidden = on;
+  addForm.hidden = !on;
+  logoutButton.hidden = !on;
+  if (on) load(); else list.replaceChildren();
+}
 async function call(path, opt) {
-  const body = await (await fetch(path, opt)).json();
+  const sent = token();
+  const res = await fetch(path, opt);
+  const body = await res.json();
+  const carried = opt.headers && opt.headers["Authorization"];
+  if (res.status === 401 && carried && sent === token()) {
+    localStorage.removeItem(key);
+    signedIn(false);
+  }
   if (!body.ok) status.textContent = body.error || "failed";
   return body;
 }
@@ -56,12 +69,6 @@ async function load() {
   status.textContent = "";
   list.replaceChildren();
   body.data.forEach(show);
-}
-function signedIn(on) {
-  loginForm.hidden = on;
-  addForm.hidden = !on;
-  logoutButton.hidden = !on;
-  if (on) load(); else list.replaceChildren();
 }
 loginForm.onsubmit = async (event) => {
   event.preventDefault();
