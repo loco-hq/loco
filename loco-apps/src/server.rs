@@ -83,21 +83,6 @@ impl Default for Extensions {
     }
 }
 
-/// Directory creation used to panic with its sentence alone. Opening the
-/// file used to panic as `failed to open SQLite database: {error}`.
-fn open_lake(lake: &LakeConfig) -> Box<dyn DataAdapter> {
-    lake.open().unwrap_or_else(|err| {
-        let message = err.to_string();
-        const PREFIX: &str = "internal error: ";
-        match message.strip_prefix(PREFIX) {
-            Some(payload) if payload.starts_with("failed to create the directory") => {
-                panic!("{payload}");
-            }
-            _ => panic!("failed to open SQLite database: {message}"),
-        }
-    })
-}
-
 pub fn build_app(config: &Config, extensions: Extensions) -> Router {
     // Seed committed projects the store lacks, then load the store. Writes
     // go only to `schemas/instances/`; `schemas/seed/` is read, never written.
@@ -117,7 +102,14 @@ pub fn build_app(config: &Config, extensions: Extensions) -> Router {
         KeyStatus::Ready(_) => {}
     }
 
-    let data_adapter: Arc<dyn DataAdapter> = Arc::from(open_lake(&config.lake));
+    let data_adapter: Arc<dyn DataAdapter> =
+        Arc::from(config.lake.open().unwrap_or_else(|err| panic!("{err}")));
+    match &config.lake {
+        LakeConfig::Memory => println!("Using in-memory adapter"),
+        LakeConfig::Sqlite { path } => {
+            println!("Using SQLite adapter ({})", path.display());
+        }
+    }
     let lake = Arc::new(LakeSource::new(data_adapter.clone()));
     let secrets: Arc<dyn SecretStore> = Arc::new(LakeSecretStore::new(
         data_adapter.clone(),

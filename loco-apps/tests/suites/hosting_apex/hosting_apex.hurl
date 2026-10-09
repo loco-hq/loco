@@ -3,7 +3,7 @@
 # `cargo run` plus a default site is the "one process is the blog" case — and
 # the generic form of what issue #30 originally wanted for Studio. The binary
 # has no opinion about which site that is; this suite pins
-# `alice/blog/www` through AppOptions the way the environment would.
+# `alice/blog/www` on the suite's Config the way the environment would.
 #
 # Fixture: alice/blog with two published versions that already carry bundles,
 # pinned by sites `www` (the default) and `next`.

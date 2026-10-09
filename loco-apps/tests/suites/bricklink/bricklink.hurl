@@ -3,7 +3,7 @@
 # The loco seed account supplies loco/bricklink@1.0.0. alice/brocks depends on
 # it (its manifest is a fixture on disk: /schema would refuse the dependency,
 # because alice cannot read loco/bricklink until projects can be marked
-# installable). The server is built with AppOptions::default(), so the source
+# installable). The server is built with Extensions::default(), so the source
 # is the production registration. {{bricklink}} is the runner's fixture server,
 # which serves tests/fixtures/bricklink/ and checks each request's OAuth
 # signature. Site dev holds good credentials; site other holds a consumer key

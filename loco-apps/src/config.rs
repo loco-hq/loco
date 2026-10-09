@@ -24,16 +24,10 @@ pub struct Config {
     pub root: PathBuf,
     /// `PORT`, or 3000.
     pub port: u16,
-    /// Lake to open. The SQLite path here is [`Self::database_path`] when the
-    /// adapter is `sqlite`.
+    /// Lake to open. A relative SQLite path stays relative to the working
+    /// directory when `LOCO_ROOT` is unset, and is joined onto the root when
+    /// `LOCO_ROOT` is set. `memory` carries no path: the process opens no file.
     pub lake: LakeConfig,
-    /// Resolved `LOCO_DB_PATH`. Logged at startup even when the adapter is
-    /// `memory`, which does not open it.
-    ///
-    /// With `LOCO_ROOT` unset this stays relative to the working directory
-    /// (`loco.db`, or the override as written). An absolute `LOCO_DB_PATH` is
-    /// used as given.
-    pub database_path: PathBuf,
     pub auth: AuthConfig,
     /// `LOCO_DEFAULT_SITE` when it is non-blank. Blank and unset are `None`
     /// (the apex is API-only). The shape is checked at boot, not here.
@@ -61,7 +55,7 @@ impl Config {
         // the path stays relative to the working directory, which is where
         // the dev database already lives.
         let sqlite_root = configured_root.as_ref().map(|_| root.as_path());
-        let database_path = resolve_sqlite_path(sqlite_root, var("LOCO_DB_PATH").as_deref());
+        let sqlite_path = resolve_sqlite_path(sqlite_root, var("LOCO_DB_PATH").as_deref());
 
         // A bad port is reported before an unknown adapter, matching the
         // order main used to check them.
@@ -70,9 +64,7 @@ impl Config {
         let adapter = var("LOCO_ADAPTER").unwrap_or_else(|| "sqlite".to_string());
         let lake = match adapter.as_str() {
             "memory" => LakeConfig::Memory,
-            "sqlite" => LakeConfig::Sqlite {
-                path: database_path.clone(),
-            },
+            "sqlite" => LakeConfig::Sqlite { path: sqlite_path },
             other => {
                 return Err(format!(
                     "unknown LOCO_ADAPTER: {other} (expected \"sqlite\" or \"memory\")"
@@ -102,7 +94,6 @@ impl Config {
             root,
             port,
             lake,
-            database_path,
             auth,
             default_site,
             secret_key,
@@ -186,6 +177,13 @@ mod tests {
         })
     }
 
+    fn sqlite_path(config: &Config) -> &Path {
+        match &config.lake {
+            LakeConfig::Sqlite { path } => path,
+            LakeConfig::Memory => panic!("expected the sqlite adapter"),
+        }
+    }
+
     fn auto_create(config: &Config) -> bool {
         match &config.auth {
             AuthConfig::Local { auto_create, .. } => *auto_create,
@@ -195,15 +193,12 @@ mod tests {
     #[test]
     fn sqlite_path_stays_cwd_relative_when_root_is_unset() {
         let config = parse(&[]).unwrap();
-        assert_eq!(config.database_path, Path::new("loco.db"));
-        assert!(config.database_path.is_relative());
-        assert!(matches!(
-            &config.lake,
-            LakeConfig::Sqlite { path } if path == Path::new("loco.db")
-        ));
+        let path = sqlite_path(&config);
+        assert_eq!(path, Path::new("loco.db"));
+        assert!(path.is_relative());
         // The schema root is the crate directory. The database is not under it.
         assert!(config.root.join("loco.db").is_absolute());
-        assert_ne!(config.database_path, config.root.join("loco.db"));
+        assert_ne!(path, config.root.join("loco.db"));
         assert_eq!(config.root, default_data_root());
         assert_eq!(config.port, 3000);
         assert!(!auto_create(&config));
@@ -217,13 +212,11 @@ mod tests {
     #[test]
     fn sqlite_path_keeps_a_relative_override_when_root_is_unset() {
         assert_eq!(
-            parse(&[("LOCO_DB_PATH", "data/app.db")])
-                .unwrap()
-                .database_path,
+            sqlite_path(&parse(&[("LOCO_DB_PATH", "data/app.db")]).unwrap()),
             Path::new("data/app.db")
         );
         assert_eq!(
-            parse(&[("LOCO_DB_PATH", "")]).unwrap().database_path,
+            sqlite_path(&parse(&[("LOCO_DB_PATH", "")]).unwrap()),
             Path::new("")
         );
     }
@@ -232,21 +225,15 @@ mod tests {
     fn sqlite_path_joins_relative_paths_when_root_is_set() {
         let config = parse(&[("LOCO_ROOT", "/tmp/x")]).unwrap();
         assert_eq!(config.root, Path::new("/tmp/x"));
-        assert_eq!(config.database_path, Path::new("/tmp/x/loco.db"));
-        assert!(matches!(
-            &config.lake,
-            LakeConfig::Sqlite { path } if path == Path::new("/tmp/x/loco.db")
-        ));
+        assert_eq!(sqlite_path(&config), Path::new("/tmp/x/loco.db"));
         assert_eq!(
-            parse(&[("LOCO_ROOT", "/tmp/x"), ("LOCO_DB_PATH", "data/app.db")])
-                .unwrap()
-                .database_path,
+            sqlite_path(
+                &parse(&[("LOCO_ROOT", "/tmp/x"), ("LOCO_DB_PATH", "data/app.db")]).unwrap()
+            ),
             Path::new("/tmp/x/data/app.db")
         );
         assert_eq!(
-            parse(&[("LOCO_ROOT", "/tmp/x"), ("LOCO_DB_PATH", "")])
-                .unwrap()
-                .database_path,
+            sqlite_path(&parse(&[("LOCO_ROOT", "/tmp/x"), ("LOCO_DB_PATH", "")]).unwrap()),
             Path::new("/tmp/x")
         );
     }
@@ -255,10 +242,10 @@ mod tests {
     fn sqlite_path_keeps_an_absolute_override() {
         let absolute = "/var/loco/app.db";
         let unset = parse(&[("LOCO_DB_PATH", absolute)]).unwrap();
-        assert_eq!(unset.database_path, Path::new(absolute));
-        assert!(unset.database_path.is_absolute());
+        assert_eq!(sqlite_path(&unset), Path::new(absolute));
+        assert!(sqlite_path(&unset).is_absolute());
         let rooted = parse(&[("LOCO_ROOT", "/tmp/x"), ("LOCO_DB_PATH", absolute)]).unwrap();
-        assert_eq!(rooted.database_path, Path::new(absolute));
+        assert_eq!(sqlite_path(&rooted), Path::new(absolute));
         assert_eq!(rooted.root, Path::new("/tmp/x"));
     }
 
@@ -278,7 +265,7 @@ mod tests {
         let config = parse(&[("LOCO_ROOT", "data")]).unwrap();
         assert_eq!(config.root, absolute_path(Path::new("data")));
         assert!(config.root.is_absolute());
-        assert_eq!(config.database_path, config.root.join("loco.db"));
+        assert_eq!(sqlite_path(&config), config.root.join("loco.db"));
     }
 
     #[test]
@@ -332,7 +319,6 @@ mod tests {
         ));
         let memory = parse(&[("LOCO_ADAPTER", "memory")]).unwrap();
         assert!(matches!(memory.lake, LakeConfig::Memory));
-        assert_eq!(memory.database_path, Path::new("loco.db"));
 
         let unknown = parse(&[("LOCO_ADAPTER", "postgres")]).unwrap_err();
         assert_eq!(

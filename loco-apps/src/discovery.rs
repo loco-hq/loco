@@ -501,7 +501,6 @@ mod tests {
             lake: crate::config::LakeConfig::Sqlite {
                 path: root.join("probe.db"),
             },
-            database_path: root.join("probe.db"),
             auth: crate::auth::AuthConfig::Local {
                 dir: root.join("auth"),
                 auto_create: false,

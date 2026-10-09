@@ -126,7 +126,7 @@ struct StoredProjectMember {
 pub struct LocalAuthAdapter {
     base_dir: PathBuf,
     /// Login of an unknown handle creates a person account. Off unless the
-    /// caller asks for it — see [`LocalAuthAdapter::with_auto_create`].
+    /// caller asks for it — see [`LocalAuthAdapter::new`].
     auto_create: bool,
     accounts: RwLock<HashMap<String, StoredAccount>>,
     identities: RwLock<HashMap<String, StoredIdentity>>, // handle → identity
@@ -137,18 +137,11 @@ pub struct LocalAuthAdapter {
 }
 
 impl LocalAuthAdapter {
-    /// Auto-create is off in a production build. This crate's own unit tests
-    /// turn it on (`cfg(test)`). The server does not call this: it opens
-    /// [`crate::auth::AuthConfig`], which carries the flag from
-    /// `LOCO_AUTH_AUTO_CREATE`.
-    pub fn new(base_dir: &Path) -> Self {
-        Self::with_auto_create(base_dir, cfg!(test))
-    }
-
     /// `auto_create` off is the production default. An unknown handle would
     /// otherwise take the `{handle}/*` namespace, because owning the person
-    /// account implies developer on it.
-    pub fn with_auto_create(base_dir: &Path, auto_create: bool) -> Self {
+    /// account implies developer on it. The server passes the flag from
+    /// [`crate::auth::AuthConfig`].
+    pub fn new(base_dir: &Path, auto_create: bool) -> Self {
         let adapter = LocalAuthAdapter {
             base_dir: base_dir.to_path_buf(),
             auto_create,
@@ -1125,15 +1118,14 @@ mod tests {
 
     fn adapter() -> (tempfile::TempDir, LocalAuthAdapter) {
         let dir = tempfile::TempDir::new().unwrap();
-        let adapter = LocalAuthAdapter::new(dir.path());
+        let adapter = LocalAuthAdapter::new(dir.path(), true);
         (dir, adapter)
     }
 
-    /// `cfg(test)` turns auto-create on for `new`, so the production default
-    /// has to be asked for explicitly.
+    /// Production default: auto-create off. [`adapter`] passes `true`.
     fn adapter_without_auto_create() -> (tempfile::TempDir, LocalAuthAdapter) {
         let dir = tempfile::TempDir::new().unwrap();
-        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), false);
+        let adapter = LocalAuthAdapter::new(dir.path(), false);
         (dir, adapter)
     }
 
@@ -1225,7 +1217,7 @@ mod tests {
     #[test]
     fn login_unknown_handle_creates_person_when_auto_create_on() {
         let dir = tempfile::TempDir::new().unwrap();
-        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), true);
+        let adapter = LocalAuthAdapter::new(dir.path(), true);
         let session = login_ok(&adapter, "testuser");
         assert_eq!(session.user.username, "testuser");
         assert_eq!(session.user.account_type, "person");
@@ -1244,7 +1236,7 @@ mod tests {
         let identity_id = session.user.id.clone();
 
         drop(adapter);
-        let reloaded = LocalAuthAdapter::new(dir.path());
+        let reloaded = LocalAuthAdapter::new(dir.path(), true);
         let validated = reloaded.validate_session(&token).unwrap();
         assert_eq!(validated.user.id, identity_id);
         assert_eq!(validated.user.username, "alice");
@@ -1316,7 +1308,7 @@ mod tests {
         backdate_session(&adapter, &stale, SESSION_TTL_DAYS + 1);
 
         drop(adapter);
-        let reloaded = LocalAuthAdapter::new(dir.path());
+        let reloaded = LocalAuthAdapter::new(dir.path(), true);
 
         assert!(!reloaded.sessions.read().unwrap().contains_key(&stale));
         assert!(!session_file(dir.path(), &stale).exists());
@@ -1349,7 +1341,7 @@ mod tests {
         write_legacy("legacy-fresh", 1);
         write_legacy("legacy-stale", SESSION_TTL_DAYS + 1);
 
-        let adapter = LocalAuthAdapter::new(dir.path());
+        let adapter = LocalAuthAdapter::new(dir.path(), true);
         assert_eq!(
             adapter
                 .validate_session("legacy-fresh")
@@ -1414,7 +1406,7 @@ mod tests {
     fn legacy_plaintext_identity_is_rehashed_on_load() {
         let dir = tempfile::TempDir::new().unwrap();
         {
-            let adapter = LocalAuthAdapter::new(dir.path());
+            let adapter = LocalAuthAdapter::new(dir.path(), true);
             let identity = adapter.identities.read().unwrap()["alice"].clone();
             let legacy = serde_json::json!({
                 "id": identity.id,
@@ -1431,7 +1423,7 @@ mod tests {
             .unwrap();
         }
 
-        let adapter = LocalAuthAdapter::new(dir.path());
+        let adapter = LocalAuthAdapter::new(dir.path(), true);
         assert_eq!(login_ok(&adapter, "alice").user.username, "alice");
         assert!(adapter
             .login(&LoginCredentials {
@@ -1453,7 +1445,7 @@ mod tests {
     fn legacy_plaintext_api_key_is_rehashed_on_load() {
         let dir = tempfile::TempDir::new().unwrap();
         let raw_key = {
-            let adapter = LocalAuthAdapter::new(dir.path());
+            let adapter = LocalAuthAdapter::new(dir.path(), true);
             let session = login_ok(&adapter, "alice");
             let key = adapter.create_api_key(&session.user.id, "ci").unwrap();
             let mut stored = adapter.api_keys.read().unwrap()[&key.id].clone();
@@ -1462,7 +1454,7 @@ mod tests {
             key.key
         };
 
-        let adapter = LocalAuthAdapter::new(dir.path());
+        let adapter = LocalAuthAdapter::new(dir.path(), true);
         assert_eq!(
             adapter.validate_api_key(&raw_key).unwrap().user.username,
             "alice"
@@ -1630,7 +1622,7 @@ mod tests {
     fn legacy_account_can_be_a_member() {
         let dir = tempfile::TempDir::new().unwrap();
         write_legacy_person(dir.path());
-        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), false);
+        let adapter = LocalAuthAdapter::new(dir.path(), false);
 
         let project = adapter
             .add_project_member("alice/shop", "lego-reseller", ProjectRole::Developer)
@@ -1669,7 +1661,7 @@ mod tests {
     fn legacy_creator_owns_the_org() {
         let dir = tempfile::TempDir::new().unwrap();
         write_legacy_person(dir.path());
-        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), false);
+        let adapter = LocalAuthAdapter::new(dir.path(), false);
 
         let org = adapter.create_org("acme", "lego-reseller").unwrap();
         assert_eq!(org.handle, "acme");

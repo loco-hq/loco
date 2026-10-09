@@ -26,7 +26,7 @@ impl AuthConfig {
         match self {
             Self::Local { dir, auto_create } => {
                 println!("Using local filesystem auth adapter ({})", dir.display());
-                Box::new(local::LocalAuthAdapter::with_auto_create(dir, *auto_create))
+                Box::new(local::LocalAuthAdapter::new(dir, *auto_create))
             }
         }
     }

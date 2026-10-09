@@ -67,7 +67,6 @@ fn hurl_config(root: &Path) -> Config {
         root: root.to_path_buf(),
         port: 0,
         lake: LakeConfig::Memory,
-        database_path: Path::new("loco.db").to_path_buf(),
         auth: AuthConfig::Local {
             dir: root.join("auth"),
             auto_create: true,

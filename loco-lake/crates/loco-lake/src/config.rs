@@ -24,24 +24,22 @@ impl LakeConfig {
     /// relative to the working directory.
     pub fn open(&self) -> Result<Box<dyn DataAdapter>, Error> {
         match self {
-            Self::Memory => {
-                println!("Using in-memory adapter");
-                Ok(Box::new(InMemoryAdapter::new()))
-            }
+            Self::Memory => Ok(Box::new(InMemoryAdapter::new())),
             Self::Sqlite { path } => {
                 if let Some(parent) = path
                     .parent()
                     .filter(|parent| !parent.as_os_str().is_empty())
                 {
                     std::fs::create_dir_all(parent).map_err(|err| {
-                        Error::Internal(format!(
+                        Error::Open(format!(
                             "failed to create the directory for the SQLite database {}: {err}",
                             parent.display()
                         ))
                     })?;
                 }
-                println!("Using SQLite adapter ({})", path.display());
-                SqliteAdapter::new(path).map(|adapter| Box::new(adapter) as Box<dyn DataAdapter>)
+                SqliteAdapter::new(path)
+                    .map(|adapter| Box::new(adapter) as Box<dyn DataAdapter>)
+                    .map_err(|err| Error::Open(format!("failed to open SQLite database: {err}")))
             }
         }
     }
@@ -72,5 +70,58 @@ mod tests {
     #[test]
     fn memory_open_returns_an_adapter() {
         LakeConfig::Memory.open().unwrap();
+    }
+
+    #[test]
+    fn sqlite_open_names_a_parent_that_cannot_be_created() {
+        let dir = std::env::temp_dir().join(format!(
+            "loco-lake-open-file-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join("not-a-directory");
+        std::fs::write(&blocker, b"x").unwrap();
+        let err = match (LakeConfig::Sqlite {
+            path: blocker.join("app.db"),
+        })
+        .open()
+        {
+            Err(err) => err,
+            Ok(_) => panic!("expected open to fail"),
+        };
+        let message = err.to_string();
+        assert!(
+            message.starts_with("failed to create the directory for the SQLite database "),
+            "{message}"
+        );
+        assert!(!message.contains("internal error"), "{message}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sqlite_open_names_a_file_that_cannot_be_opened() {
+        let dir = std::env::temp_dir().join(format!(
+            "loco-lake-open-dir-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = match (LakeConfig::Sqlite { path: dir.clone() }).open() {
+            Err(err) => err,
+            Ok(_) => panic!("expected open to fail"),
+        };
+        let message = err.to_string();
+        assert!(
+            message.starts_with("failed to open SQLite database: "),
+            "{message}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
