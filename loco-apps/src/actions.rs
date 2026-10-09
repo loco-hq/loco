@@ -3,7 +3,7 @@
 //! A handler is registered in code against the project that owns the
 //! declaration and the action's bare name. A same-named declaration in
 //! another project does not bind it. The production binary registers nothing
-//! (`AppOptions::default`); the Hurl fixture handlers live in the test runner.
+//! (`Extensions::default`); the Hurl fixture handlers live in the test runner.
 //!
 //! Type actions are a different registry, keyed `(project, type, name)`.
 //! See [`crate::integrations::TypeActionRegistry`]. Dispatch of those lives

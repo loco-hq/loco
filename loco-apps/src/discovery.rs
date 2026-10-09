@@ -494,11 +494,21 @@ mod tests {
     #[tokio::test]
     async fn every_listed_route_is_mounted() {
         let tmp = tempfile::tempdir().unwrap();
-        let options = crate::server::AppOptions {
-            sqlite_path: Some(tmp.path().join("probe.db")),
-            ..crate::server::AppOptions::default()
+        let root = tmp.path().to_path_buf();
+        let config = crate::config::Config {
+            root: root.clone(),
+            port: 0,
+            lake: crate::config::LakeConfig::Sqlite {
+                path: root.join("probe.db"),
+            },
+            auth: crate::auth::AuthConfig::Local {
+                dir: root.join("auth"),
+                auto_create: false,
+            },
+            default_site: None,
+            secret_key: crate::values::KeyStatus::parse(None),
         };
-        let app = crate::server::build_app_with_options(tmp.path(), options);
+        let app = crate::server::build_app(&config, crate::server::Extensions::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {

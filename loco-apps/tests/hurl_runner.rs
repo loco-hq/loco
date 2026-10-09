@@ -1,11 +1,10 @@
 use std::path::Path;
 use std::process::Command;
-use std::sync::Once;
 
-use loco_apps::server::AppOptions;
-
-// `std::env::set_var` is not thread-safe; guard it so parallel suites set it exactly once.
-static ADAPTER_ENV_ONCE: Once = Once::new();
+use loco_apps::auth::AuthConfig;
+use loco_apps::config::{Config, LakeConfig};
+use loco_apps::server::{build_app, Extensions};
+use loco_apps::values::{parse_secret_key, KeyStatus};
 
 /// Copy a directory tree recursively.
 fn copy_dir_all(src: &Path, dst: &Path) {
@@ -40,26 +39,54 @@ fn crate_dir() -> &'static Path {
 /// - `schemas/instances/`, `auth/` come from the suite's `fixtures/` folder
 ///   if present, otherwise empty dirs are created
 fn run_suite(suite_dir: &Path) -> tempfile::TempDir {
-    run_suite_with(suite_dir, AppOptions::default())
+    run_suite_in(suite_dir, |_, _| {}, &[], &[])
 }
 
-/// As `run_suite`, with app options pinned instead of read from the
-/// environment. Returns the server root so a caller can assert on what the
-/// suite did (or did not) write to disk.
-fn run_suite_with(suite_dir: &Path, options: AppOptions) -> tempfile::TempDir {
-    run_suite_in(suite_dir, options, &[], &[])
+/// As `run_suite`, with fields set on the [`Config`] and [`Extensions`] the
+/// server boots from. Returns the server root so a caller can assert on what
+/// the suite did (or did not) write to disk.
+fn run_suite_with(
+    suite_dir: &Path,
+    adjust: impl FnOnce(&mut Config, &mut Extensions),
+) -> tempfile::TempDir {
+    run_suite_in(suite_dir, adjust, &[], &[])
 }
 
 /// As `run_suite`, with the named accounts' committed seed trees
 /// (`schemas/seed/{account}/`) copied into the root's `schemas/seed/`, so the
 /// server seeds its store from them on boot exactly as it does for real.
 fn run_suite_over_seed(suite_dir: &Path, accounts: &[&str]) -> tempfile::TempDir {
-    run_suite_in(suite_dir, AppOptions::default(), accounts, &[])
+    run_suite_in(suite_dir, |_, _| {}, accounts, &[])
+}
+
+/// In-memory lake, auto-create on, and the fixed test secret key. Suites
+/// that want a different flag set it on this `Config`.
+fn hurl_config(root: &Path) -> Config {
+    let key = parse_secret_key("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
+    Config {
+        root: root.to_path_buf(),
+        port: 0,
+        lake: LakeConfig::Memory,
+        auth: AuthConfig::Local {
+            dir: root.join("auth"),
+            auto_create: true,
+        },
+        default_site: None,
+        secret_key: KeyStatus::Ready(key),
+    }
+}
+
+fn set_auto_create(config: &mut Config, auto_create: bool) {
+    match &mut config.auth {
+        AuthConfig::Local {
+            auto_create: flag, ..
+        } => *flag = auto_create,
+    }
 }
 
 fn run_suite_in(
     suite_dir: &Path,
-    options: AppOptions,
+    adjust: impl FnOnce(&mut Config, &mut Extensions),
     seed_accounts: &[&str],
     variables: &[(&str, &str)],
 ) -> tempfile::TempDir {
@@ -88,21 +115,14 @@ fn run_suite_in(
         );
     }
 
-    // 2. Use in-memory adapter (no SQLite needed for tests). Set once across all suites.
-    ADAPTER_ENV_ONCE.call_once(|| unsafe {
-        std::env::set_var("LOCO_ADAPTER", "memory");
-        std::env::set_var("LOCO_AUTH_AUTO_CREATE", "1");
-        // Tests only: standard base64 of 32 zero bytes. Secret writes are
-        // 503 without LOCO_SECRET_KEY. Unit tests parse keys themselves and
-        // do not read this variable.
-        std::env::set_var(
-            "LOCO_SECRET_KEY",
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        );
-    });
+    // 2. In-memory lake, auto-create on, test secret key. A suite that wants
+    //    a different flag sets it on the Config.
+    let mut config = hurl_config(tmp.path());
+    let mut extensions = Extensions::default();
+    adjust(&mut config, &mut extensions);
 
     // 3. Build the app rooted at the tempdir
-    let app = loco_apps::server::build_app_with_options(tmp.path(), options);
+    let app = build_app(&config, extensions);
 
     // 4. Start server on a random available port
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -206,9 +226,8 @@ fn suite_actions() {
     actions.register("alice/pkg", "pull", |ctx| async move { pull(ctx).await });
     run_suite_in(
         &suites_dir().join("actions"),
-        AppOptions {
-            actions,
-            ..AppOptions::default()
+        |_, extensions| {
+            extensions.actions = actions;
         },
         &[],
         &[("upstream", upstream.as_str())],
@@ -223,13 +242,9 @@ fn suite_connection_values() {
     type_actions.register("alice/pkg", "warehouse", "read", |ctx| async move {
         read_connection(ctx).await
     });
-    run_suite_with(
-        &suites_dir().join("connection_values"),
-        AppOptions {
-            type_actions,
-            ..AppOptions::default()
-        },
-    );
+    run_suite_with(&suites_dir().join("connection_values"), |_, extensions| {
+        extensions.type_actions = type_actions;
+    });
 }
 
 #[test]
@@ -243,9 +258,8 @@ fn suite_collection_source() {
     sources.register("alice/pkg", "warehouse", WarehouseSource);
     run_suite_in(
         &suites_dir().join("collection_source"),
-        AppOptions {
-            sources,
-            ..AppOptions::default()
+        |_, extensions| {
+            extensions.sources = sources;
         },
         &[],
         &[
@@ -258,13 +272,13 @@ fn suite_collection_source() {
 
 #[test]
 fn suite_bricklink() {
-    // The production registry, as `build_app` ships it: `AppOptions::default()`
+    // The production registry, as `Extensions::default` ships it: it
     // registers the BrickLink source. The store's `base_url` points at the
     // fixture server, so no call leaves the machine.
     let upstream = start_bricklink_upstream();
     run_suite_in(
         &suites_dir().join("bricklink"),
-        AppOptions::default(),
+        |_, _| {},
         &["loco"],
         &[("bricklink", upstream.as_str())],
     );
@@ -1017,13 +1031,9 @@ fn suite_hosting_apex() {
     // here rather than through the environment so this suite and
     // `suite_hosting` (which asserts the apex is API-only) can run in the
     // same process without racing on a process-global variable.
-    run_suite_with(
-        &suites_dir().join("hosting_apex"),
-        AppOptions {
-            default_site: Some("alice/blog/www".to_string()),
-            ..AppOptions::default()
-        },
-    );
+    run_suite_with(&suites_dir().join("hosting_apex"), |config, _| {
+        config.default_site = Some("alice/blog/www".to_string());
+    });
 }
 
 #[test]
@@ -1064,7 +1074,7 @@ fn suite_seed_store() {
     // Delete the project from the store; the next boot restores it from the
     // seed, without the edits made to the deleted copy.
     std::fs::remove_dir_all(&store).unwrap();
-    let _app = loco_apps::server::build_app_with_root(tmp.path());
+    let _app = build_app(&hurl_config(tmp.path()), Extensions::default());
     assert!(store.join("project.yaml").is_file());
     assert!(store
         .join("versions/0.0.1-dev/collections/lot.yaml")
@@ -1217,10 +1227,7 @@ fn assert_no_fieldset_files(root: &Path, project: &str) {
 
 #[test]
 fn suite_auth_credentials() {
-    let tmp = run_suite_with(
-        &suites_dir().join("auth_credentials"),
-        AppOptions::default(),
-    );
+    let tmp = run_suite(&suites_dir().join("auth_credentials"));
     let auth = tmp.path().join("auth");
 
     // Signup password must not be recoverable from the identity file.
@@ -1271,7 +1278,7 @@ fn suite_auth_credentials() {
 
 #[test]
 fn suite_auth_sessions() {
-    let tmp = run_suite_with(&suites_dir().join("auth_sessions"), AppOptions::default());
+    let tmp = run_suite(&suites_dir().join("auth_sessions"));
     let sessions = tmp.path().join("auth/sessions");
 
     // Two logins, one logout: the logged-out session leaves nothing behind.
@@ -1320,26 +1327,18 @@ fn suite_signup_errors() {
 fn suite_org_member_errors() {
     // Auto-create stays off so an unknown well-formed handle is not created
     // by the login requests that lock the 401 body.
-    run_suite_with(
-        &suites_dir().join("org_member_errors"),
-        AppOptions {
-            auth_auto_create: Some(false),
-            ..AppOptions::default()
-        },
-    );
+    run_suite_with(&suites_dir().join("org_member_errors"), |config, _| {
+        set_auto_create(config, false);
+    });
 }
 
 #[test]
 fn suite_auth_no_auto_create() {
-    // The rest of the suites set LOCO_AUTH_AUTO_CREATE=1 process-wide; this
-    // one pins the production default off and checks nothing was squatted.
-    let tmp = run_suite_with(
-        &suites_dir().join("auth_no_auto_create"),
-        AppOptions {
-            auth_auto_create: Some(false),
-            ..AppOptions::default()
-        },
-    );
+    // The rest of the suites set auto-create on their Config; this one pins
+    // the production default off and checks nothing was squatted.
+    let tmp = run_suite_with(&suites_dir().join("auth_no_auto_create"), |config, _| {
+        set_auto_create(config, false);
+    });
     for dir in ["accounts", "identities"] {
         assert!(
             !tmp.path().join("auth").join(dir).join("acme.json").exists(),

@@ -10,6 +10,8 @@ pub enum Error {
     /// A `LakeQuery` the lake cannot run as given (see `query.rs`).
     InvalidQuery(String),
     Internal(String),
+    /// Opening the adapter failed. [`Display`] is the sentence, with no prefix.
+    Open(String),
 }
 
 impl fmt::Display for Error {
@@ -20,6 +22,7 @@ impl fmt::Display for Error {
             Error::InvalidDataset(msg) => write!(f, "invalid dataset: {msg}"),
             Error::InvalidQuery(msg) => write!(f, "invalid query: {msg}"),
             Error::Internal(msg) => write!(f, "internal error: {msg}"),
+            Error::Open(msg) => write!(f, "{msg}"),
         }
     }
 }

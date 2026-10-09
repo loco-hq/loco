@@ -1,14 +1,13 @@
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 
-use loco_lake::{DataAdapter, InMemoryAdapter, SqliteAdapter};
+use loco_lake::{DataAdapter, LakeConfig};
 
 use crate::actions::HandlerRegistry;
-use crate::auth::local::LocalAuthAdapter;
 use crate::auth::AuthAdapter;
+use crate::config::Config;
 use crate::handlers;
 use crate::http::host;
 use crate::integrations::{SourceRegistry, TypeActionRegistry};
@@ -39,182 +38,55 @@ pub struct AppState {
     /// always wins over this.
     pub default_site: Option<(String, String)>,
     /// Declared-action handlers, keyed by owning project and bare name.
-    /// Empty unless a caller of [`build_app_with_options`] registers some.
-    /// The server binary does not.
+    /// Empty unless the [`Extensions`] passed to [`build_app`] registers some.
+    /// The server binary passes [`Extensions::default`].
     pub actions: HandlerRegistry,
     /// Integration-type sources, keyed by owning project and type name.
-    /// The server binary registers [`SourceRegistry::production`] (BrickLink).
+    /// The server binary passes [`Extensions::default`], which registers
+    /// [`SourceRegistry::production`] (BrickLink).
     /// A registered source handles that type's standard and custom
     /// collections. An address with no registration is 501 before the
     /// required-value check.
     pub sources: SourceRegistry,
     /// Type-action handlers, keyed by owning project, type name, and action
-    /// name. Empty in the server binary, so a resolved type action is 501.
+    /// name. Empty in [`Extensions::default`], so a resolved type action is 501.
     /// A registered handler runs with a [`crate::integrations::TypeActionContext`]
     /// whose connection is the integration the address named.
     pub type_actions: TypeActionRegistry,
 }
 
-fn build_data_adapter(sqlite_path: Option<&Path>) -> Box<dyn DataAdapter> {
-    let adapter_type = std::env::var("LOCO_ADAPTER").unwrap_or_else(|_| "sqlite".to_string());
-    match adapter_type.as_str() {
-        "memory" => {
-            println!("Using in-memory adapter");
-            Box::new(InMemoryAdapter::new())
-        }
-        "sqlite" => {
-            // No root here. Callers that resolved against `LOCO_ROOT` pass
-            // the path in. Everyone else, including tests, keeps the env
-            // string relative to the working directory.
-            let path = sqlite_path.map(Path::to_path_buf).unwrap_or_else(|| {
-                resolve_sqlite_path(None, std::env::var("LOCO_DB_PATH").ok().as_deref())
-            });
-            println!("Using SQLite adapter ({})", path.display());
-            Box::new(SqliteAdapter::new(&path).expect("failed to open SQLite database"))
-        }
-        other => panic!("unknown LOCO_ADAPTER: {other} (expected \"sqlite\" or \"memory\")"),
-    }
-}
-
-/// Overrides a caller can pin instead of reading the environment. Tests use
-/// this so one process can host servers that disagree about a flag.
-pub struct AppOptions {
-    /// `None` → `LOCO_AUTH_AUTO_CREATE` decides (off unless set).
-    pub auth_auto_create: Option<bool>,
-    /// Which site the apex serves at `/`, as `{account}/{project}/{site}`.
-    /// `None` → `LOCO_DEFAULT_SITE` decides (unset → the apex is API-only).
-    ///
-    /// There is no default here and there must not be one: a Loco process is
-    /// not a Studio process. Whoever runs it says which app it hosts.
-    pub default_site: Option<String>,
-    /// Handlers for declared actions. [`Default`] registers none, which is
-    /// what [`build_app`] ships. The Hurl fixture handler is registered by
-    /// the test runner, so it is not in the server binary.
+/// Handler and source registries. Not configuration: [`Default`] is what the
+/// server binary ships, and a test builds its own.
+pub struct Extensions {
+    /// Handlers for declared actions. [`Default`] registers none. The Hurl
+    /// fixture handlers are registered by the test runner, so they are not
+    /// in the server binary.
     pub actions: HandlerRegistry,
     /// Sources for integration types. [`Default`] is
-    /// [`SourceRegistry::production`], which [`build_app`] ships. A test that
-    /// registers its own fixture source replaces the whole registry.
+    /// [`SourceRegistry::production`]. A test that registers its own fixture
+    /// source replaces the whole registry.
     pub sources: SourceRegistry,
     /// Handlers for type actions. [`Default`] registers none, so a resolved
     /// type action is 501. A registered handler receives a
     /// [`crate::integrations::TypeActionContext`] whose connection is the
     /// integration the address named.
     pub type_actions: TypeActionRegistry,
-    /// SQLite file to open when the adapter is `sqlite`.
-    ///
-    /// `None` reads `LOCO_DB_PATH` (default `loco.db`) and opens that path
-    /// as given, so a relative path stays relative to the working directory.
-    /// [`build_app`] leaves this unset. `main` sets it after
-    /// [`resolve_sqlite_path`]: joined onto `LOCO_ROOT` only when that
-    /// variable is set, and left relative when it is not.
-    pub sqlite_path: Option<PathBuf>,
 }
 
-impl Default for AppOptions {
+impl Default for Extensions {
     fn default() -> Self {
         Self {
-            auth_auto_create: None,
-            default_site: None,
             actions: HandlerRegistry::default(),
             sources: SourceRegistry::production(),
             type_actions: TypeActionRegistry::default(),
-            sqlite_path: None,
         }
     }
 }
 
-/// Default SQLite file name. A relative path. See [`resolve_sqlite_path`].
-const DEFAULT_SQLITE_FILE: &str = "loco.db";
-
-/// Crate directory (`loco-apps/`). The schema and auth root when `LOCO_ROOT`
-/// is unset.
-pub fn default_data_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
-/// `LOCO_ROOT` when it names a directory. Blank is unset: the process keeps
-/// [`default_data_root`] and does not move the SQLite file.
-pub fn parse_loco_root(value: Option<&str>) -> Option<PathBuf> {
-    let value = value?.trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(value))
-    }
-}
-
-/// SQLite path the process opens.
-///
-/// `root` is `Some` only when `LOCO_ROOT` is set. The default file
-/// (`loco.db`) and a relative `LOCO_DB_PATH` are then joined onto that
-/// root. When `root` is `None`, the path is `LOCO_DB_PATH` or `loco.db`
-/// and a relative path stays relative to the working directory.
-///
-/// `cargo run -p loco-apps` from the repo root, with `LOCO_ROOT` unset,
-/// opens `./loco.db` there. The schema root in that case is still
-/// `loco-apps/`. Joining the database onto that directory would open a
-/// different file.
-///
-/// An absolute `LOCO_DB_PATH` is used as given in both cases. An empty
-/// string is a relative path, the same as an empty `LOCO_DB_PATH` was
-/// before `LOCO_ROOT` existed.
-pub fn resolve_sqlite_path(root: Option<&Path>, db_path: Option<&str>) -> PathBuf {
-    let raw = db_path.unwrap_or(DEFAULT_SQLITE_FILE);
-    let path = Path::new(raw);
-    match root {
-        Some(root) if path.is_relative() => root.join(path),
-        _ => PathBuf::from(raw),
-    }
-}
-
-/// Absolute form of `path` for the startup log. The file does not have to
-/// exist, and symlinks are left as written. This does not change the path
-/// [`resolve_sqlite_path`] returns: with `LOCO_ROOT` unset that path stays
-/// relative so the open follows the working directory.
-pub fn absolute_path(path: &Path) -> PathBuf {
-    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// `PORT`, or 3000 when the variable is unset. Blank and non-numeric values
-/// are errors. `0` and `65535` are in range.
-pub fn resolve_port(value: Option<&str>) -> Result<u16, String> {
-    let Some(raw) = value else {
-        return Ok(3000);
-    };
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Err("PORT is empty; set a number from 0 to 65535".to_string());
-    }
-    raw.parse::<u16>()
-        .map_err(|_| format!("PORT must be a number from 0 to 65535, got {raw}"))
-}
-
-fn build_auth_adapter(root: &std::path::Path, options: &AppOptions) -> Box<dyn AuthAdapter> {
-    let adapter_type = std::env::var("LOCO_AUTH_ADAPTER").unwrap_or_else(|_| "local".to_string());
-    match adapter_type.as_str() {
-        "local" => {
-            let path = root.join("auth");
-            println!("Using local filesystem auth adapter ({})", path.display());
-            Box::new(match options.auth_auto_create {
-                Some(auto_create) => LocalAuthAdapter::with_auto_create(&path, auto_create),
-                None => LocalAuthAdapter::new(&path),
-            })
-        }
-        other => panic!("unknown LOCO_AUTH_ADAPTER: {other} (expected \"local\")"),
-    }
-}
-
-pub fn build_app() -> Router {
-    build_app_with_root(default_data_root())
-}
-
-pub fn build_app_with_root(root: &std::path::Path) -> Router {
-    build_app_with_options(root, AppOptions::default())
-}
-
-pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Router {
+pub fn build_app(config: &Config, extensions: Extensions) -> Router {
     // Seed committed projects the store lacks, then load the store. Writes
     // go only to `schemas/instances/`; `schemas/seed/` is read, never written.
+    let root = &config.root;
     let instances_dir = root.join("schemas/instances");
     let seeded = seed::seed_instances(&root.join("schemas/seed"), &instances_dir)
         .expect("failed to seed schema instances");
@@ -222,8 +94,7 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         println!("Seeded {project} from schemas/seed");
     }
     let schema = Arc::new(SchemaStore::load(&instances_dir).expect("failed to load schema"));
-    let secret_key = KeyStatus::from_env();
-    match &secret_key {
+    match &config.secret_key {
         KeyStatus::Missing => {
             eprintln!("LOCO_SECRET_KEY is not set; PUT /config/secret will return 503")
         }
@@ -232,14 +103,22 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
     }
 
     let data_adapter: Arc<dyn DataAdapter> =
-        Arc::from(build_data_adapter(options.sqlite_path.as_deref()));
+        Arc::from(config.lake.open().unwrap_or_else(|err| panic!("{err}")));
+    match &config.lake {
+        LakeConfig::Memory => println!("Using in-memory adapter"),
+        LakeConfig::Sqlite { path } => {
+            println!("Using SQLite adapter ({})", path.display());
+        }
+    }
     let lake = Arc::new(LakeSource::new(data_adapter.clone()));
-    let secrets: Arc<dyn SecretStore> =
-        Arc::new(LakeSecretStore::new(data_adapter.clone(), secret_key));
+    let secrets: Arc<dyn SecretStore> = Arc::new(LakeSecretStore::new(
+        data_adapter.clone(),
+        config.secret_key.clone(),
+    ));
     let http = crate::actions::http_client();
-    let auth_adapter = build_auth_adapter(root, &options);
+    let auth_adapter = config.auth.open();
     warn_projects_without_account(&schema, auth_adapter.as_ref());
-    let default_site = resolve_default_site(&schema, &options);
+    let default_site = resolve_default_site(&schema, config.default_site.as_deref());
 
     let state = Arc::new(AppState {
         data_adapter,
@@ -249,9 +128,9 @@ pub fn build_app_with_options(root: &std::path::Path, options: AppOptions) -> Ro
         secrets,
         http,
         default_site,
-        actions: options.actions,
-        sources: options.sources,
-        type_actions: options.type_actions,
+        actions: extensions.actions,
+        sources: extensions.sources,
+        type_actions: extensions.type_actions,
     });
 
     Router::new()
@@ -308,25 +187,21 @@ fn warn_projects_without_account(schema: &SchemaStore, auth: &dyn AuthAdapter) {
     }
 }
 
-/// Read `LOCO_DEFAULT_SITE` (or the pinned option), and say once at boot what
-/// the apex will do with it.
+/// Read `LOCO_DEFAULT_SITE`, and say once at boot what the apex will do with it.
 ///
 /// Every problem here is a warning, never a panic. A process whose default
 /// site has no bundle yet is a process mid-deploy: it serves its API and 404s
-/// `/` until something is uploaded.
+/// `/` until something is uploaded. Blank is API-only, with no warning.
 fn resolve_default_site(
     schema: &Arc<SchemaStore>,
-    options: &AppOptions,
+    default_site: Option<&str>,
 ) -> Option<(String, String)> {
-    let raw = options
-        .default_site
-        .clone()
-        .or_else(|| std::env::var("LOCO_DEFAULT_SITE").ok())?;
+    let raw = default_site?;
     if raw.trim().is_empty() {
         return None;
     }
 
-    let Some((project_id, site_name)) = host::parse_site_ref(&raw) else {
+    let Some((project_id, site_name)) = host::parse_site_ref(raw) else {
         eprintln!(
             "LOCO_DEFAULT_SITE={raw} is not {{account}}/{{project}}/{{site}};              the apex stays API-only"
         );
@@ -360,96 +235,4 @@ fn cors_layer() -> CorsLayer {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sqlite_path_stays_cwd_relative_when_root_is_unset() {
-        let path = resolve_sqlite_path(None, None);
-        assert_eq!(path, Path::new("loco.db"));
-        assert!(path.is_relative());
-        // The schema root is the crate directory. The database is not under it.
-        assert!(default_data_root().join("loco.db").is_absolute());
-        assert_ne!(path, default_data_root().join("loco.db"));
-    }
-
-    #[test]
-    fn sqlite_path_keeps_a_relative_override_when_root_is_unset() {
-        assert_eq!(
-            resolve_sqlite_path(None, Some("data/app.db")),
-            Path::new("data/app.db")
-        );
-        assert_eq!(resolve_sqlite_path(None, Some("")), Path::new(""));
-    }
-
-    #[test]
-    fn sqlite_path_joins_relative_paths_when_root_is_set() {
-        let root = Path::new("/tmp/x");
-        assert_eq!(
-            resolve_sqlite_path(Some(root), None),
-            Path::new("/tmp/x/loco.db")
-        );
-        assert_eq!(
-            resolve_sqlite_path(Some(root), Some("data/app.db")),
-            Path::new("/tmp/x/data/app.db")
-        );
-        assert_eq!(resolve_sqlite_path(Some(root), Some("")), root);
-    }
-
-    #[test]
-    fn sqlite_path_keeps_an_absolute_override() {
-        let absolute = "/var/loco/app.db";
-        assert_eq!(
-            resolve_sqlite_path(None, Some(absolute)),
-            Path::new(absolute)
-        );
-        assert_eq!(
-            resolve_sqlite_path(Some(Path::new("/tmp/x")), Some(absolute)),
-            Path::new(absolute)
-        );
-    }
-
-    #[test]
-    fn blank_loco_root_is_unset() {
-        assert!(parse_loco_root(None).is_none());
-        assert!(parse_loco_root(Some("")).is_none());
-        assert!(parse_loco_root(Some("   ")).is_none());
-        assert_eq!(
-            parse_loco_root(Some(" /tmp/x ")).as_deref(),
-            Some(Path::new("/tmp/x"))
-        );
-    }
-
-    #[test]
-    fn absolute_path_logs_a_relative_database_under_the_working_directory() {
-        let logged = absolute_path(Path::new("loco.db"));
-        assert!(logged.is_absolute());
-        assert_eq!(logged.file_name().unwrap(), "loco.db");
-        assert_eq!(logged, std::env::current_dir().unwrap().join("loco.db"));
-        assert_eq!(
-            absolute_path(Path::new("/tmp/x/loco.db")),
-            Path::new("/tmp/x/loco.db")
-        );
-    }
-
-    #[test]
-    fn port_defaults_and_parses() {
-        assert_eq!(resolve_port(None).unwrap(), 3000);
-        assert_eq!(resolve_port(Some("3100")).unwrap(), 3100);
-        assert_eq!(resolve_port(Some(" 3100 ")).unwrap(), 3100);
-        assert_eq!(resolve_port(Some("0")).unwrap(), 0);
-        assert_eq!(resolve_port(Some("65535")).unwrap(), 65535);
-    }
-
-    #[test]
-    fn port_rejects_blank_and_non_numeric() {
-        assert!(resolve_port(Some("")).is_err());
-        assert!(resolve_port(Some("   ")).is_err());
-        assert!(resolve_port(Some("http")).is_err());
-        assert!(resolve_port(Some("65536")).is_err());
-        assert!(resolve_port(Some("-1")).is_err());
-    }
 }

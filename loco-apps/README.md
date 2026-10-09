@@ -19,7 +19,7 @@ Listens on `http://0.0.0.0:3000`. `PORT` overrides the port. `LOCO_ROOT` overrid
 | `LOCO_ADAPTER` | `sqlite` | `sqlite` or `memory` |
 | `LOCO_DB_PATH` | `loco.db` | SQLite file. Relative to the working directory when `LOCO_ROOT` is unset; relative to `LOCO_ROOT` when that is set. An absolute path is used as given. |
 | `LOCO_AUTH_ADAPTER` | `local` | Only `local` exists |
-| `LOCO_AUTH_AUTO_CREATE` | unset | Login of an unknown handle creates a person (`1`/`true`; Hurl sets this) |
+| `LOCO_AUTH_AUTO_CREATE` | unset | Login of an unknown handle creates a person (`1`/`true`). The Hurl runner sets this on its `Config`. |
 
 With `LOCO_ROOT` unset, `cargo run -p loco-apps` from the repo root keeps opening `./loco.db` there. The schema root is still this crate. Set `LOCO_ROOT` to put `schemas/`, `auth/`, and a relative database path under one directory. Startup logs the absolute root and the absolute database path.
 
@@ -27,7 +27,7 @@ With `LOCO_ROOT` unset, `cargo run -p loco-apps` from the repo root keeps openin
 
 1. `build.rs` generates Rust types from `schemas/types/` via `loco_gen_schema::build::generate`
 2. `lib.rs` includes `$OUT_DIR/loco_generated.rs`
-3. `main` reads `LOCO_ROOT` (default: this crate's directory) and `PORT` (default `3000`), then `server::build_app_with_root` seeds `schemas/instances/` from `schemas/seed/` (projects the store lacks only) and loads it into `SchemaStore`
+3. `main` calls `Config::from_env` (the only environment read) and `server::build_app`, which seeds `schemas/instances/` from `schemas/seed/` (projects the store lacks only) and loads it into `SchemaStore`
 4. A lake adapter (`sqlite` / `memory`) and the local auth adapter (`auth/`) are constructed
 5. Routes are nested: `/data`, `/schema`, `/config`, `/auth`
 
