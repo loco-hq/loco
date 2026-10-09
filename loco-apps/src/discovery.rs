@@ -397,6 +397,10 @@ mod tests {
         assert!(member.contains("unknown account:"), "{member}");
         assert!(member.contains("bad-handle"), "{member}");
         assert!(member.contains("201"), "{member}");
+        assert!(member.contains("user already exists"), "{member}");
+        assert!(member.contains("POST /config/project"), "{member}");
+        assert!(!member.contains("lists project members"), "{member}");
+        assert!(!member.contains("lists org members"), "{member}");
         assert_eq!(doc["routes"].as_array().unwrap().len(), routes().len());
         for route in doc["routes"].as_array().unwrap() {
             assert!(!route_method(route).is_empty());

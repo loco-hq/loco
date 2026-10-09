@@ -20,8 +20,10 @@ pub enum AuthError {
     InvalidCredentials,
     /// A handle failed the account-name rule. The string is that rule.
     /// Signup and org create use the capped sentence from `check_slug`
-    /// (`public` is reserved). Member add uses the charset only, with no
-    /// length cap. Login does not use this error.
+    /// (`public` is reserved). Member add uses this when the handle names
+    /// no account and fails the charset: an account already on disk is
+    /// accepted whatever its charset, and a missing well-formed handle is
+    /// [`UnknownAccount`](Self::UnknownAccount). Login does not use this error.
     InvalidHandle(String),
     /// A member handle is well-formed and names no account.
     UnknownAccount(String),

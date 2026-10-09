@@ -148,8 +148,11 @@ HTTP 400
 [Asserts]
 jsonpath "$.error" == "handle name \"public\" is reserved"
 
-# A well-formed handle that names no account is 404. Members are listed
-# to the owner, so this is not a new fact about who exists.
+# A well-formed handle that names no account is 404. Signup's 409
+# `user already exists` (no token, for a handle that passes the signup
+# rule) and POST /config/project with "account" (404 unknown account or
+# 403 for any authenticated caller) already answer whether a handle
+# exists, including a legacy or over-63 handle.
 POST http://127.0.0.1:{{port}}/config/member/alice/shop
 Authorization: Bearer {{alice_token}}
 Content-Type: application/json
@@ -194,8 +197,9 @@ HTTP 201
 jsonpath "$.data.handle" == "bob"
 jsonpath "$.data.pending" == false
 
-# A hyphenated person already on disk can log in, and cannot be recorded
-# as a member. The project and the org are removed, not left half-made.
+# A hyphenated person already on disk logs in. The account is accepted
+# whatever its charset, so they can be invited and can create a project
+# and an org.
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
 {"username": "lego-reseller", "password": "password"}
@@ -203,45 +207,77 @@ HTTP 200
 [Captures]
 legacy_token: jsonpath "$.data.token"
 
-POST http://127.0.0.1:{{port}}/config/project
-Authorization: Bearer {{legacy_token}}
+POST http://127.0.0.1:{{port}}/config/member/alice/shop
+Authorization: Bearer {{alice_token}}
 Content-Type: application/json
-{"name": "shop", "label": "Shop", "description": "Legacy shop"}
-HTTP 500
+{"handle": "lego-reseller", "role": "editor"}
+HTTP 201
 [Asserts]
-jsonpath "$.error" contains "could not record the creator as a member"
-jsonpath "$.error" contains "lego-reseller"
-jsonpath "$.error" not contains "left in place"
+jsonpath "$.data.handle" == "lego-reseller"
+jsonpath "$.data.role" == "editor"
+jsonpath "$.data.pending" == false
+
+POST http://127.0.0.1:{{port}}/config/org/acme/member
+Authorization: Bearer {{alice_token}}
+Content-Type: application/json
+{"handle": "lego-reseller", "role": "member"}
+HTTP 201
+[Asserts]
+jsonpath "$.data.handle" == "lego-reseller"
+jsonpath "$.data.pending" == false
 
 POST http://127.0.0.1:{{port}}/config/project
 Authorization: Bearer {{legacy_token}}
 Content-Type: application/json
 {"name": "shop", "label": "Shop", "description": "Legacy shop"}
-HTTP 500
+HTTP 201
 [Asserts]
-jsonpath "$.error" contains "could not record the creator as a member"
+jsonpath "$.ok" == true
+jsonpath "$.data.label" == "Shop"
+
+GET http://127.0.0.1:{{port}}/config/member/lego-reseller/shop/list
+Authorization: Bearer {{legacy_token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data[?(@.handle == 'lego-reseller')].role" nth 0 == "developer"
+jsonpath "$.data[?(@.handle == 'lego-reseller')].pending" nth 0 == false
 
 GET http://127.0.0.1:{{port}}/config/project/lego-reseller/shop
 Authorization: Bearer {{legacy_token}}
-HTTP 404
+HTTP 200
 [Asserts]
-jsonpath "$.error" == "unknown project: lego-reseller/shop"
+jsonpath "$.ok" == true
+jsonpath "$.data.label" == "Shop"
+
+POST http://127.0.0.1:{{port}}/config/project
+Authorization: Bearer {{legacy_token}}
+Content-Type: application/json
+{"name": "shop", "label": "Shop", "description": "Legacy shop"}
+HTTP 409
+[Asserts]
+jsonpath "$.error" contains "already exists"
 
 POST http://127.0.0.1:{{port}}/config/org
 Authorization: Bearer {{legacy_token}}
-Content-Type: application/json
-{"handle": "reseller"}
-HTTP 500
-[Asserts]
-jsonpath "$.error" contains "could not record the creator as owner"
-jsonpath "$.error" contains "lego-reseller"
-
-# The name was given back. A legal creator can take it.
-POST http://127.0.0.1:{{port}}/config/org
-Authorization: Bearer {{alice_token}}
 Content-Type: application/json
 {"handle": "reseller"}
 HTTP 201
 [Asserts]
 jsonpath "$.data.handle" == "reseller"
 jsonpath "$.data.type" == "org"
+
+GET http://127.0.0.1:{{port}}/config/org/reseller/member/list
+Authorization: Bearer {{legacy_token}}
+HTTP 200
+[Asserts]
+jsonpath "$.data[?(@.handle == 'lego-reseller')].role" nth 0 == "owner"
+jsonpath "$.data[?(@.handle == 'lego-reseller')].pending" nth 0 == false
+
+# The name is taken.
+POST http://127.0.0.1:{{port}}/config/org
+Authorization: Bearer {{alice_token}}
+Content-Type: application/json
+{"handle": "reseller"}
+HTTP 409
+[Asserts]
+jsonpath "$.error" == "user already exists"

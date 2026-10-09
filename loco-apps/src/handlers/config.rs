@@ -116,9 +116,8 @@ pub async fn create_project(
     ));
 
     // The version, dataset, and site lines above still discard a failure.
-    // The creator's membership does not: a project without that row is
-    // half-made, so a failure removes the project and is a 500. Already
-    // being a member counts as the grant having happened.
+    // An I/O failure recording the creator as a member removes the project
+    // and is a 500. Already being a member counts as the grant having happened.
     let project_id = format!("{account}/{}", body.name);
     match state.auth_adapter.add_project_member(
         &project_id,
