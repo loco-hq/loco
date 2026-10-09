@@ -2,6 +2,8 @@
 
 A fresh Claude Code session, with no Loco checkout and no `CLAUDE.md`, was asked to build the same inventory app as trial 01. It signed up, created a schema, wrote six records, and published a web UI. No hint was sent.
 
+The discovery guide's worked example is a LEGO parts inventory (handle `lego_reseller`, project `inventory`, a public list-and-edit page published as `www`), so this task was close to the guide's own example; the result shows the guide can be followed end to end, not that an outsider can build an arbitrary app. Trial 03 should use a task that is not inventory-shaped and not in the guide: a store that depends on `loco/bricklink@1.0.0` and reads `store:orders` (that reaches #137), or a declared action, or a member-login page.
+
 The transcript is [`outsider-02-transcript.md`](outsider-02-transcript.md). Passwords and the session token are redacted there. This file is the observer's account. The comparison with trial 01 is below.
 
 ## Setup
@@ -38,9 +40,9 @@ No hint was sent. The subject finished the turn at 16:07:51Z (`durationMs` 12004
 
 The subject requested `GET /.well-known/loco.json` next, at 16:05:55Z. The body is about 43KB. Claude Code stored it as a tool-result file and showed a preview. The preview's first guide step says to follow the document in order and not to guess a path.
 
-### 2. Auto mode refuses `cat`, and Read succeeds — 16:06:14Z to 16:06:16Z
+### 2. Auto mode refuses `cat`, and Read succeeds — issued 16:05:58Z, refused 16:06:14Z
 
-`cat` of that tool-result file was refused:
+`cat` of that tool-result file was issued at 16:05:58Z. The classifier answered at 16:06:14Z, so 16 of the 120 seconds went to the refusal:
 
 ```
 Permission for this action was denied by the Claude Code auto mode classifier. Reason: [PII Data Handling].
@@ -101,7 +103,7 @@ A token-less `POST` to the dev host with `quantity` `"lots"` and `condition` `"m
 
 `POST /config/version/…` with `{"version":"0.0.1","from":"0.0.1-dev"}` copied the draft. `POST /config/site/…` created site `www` pinned to `0.0.1` and dataset `dev`. `GET http://www.inventory.brickvault_b5ebd8.localhost:3300/` returned the same title, and a token-less list printed all six batch codes. `GET http://localhost:3300/` was still the JSON 404 with `see`.
 
-The subject stopped at 16:07:51Z. It said the page was checked with HTTP and had not been opened in a browser. The summary matches the requests above. It describes public create and update as the way a hosted page can edit, because the page must not carry a bearer token, and it says `www` is published and further changes go through a new version copy.
+The subject stopped at 16:07:51Z. It said the page was checked with HTTP and had not been opened in a browser. The summary matches the requests above. It says `www` is published and further changes go through a new version copy. It also says anyone who opens the page can view, add, and edit batches, because "a hosted Loco page can't carry a login." That sentence is the guide's framing. The guide steers every outsider to a publicly writable page, and that is the only hosted-editing path this run found.
 
 ### 8. Observer check of the page, after the subject stopped
 
@@ -118,7 +120,7 @@ Trial 01 ([`outsider-01.md`](outsider-01.md)) is the same task, the same kind of
 | Signup without a hint | No. Idle from 16:21:45Z. One hint at 16:37:23Z (`Signup is POST /auth/users`). `POST /auth/users` then returned `401` `invalid credentials` for `lego-reseller` and `brickstock-<hex>`. No account. | Yes. Account `brickvault_b5ebd8` at 16:06:24Z, 33 seconds after the prompt. No hint. |
 | Schema | Not reached. | Yes. Collection `batches`, nine fields, public permission set, manifest, at 16:06:32Z. |
 | Records | Not reached. | Yes. Six batches at 16:06:40Z. |
-| Published UI | Not reached. | Yes. Draft bundle at 16:07:33Z. Site `www` on version `0.0.1` at 16:07:41Z. The page lists the six batches and + writes a quantity. |
+| Published UI | Not reached. | Yes. Draft bundle at 16:07:33Z. Site `www` on version `0.0.1` at 16:07:41Z. The page is served and its data endpoints answer token-less list and update over HTTP. (Page rendered and + verified by the observer after the subject stopped, §8.) |
 | Hints | 1. The subject asked for a second and did not get one. | 0. |
 | Time | Commands from 16:21:19Z to 16:21:45Z, then 15 minutes idle, then about 26 seconds after the hint. Stopped 16:37:49Z. | One turn, 2 minutes 0 seconds (16:05:51Z to 16:07:51Z). |
 
@@ -140,6 +142,8 @@ The orchestrator files follow-up issues from this list. This run was not stopped
 
 3. **#137, installable packages.** Not encountered. The manifest dependency list is empty. A non-member still cannot depend on `loco/bricklink`. #137 is the open issue.
 
-4. **A starter beyond the discovery guide.** No open issue. The guide is already a parts-inventory walkthrough (example handle `lego_reseller`, collection, records, bundle, publish). This task matched it, and the subject followed those steps. A separate template was not required to finish.
+4. **The discovery document exceeds common agent inline-output limits (43KB).** No issue exists. `GET /.well-known/loco.json` was about 43KB. Claude Code wrote it to a tool-result file under its session directory and showed a 2KB preview. The follow-up `cat` of that path is what auto mode refused (§2). The preview included the guide's first step and did not include signup. Those 16 seconds are the cost on this harness. A smaller entry point, such as the short step list on `/llms.txt` or at the top of the document with the long reference split out, would have kept the next step in the inline reply. A harness with no Read tool could have stopped at the refusal.
+
+5. **A starter for a task the guide does not already walk through.** No open issue. This run followed the guide's own parts-inventory example, so it leaves the starter question open. Trial 03 should use a task that is not inventory-shaped and not in the guide: a store that depends on `loco/bricklink@1.0.0` and reads `store:orders` (that reaches #137), or a declared action, or a member-login page.
 
 The auto-mode refusal in timeline item 2 is Claude Code (Opus 5.5), the same class of stop as trial 01's safety classifier. Read of the same file was allowed, and the subject continued. There is nothing to file on the Loco repo for that refusal.
