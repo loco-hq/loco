@@ -1,5 +1,6 @@
 # Discovery document, prefix catalogs, and a publish an agent can copy.
 # dist.zip is index.html at the zip root (the file next to this suite).
+# The page logs in. Writes need its token. Public read is a later opt-in.
 
 GET http://127.0.0.1:{{port}}/.well-known/loco.json
 HTTP 200
@@ -16,20 +17,35 @@ jsonpath "$.signup.rejected_handle" contains "400"
 jsonpath "$.signup.rejected_handle" contains "1-63"
 jsonpath "$.signup.missing_field" contains "400"
 jsonpath "$.signup.missing_field" contains "password is required"
-jsonpath "$.routes" count == 51
+jsonpath "$.routes" count == 54
 jsonpath "$.prefixes" count == 5
 jsonpath "$.prefixes[0].routes" not exists
-jsonpath "$.site.example" == "http://dev.inventory.lego_reseller.localhost:{{port}}/"
+jsonpath "$.site.example" == "http://dev.shelf.book_club.localhost:{{port}}/"
 jsonpath "$.site.url" == "http://{site}.{project}.{account}.localhost:{{port}}/"
 jsonpath "$.site.note" contains "wildcard DNS"
 jsonpath "$.site.note" contains "LOCO_DEFAULT_SITE"
 jsonpath "$.site.note" contains "#145"
-jsonpath "$.guide[8].do" contains "http://dev.inventory.lego_reseller.localhost:{{port}}/"
-jsonpath "$.guide[9].do" contains "http://www.inventory.lego_reseller.localhost:{{port}}/"
+jsonpath "$.guide[8].do" contains "http://dev.shelf.book_club.localhost:{{port}}/"
+jsonpath "$.guide[9].do" contains "http://www.shelf.book_club.localhost:{{port}}/"
 jsonpath "$.guide[8].do" not contains "{port}"
 jsonpath "$.site.example" not contains ":3000"
+jsonpath "$.guide[5].do" contains "editor"
+jsonpath "$.guide[5].do" contains "anyone with the URL"
+jsonpath "$.guide[5].do" contains "list anonymously"
+jsonpath "$.guide[7].do" contains "loco_session:same-origin"
+jsonpath "$.guide[7].do" contains "401"
+jsonpath "$.guide[7].index_html" contains "/auth/login"
+jsonpath "$.guide[7].index_html" contains "Authorization"
+jsonpath "$.guide[7].index_html" contains "Bearer"
+jsonpath "$.guide[7].index_html" contains "/auth/logout"
+jsonpath "$.guide[7].index_html" contains "loco_session:same-origin"
+jsonpath "$.guide[7].index_html" contains "status === 401"
+jsonpath "$.guide[9].do" contains "only after copying a new version and re-pinning"
 jsonpath "$.routes[0].method" == "GET"
 jsonpath "$.routes[0].path" == "/.well-known/loco.json"
+body not contains "lego_reseller"
+body not contains "A hosted page sends no token"
+body not contains "parts"
 
 GET http://127.0.0.1:{{port}}/llms.txt
 HTTP 200
@@ -93,12 +109,12 @@ jsonpath "$.error" contains "missing project"
 # password is 400. A taken handle is 409. A wrong password at login is 401.
 POST http://127.0.0.1:{{port}}/auth/users
 Content-Type: application/json
-{"username": "lego-reseller", "name": "Lego Reseller", "password": "pass-word-1"}
+{"username": "book-club", "name": "Book Club", "password": "pass-word-1"}
 HTTP 400
 [Asserts]
 header "Content-Type" contains "application/json"
 jsonpath "$.ok" == false
-jsonpath "$.error" == "handle name \"lego-reseller\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _"
+jsonpath "$.error" == "handle name \"book-club\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _"
 
 POST http://127.0.0.1:{{port}}/auth/users
 Content-Type: application/json
@@ -111,31 +127,31 @@ jsonpath "$.error" contains "username"
 
 POST http://127.0.0.1:{{port}}/auth/users
 Content-Type: application/json
-{"username": "reseller", "name": "Reseller"}
+{"username": "book_club", "name": "Book Club"}
 HTTP 400
 [Asserts]
 jsonpath "$.error" == "password is required"
 
 POST http://127.0.0.1:{{port}}/auth/users
 Content-Type: application/json
-{"username": "reseller", "name": "Reseller", "password": "pass-word-1"}
+{"username": "book_club", "name": "Book Club", "password": "pass-word-1"}
 HTTP 201
 [Asserts]
 jsonpath "$.ok" == true
-jsonpath "$.data.username" == "reseller"
+jsonpath "$.data.username" == "book_club"
 jsonpath "$.data.id" isString
 jsonpath "$.data.token" not exists
 
 POST http://127.0.0.1:{{port}}/auth/users
 Content-Type: application/json
-{"username": "reseller", "name": "Reseller", "password": "pass-word-1"}
+{"username": "book_club", "name": "Book Club", "password": "pass-word-1"}
 HTTP 409
 [Asserts]
 jsonpath "$.error" == "user already exists"
 
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
-{"username": "reseller", "password": "wrong-password"}
+{"username": "book_club", "password": "wrong-password"}
 HTTP 401
 [Asserts]
 jsonpath "$.ok" == false
@@ -152,108 +168,92 @@ jsonpath "$.error" contains "username"
 
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
-{"username": "reseller", "password": "pass-word-1"}
+{"username": "book_club", "password": "pass-word-1"}
 HTTP 200
 [Captures]
 token: jsonpath "$.data.token"
 [Asserts]
-jsonpath "$.data.user.username" == "reseller"
+jsonpath "$.data.user.username" == "book_club"
 
 POST http://127.0.0.1:{{port}}/config/project
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"name": "inventory", "label": "Inventory", "description": "A parts list"}
+{"name": "shelf", "label": "Shelf", "description": "A reading list"}
 HTTP 201
 [Asserts]
 jsonpath "$.ok" == true
 
-GET http://127.0.0.1:{{port}}/config/site/reseller/inventory/dev
+GET http://127.0.0.1:{{port}}/config/site/book_club/shelf/dev
 Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.data.version" == "0.0.1-dev"
 jsonpath "$.data.dataset" == "dev"
 
-POST http://127.0.0.1:{{port}}/schema/reseller/inventory/0.0.1-dev/collection
+POST http://127.0.0.1:{{port}}/schema/book_club/shelf/0.0.1-dev/collection
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"name": "parts", "label": "Part", "label_plural": "Parts"}
+{"name": "books", "label": "Book", "label_plural": "Books"}
 HTTP 201
 [Asserts]
-jsonpath "$.data.name" == "parts"
+jsonpath "$.data.name" == "books"
 
-POST http://127.0.0.1:{{port}}/schema/reseller/inventory/0.0.1-dev/field
+POST http://127.0.0.1:{{port}}/schema/book_club/shelf/0.0.1-dev/field
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"collection": "parts", "name": "sku", "type": "string", "label": "SKU", "required": true}
+{"collection": "books", "name": "title", "type": "string", "label": "Title", "required": true}
 HTTP 201
 
-POST http://127.0.0.1:{{port}}/schema/reseller/inventory/0.0.1-dev/field
+POST http://127.0.0.1:{{port}}/schema/book_club/shelf/0.0.1-dev/field
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"collection": "parts", "name": "qty", "type": "integer", "label": "Quantity", "required": true}
+{"collection": "books", "name": "author", "type": "string", "label": "Author", "required": true}
 HTTP 201
 
-POST http://127.0.0.1:{{port}}/schema/reseller/inventory/0.0.1-dev/permission_set
+POST http://127.0.0.1:{{port}}/schema/book_club/shelf/0.0.1-dev/field
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{
-  "name": "parts_public",
-  "label": "Public parts",
-  "collections": [
-    {"collection": "parts", "read": true, "create": true, "update": true, "delete": false}
-  ]
-}
+{"collection": "books", "name": "finished", "type": "boolean", "label": "Finished", "required": false}
 HTTP 201
-[Asserts]
-jsonpath "$.data.collections[0].read" == true
-jsonpath "$.data.collections[0].delete" == false
 
-PUT http://127.0.0.1:{{port}}/schema/reseller/inventory/0.0.1-dev/manifest
+# Owner writes need no public grant.
+POST http://127.0.0.1:{{port}}/data/books/add
 Authorization: Bearer {{token}}
-Content-Type: application/json
-{"public_permission_sets": ["parts_public"]}
-HTTP 200
-[Asserts]
-jsonpath "$.data.public_permission_sets[0]" == "parts_public"
-
-POST http://127.0.0.1:{{port}}/data/parts/add
-Authorization: Bearer {{token}}
-X-Project-Id: reseller/inventory
+X-Project-Id: book_club/shelf
 X-Site-Id: dev
 Content-Type: application/json
-{"sku": "3001", "qty": 2}
+{"title": "Dune", "author": "Herbert"}
 HTTP 201
 [Captures]
 record: jsonpath "$.data.id"
 [Asserts]
-jsonpath "$.data.fields.sku" == "3001"
-jsonpath "$.data.fields.qty" == 2
+jsonpath "$.data.fields.title" == "Dune"
+jsonpath "$.data.fields.author" == "Herbert"
 
-PUT http://127.0.0.1:{{port}}/data/parts/update/{{record}}
+PUT http://127.0.0.1:{{port}}/data/books/update/{{record}}
 Authorization: Bearer {{token}}
-X-Project-Id: reseller/inventory
+X-Project-Id: book_club/shelf
 X-Site-Id: dev
 Content-Type: application/json
-{"qty": 3}
+{"finished": true}
 HTTP 200
 [Asserts]
-jsonpath "$.data.fields.qty" == 3
-jsonpath "$.data.fields.sku" == "3001"
+jsonpath "$.data.fields.finished" == true
+jsonpath "$.data.fields.title" == "Dune"
 
 POST http://127.0.0.1:{{port}}/data/query
 Authorization: Bearer {{token}}
-X-Project-Id: reseller/inventory
+X-Project-Id: book_club/shelf
 X-Site-Id: dev
 Content-Type: application/json
-{"queries": {"parts": {"collection": "parts", "limit": 50}}}
+{"queries": {"books": {"collection": "books", "limit": 50}}}
 HTTP 200
 [Asserts]
-jsonpath "$.data.parts.records" count == 1
-jsonpath "$.data.parts.records[0].fields.sku" == "3001"
-jsonpath "$.data.parts.cursor" == null
+jsonpath "$.data.books.records" count == 1
+jsonpath "$.data.books.records[0].fields.title" == "Dune"
+jsonpath "$.data.books.cursor" == null
 
-PUT http://127.0.0.1:{{port}}/schema/reseller/inventory/0.0.1-dev/bundle
+PUT http://127.0.0.1:{{port}}/schema/book_club/shelf/0.0.1-dev/bundle
 Authorization: Bearer {{token}}
 Content-Type: application/zip
 file,dist.zip;
@@ -263,29 +263,30 @@ jsonpath "$.data.files" == 1
 jsonpath "$.data.hash" isString
 
 GET http://127.0.0.1:{{port}}/
-Host: dev.inventory.reseller.localhost:{{port}}
+Host: dev.shelf.book_club.localhost:{{port}}
 HTTP 200
 [Asserts]
 header "Content-Type" contains "text/html"
 body contains "discovery page"
+body contains "/auth/login"
 
 GET http://127.0.0.1:{{port}}/.well-known/loco.json
-Host: dev.inventory.reseller.localhost:{{port}}
+Host: dev.shelf.book_club.localhost:{{port}}
 HTTP 200
 [Asserts]
 header "Content-Type" contains "application/json"
 jsonpath "$.name" == "loco"
-jsonpath "$.site.example" == "http://dev.inventory.lego_reseller.localhost:{{port}}/"
+jsonpath "$.site.example" == "http://dev.shelf.book_club.localhost:{{port}}/"
 
 GET http://127.0.0.1:{{port}}/llms.txt
-Host: dev.inventory.reseller.localhost:{{port}}
+Host: dev.shelf.book_club.localhost:{{port}}
 HTTP 200
 [Asserts]
 header "Content-Type" contains "text/plain"
 body contains "/.well-known/loco.json"
 
 GET http://127.0.0.1:{{port}}/auth
-Host: dev.inventory.reseller.localhost:{{port}}
+Host: dev.shelf.book_club.localhost:{{port}}
 HTTP 404
 [Asserts]
 jsonpath "$.see" == "/.well-known/loco.json"
@@ -294,20 +295,59 @@ body not contains "no such endpoint"
 body not contains "discovery page"
 
 GET http://127.0.0.1:{{port}}/schema/foo
-Host: dev.inventory.reseller.localhost:{{port}}
+Host: dev.shelf.book_club.localhost:{{port}}
 HTTP 404
 [Asserts]
 jsonpath "$.error" contains "no such endpoint"
 jsonpath "$.see" == "/.well-known/loco.json"
 
-GET http://127.0.0.1:{{port}}/data/parts/list
-Host: dev.inventory.reseller.localhost:{{port}}
+# The page's calls, on the site host, with no site headers.
+# Without the token they are 403. With it they succeed.
+GET http://127.0.0.1:{{port}}/data/books/list
+Host: dev.shelf.book_club.localhost:{{port}}
+HTTP 403
+[Asserts]
+jsonpath "$.ok" == false
+jsonpath "$.error" == "you do not have access to this resource"
+
+POST http://127.0.0.1:{{port}}/data/books/add
+Host: dev.shelf.book_club.localhost:{{port}}
+Content-Type: application/json
+{"title": "Emma", "author": "Austen"}
+HTTP 403
+[Asserts]
+jsonpath "$.error" == "you do not have access to this resource"
+
+PUT http://127.0.0.1:{{port}}/data/books/update/{{record}}
+Host: dev.shelf.book_club.localhost:{{port}}
+Content-Type: application/json
+{"finished": true}
+HTTP 403
+[Asserts]
+jsonpath "$.error" == "you do not have access to this resource"
+
+POST http://127.0.0.1:{{port}}/data/books/add
+Host: dev.shelf.book_club.localhost:{{port}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"title": "Emma", "author": "Austen"}
+HTTP 201
+[Captures]
+emma: jsonpath "$.data.id"
+[Asserts]
+jsonpath "$.data.fields.title" == "Emma"
+
+PUT http://127.0.0.1:{{port}}/data/books/update/{{emma}}
+Host: dev.shelf.book_club.localhost:{{port}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"finished": true}
 HTTP 200
 [Asserts]
-jsonpath "$.data" count == 1
-jsonpath "$.data[0].fields.sku" == "3001"
+jsonpath "$.data.fields.finished" == true
+jsonpath "$.data.fields.title" == "Emma"
 
-POST http://127.0.0.1:{{port}}/config/version/reseller/inventory
+POST http://127.0.0.1:{{port}}/config/version/book_club/shelf
 Authorization: Bearer {{token}}
 Content-Type: application/json
 {"version": "0.0.1", "from": "0.0.1-dev"}
@@ -315,24 +355,89 @@ HTTP 201
 [Asserts]
 jsonpath "$.data.version" == "0.0.1"
 
-POST http://127.0.0.1:{{port}}/config/site/reseller/inventory
+POST http://127.0.0.1:{{port}}/config/site/book_club/shelf
 Authorization: Bearer {{token}}
 Content-Type: application/json
-{"name": "www", "label": "Public", "version": "0.0.1", "dataset": "dev"}
+{"name": "www", "label": "Shelf", "version": "0.0.1", "dataset": "dev"}
 HTTP 201
 
 GET http://127.0.0.1:{{port}}/
-Host: www.inventory.reseller.localhost:{{port}}
+Host: www.shelf.book_club.localhost:{{port}}
 HTTP 200
 [Asserts]
 body contains "discovery page"
 
-GET http://127.0.0.1:{{port}}/data/parts/list
-Host: www.inventory.reseller.localhost:{{port}}
+# Published site: still members only. The copy assigned no public set.
+GET http://127.0.0.1:{{port}}/data/books/list
+Host: www.shelf.book_club.localhost:{{port}}
+HTTP 403
+[Asserts]
+jsonpath "$.error" == "you do not have access to this resource"
+
+POST http://127.0.0.1:{{port}}/data/books/add
+Host: www.shelf.book_club.localhost:{{port}}
+Content-Type: application/json
+{"title": "Persuasion", "author": "Austen"}
+HTTP 403
+[Asserts]
+jsonpath "$.error" == "you do not have access to this resource"
+
+POST http://127.0.0.1:{{port}}/data/books/add
+Host: www.shelf.book_club.localhost:{{port}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"title": "Persuasion", "author": "Austen"}
+HTTP 201
+[Asserts]
+jsonpath "$.data.fields.title" == "Persuasion"
+
+# Opt in to public read on the draft. Create and update stay false.
+POST http://127.0.0.1:{{port}}/schema/book_club/shelf/0.0.1-dev/permission_set
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{
+  "name": "books_read",
+  "label": "Readers",
+  "collections": [
+    {"collection": "books", "read": true, "create": false, "update": false, "delete": false}
+  ]
+}
+HTTP 201
+[Asserts]
+jsonpath "$.data.collections[0].read" == true
+jsonpath "$.data.collections[0].create" == false
+jsonpath "$.data.collections[0].update" == false
+jsonpath "$.data.collections[0].delete" == false
+
+PUT http://127.0.0.1:{{port}}/schema/book_club/shelf/0.0.1-dev/manifest
+Authorization: Bearer {{token}}
+Content-Type: application/json
+{"public_permission_sets": ["books_read"]}
 HTTP 200
 [Asserts]
-jsonpath "$.data" count == 1
-jsonpath "$.data[0].fields.sku" == "3001"
+jsonpath "$.data.public_permission_sets[0]" == "books_read"
+
+GET http://127.0.0.1:{{port}}/data/books/list
+Host: dev.shelf.book_club.localhost:{{port}}
+HTTP 200
+[Asserts]
+jsonpath "$.data" count == 3
+body contains "Dune"
+
+POST http://127.0.0.1:{{port}}/data/books/add
+Host: dev.shelf.book_club.localhost:{{port}}
+Content-Type: application/json
+{"title": "Emma", "author": "Austen"}
+HTTP 403
+[Asserts]
+jsonpath "$.error" == "you do not have access to this resource"
+
+# The published version was copied before the opt-in, so it stays members only.
+GET http://127.0.0.1:{{port}}/data/books/list
+Host: www.shelf.book_club.localhost:{{port}}
+HTTP 403
+[Asserts]
+jsonpath "$.error" == "you do not have access to this resource"
 
 # Mount check. discovery.rs asserts each of these request lines exists.
 # A body that says "no such endpoint" means the path is not mounted.
@@ -459,6 +564,24 @@ status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/version/x/x/list
+HTTP *
+[Asserts]
+status != 405
+body not contains "no such endpoint"
+
+POST http://127.0.0.1:{{port}}/config/org
+HTTP *
+[Asserts]
+status != 405
+body not contains "no such endpoint"
+
+POST http://127.0.0.1:{{port}}/config/org/x/member
+HTTP *
+[Asserts]
+status != 405
+body not contains "no such endpoint"
+
+POST http://127.0.0.1:{{port}}/config/member/x/x
 HTTP *
 [Asserts]
 status != 405

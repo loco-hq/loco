@@ -1,75 +1,104 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Parts</title>
-</head>
+<head><meta charset="utf-8"><title>Reading list</title></head>
 <body>
 <h1>discovery page</h1>
 <p id="status"></p>
-<ul id="parts"></ul>
-<form id="add">
-<label>SKU <input name="sku" required></label>
-<label>Qty <input name="qty" type="number" required value="1"></label>
-<button type="submit">Add</button>
+<form id="login">
+<label>Handle <input name="username" required></label>
+<label>Password <input name="password" type="password" required></label>
+<button>Log in</button>
+</form>
+<button id="logout" type="button" hidden>Log out</button>
+<ul id="books"></ul>
+<form id="add" hidden>
+<label>Title <input name="title" required></label>
+<label>Author <input name="author" required></label>
+<button>Add</button>
 </form>
 <script>
-const list = document.getElementById("parts");
+const key = "loco_session:same-origin";
+const list = document.getElementById("books");
 const status = document.getElementById("status");
-
+const loginForm = document.getElementById("login");
+const addForm = document.getElementById("add");
+const logoutButton = document.getElementById("logout");
+const token = () => localStorage.getItem(key);
+function headers(json) {
+  const h = {};
+  if (token()) h["Authorization"] = "Bearer " + token();
+  if (json) h["Content-Type"] = "application/json";
+  return h;
+}
+function signedIn(on) {
+  loginForm.hidden = on;
+  addForm.hidden = !on;
+  logoutButton.hidden = !on;
+  if (on) load(); else list.replaceChildren();
+}
+async function call(path, opt) {
+  const sent = token();
+  const res = await fetch(path, opt);
+  const body = await res.json();
+  const carried = opt.headers && opt.headers["Authorization"];
+  if (res.status === 401 && carried && sent === token()) {
+    localStorage.removeItem(key);
+    signedIn(false);
+  }
+  if (!body.ok) status.textContent = body.error || "failed";
+  return body;
+}
 function show(row) {
   const li = document.createElement("li");
-  li.textContent = row.fields.sku + " (" + row.fields.qty + ") ";
+  li.textContent = row.fields.title + " — " + row.fields.author + (row.fields.finished ? " (read)" : "");
   const button = document.createElement("button");
   button.type = "button";
-  button.textContent = "+1";
-  button.addEventListener("click", async () => {
-    const res = await fetch("/data/parts/update/" + row.id, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ qty: Number(row.fields.qty) + 1 })
+  button.textContent = "Read";
+  button.onclick = async () => {
+    const body = await call("/data/books/update/" + row.id, {
+      method: "PUT", headers: headers(true), body: JSON.stringify({ finished: true })
     });
-    const body = await res.json();
-    if (!body.ok) {
-      status.textContent = body.error || "update failed";
-      return;
-    }
-    load();
-  });
+    if (body.ok) load();
+  };
   li.appendChild(button);
   list.appendChild(li);
 }
-
 async function load() {
-  const res = await fetch("/data/parts/list");
-  const body = await res.json();
-  if (!body.ok) {
-    status.textContent = body.error || "list failed";
-    return;
-  }
+  const body = await call("/data/books/list", { headers: headers() });
+  if (!body.ok) return;
   status.textContent = "";
   list.replaceChildren();
-  for (const row of body.data) show(row);
+  body.data.forEach(show);
 }
-
-document.getElementById("add").addEventListener("submit", async (event) => {
+loginForm.onsubmit = async (event) => {
   event.preventDefault();
-  const form = event.currentTarget;
-  const res = await fetch("/data/parts/add", {
+  const body = await call("/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sku: form.sku.value, qty: Number(form.qty.value) })
+    body: JSON.stringify({ username: loginForm.username.value, password: loginForm.password.value })
   });
-  const body = await res.json();
-  if (!body.ok) {
-    status.textContent = body.error || "add failed";
-    return;
-  }
-  form.sku.value = "";
+  if (!body.ok) return;
+  localStorage.setItem(key, body.data.token);
+  status.textContent = "";
+  signedIn(true);
+};
+logoutButton.onclick = async () => {
+  await fetch("/auth/logout", { method: "POST", headers: headers() });
+  localStorage.removeItem(key);
+  status.textContent = "";
+  signedIn(false);
+};
+addForm.onsubmit = async (event) => {
+  event.preventDefault();
+  const body = await call("/data/books/add", {
+    method: "POST", headers: headers(true),
+    body: JSON.stringify({ title: addForm.title.value, author: addForm.author.value })
+  });
+  if (!body.ok) return;
+  addForm.reset();
   load();
-});
-
-load();
+};
+signedIn(!!token());
 </script>
 </body>
 </html>
