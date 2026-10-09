@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Mutex, MutexGuard, RwLock};
 
 use chrono::{DateTime, Duration, Utc};
 use loco_schema_runtime::{is_temp_name, write_file_atomic, Error as StoreError};
@@ -134,17 +134,33 @@ struct StoredProjectMember {
 /// directory fsync failure ([`StoreError::NotDurable`]) still updates the map,
 /// because the rename has already happened and cache and disk must agree, and
 /// the adapter method returns that as [`AuthError::Internal`].
+///
+/// Each map has a writer mutex held across re-read, persist, and the cache
+/// update, and the `RwLock` write is only that update, so a reader never waits
+/// on an fsync. The same split as [`loco_schema_runtime::InstanceStore`]. Two
+/// maps are taken `accounts` then `identities`, and never the other way.
 pub struct LocalAuthAdapter {
     base_dir: PathBuf,
     /// Login of an unknown handle creates a person account. Off unless the
     /// caller asks for it — see [`LocalAuthAdapter::new`].
     auto_create: bool,
     accounts: RwLock<HashMap<String, StoredAccount>>,
+    accounts_writer: Mutex<()>,
     identities: RwLock<HashMap<String, StoredIdentity>>, // handle → identity
-    sessions: RwLock<HashMap<String, StoredSession>>,    // token → session
-    api_keys: RwLock<HashMap<String, StoredApiKey>>,     // id → key
+    identities_writer: Mutex<()>,
+    sessions: RwLock<HashMap<String, StoredSession>>, // token → session
+    sessions_writer: Mutex<()>,
+    api_keys: RwLock<HashMap<String, StoredApiKey>>, // id → key
+    api_keys_writer: Mutex<()>,
     org_members: RwLock<HashMap<(String, String), StoredOrgMember>>, // (org, handle)
+    org_members_writer: Mutex<()>,
     project_members: RwLock<HashMap<(String, String), StoredProjectMember>>, // (project, handle)
+    project_members_writer: Mutex<()>,
+    /// Test seam. The first barrier fires once a read-modify-write has passed
+    /// its slow work and has not yet taken the writer mutex; the second lets
+    /// it continue. Production builds have no field and the wait is a no-op.
+    #[cfg(test)]
+    pause_before_write: Mutex<Option<std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
 }
 
 /// A write that left the new bytes at the target path.
@@ -213,6 +229,12 @@ fn is_temp_entry(path: &Path) -> bool {
         .is_some_and(is_temp_name)
 }
 
+/// Serializes mutations of one map. It guards no data of its own, so a panic
+/// while it was held leaves nothing inconsistent and the poison is ignored.
+fn lock_writer(writer: &Mutex<()>) -> MutexGuard<'_, ()> {
+    writer.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 impl LocalAuthAdapter {
     /// `auto_create` off is the production default. An unknown handle would
     /// otherwise take the `{handle}/*` namespace, because owning the person
@@ -223,11 +245,19 @@ impl LocalAuthAdapter {
             base_dir: base_dir.to_path_buf(),
             auto_create,
             accounts: RwLock::new(HashMap::new()),
+            accounts_writer: Mutex::new(()),
             identities: RwLock::new(HashMap::new()),
+            identities_writer: Mutex::new(()),
             sessions: RwLock::new(HashMap::new()),
+            sessions_writer: Mutex::new(()),
             api_keys: RwLock::new(HashMap::new()),
+            api_keys_writer: Mutex::new(()),
             org_members: RwLock::new(HashMap::new()),
+            org_members_writer: Mutex::new(()),
             project_members: RwLock::new(HashMap::new()),
+            project_members_writer: Mutex::new(()),
+            #[cfg(test)]
+            pause_before_write: Mutex::new(None),
         };
         adapter.load_from_disk().expect("failed to load auth store");
         adapter
@@ -371,21 +401,8 @@ impl LocalAuthAdapter {
         dirname: &str,
         insert: impl Fn(&Self, T),
     ) {
-        let dir = self.base_dir.join(dirname);
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if is_temp_entry(&path) || path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(contents) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if let Ok(value) = serde_json::from_str::<T>(&contents) {
-                insert(self, value);
-            }
+        for value in self.read_json_dir(dirname) {
+            insert(self, value);
         }
     }
 
@@ -413,8 +430,8 @@ impl LocalAuthAdapter {
     }
 
     fn ensure_org(&self, handle: &str) -> Result<(), AuthError> {
-        let mut accounts = self.accounts.write().unwrap();
-        if accounts.contains_key(handle) {
+        let _writer = lock_writer(&self.accounts_writer);
+        if self.accounts.read().unwrap().contains_key(handle) {
             return Ok(());
         }
         let account = StoredAccount {
@@ -423,65 +440,79 @@ impl LocalAuthAdapter {
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         let wrote = self.persist_account(&account)?;
-        accounts.insert(handle.to_string(), account);
+        self.accounts
+            .write()
+            .unwrap()
+            .insert(handle.to_string(), account);
         finish(wrote)
     }
 
+    fn account_path(&self, handle: &str) -> PathBuf {
+        self.base_dir
+            .join("accounts")
+            .join(format!("{handle}.json"))
+    }
+
+    fn identity_path(&self, handle: &str) -> PathBuf {
+        self.base_dir
+            .join("identities")
+            .join(format!("{handle}.json"))
+    }
+
+    fn session_path(&self, token: &str) -> PathBuf {
+        self.base_dir.join("sessions").join(format!("{token}.json"))
+    }
+
+    fn api_key_path(&self, id: &str) -> PathBuf {
+        self.base_dir.join("api_keys").join(format!("{id}.json"))
+    }
+
+    fn org_member_path(&self, org: &str, handle: &str) -> PathBuf {
+        self.base_dir
+            .join("org_members")
+            .join(org)
+            .join(format!("{handle}.json"))
+    }
+
+    fn project_member_path(&self, project_id: &str, handle: &str) -> PathBuf {
+        self.base_dir
+            .join("project_members")
+            .join(project_id)
+            .join(format!("{handle}.json"))
+    }
+
     fn persist_account(&self, account: &StoredAccount) -> Result<Wrote, AuthError> {
-        write_json(
-            &self
-                .base_dir
-                .join("accounts")
-                .join(format!("{}.json", account.handle)),
-            account,
-        )
+        write_json(&self.account_path(&account.handle), account)
     }
 
     fn persist_identity(&self, identity: &StoredIdentity) -> Result<Wrote, AuthError> {
-        write_json(
-            &self
-                .base_dir
-                .join("identities")
-                .join(format!("{}.json", identity.handle)),
-            identity,
-        )
+        write_json(&self.identity_path(&identity.handle), identity)
     }
 
     fn delete_account_file(&self, handle: &str) -> Result<(), AuthError> {
-        remove_json(
-            &self
-                .base_dir
-                .join("accounts")
-                .join(format!("{handle}.json")),
-        )
+        remove_json(&self.account_path(handle))
     }
 
     fn delete_identity_file(&self, handle: &str) -> Result<(), AuthError> {
-        remove_json(
-            &self
-                .base_dir
-                .join("identities")
-                .join(format!("{handle}.json")),
-        )
+        remove_json(&self.identity_path(handle))
     }
 
     fn persist_session(&self, session: &StoredSession) -> Result<Wrote, AuthError> {
-        write_json(
-            &self
-                .base_dir
-                .join("sessions")
-                .join(format!("{}.json", session.token)),
-            session,
-        )
+        write_json(&self.session_path(&session.token), session)
     }
 
     fn delete_session_file(&self, token: &str) -> Result<(), AuthError> {
-        remove_json(&self.base_dir.join("sessions").join(format!("{token}.json")))
+        remove_json(&self.session_path(token))
     }
 
     /// Drop a session from disk and then from the cache. A failed delete
     /// leaves the cache entry, so the next attempt sees the same session.
     fn forget_session(&self, token: &str) -> Result<(), AuthError> {
+        let _writer = lock_writer(&self.sessions_writer);
+        self.forget_session_locked(token)
+    }
+
+    fn forget_session_locked(&self, token: &str) -> Result<(), AuthError> {
         self.delete_session_file(token)?;
         self.sessions.write().unwrap().remove(token);
         Ok(())
@@ -490,6 +521,7 @@ impl LocalAuthAdapter {
     /// Boot-time cleanup: expired sessions never come back, so there is no
     /// reason to carry them in memory or leave their files on disk.
     fn sweep_expired_sessions(&self, now: DateTime<Utc>) -> Result<(), AuthError> {
+        let _writer = lock_writer(&self.sessions_writer);
         let expired: Vec<String> = {
             let sessions = self.sessions.read().unwrap();
             sessions
@@ -499,62 +531,51 @@ impl LocalAuthAdapter {
                 .collect()
         };
         for token in &expired {
-            self.forget_session(token)?;
+            self.forget_session_locked(token)?;
         }
         Ok(())
     }
 
     fn persist_api_key(&self, key: &StoredApiKey) -> Result<Wrote, AuthError> {
-        write_json(
-            &self
-                .base_dir
-                .join("api_keys")
-                .join(format!("{}.json", key.id)),
-            key,
-        )
+        write_json(&self.api_key_path(&key.id), key)
     }
 
     fn persist_org_member(&self, member: &StoredOrgMember) -> Result<Wrote, AuthError> {
-        write_json(
-            &self
-                .base_dir
-                .join("org_members")
-                .join(&member.org)
-                .join(format!("{}.json", member.handle)),
-            member,
-        )
+        write_json(&self.org_member_path(&member.org, &member.handle), member)
     }
 
     fn delete_org_member_file(&self, org: &str, handle: &str) -> Result<(), AuthError> {
-        remove_json(
-            &self
-                .base_dir
-                .join("org_members")
-                .join(org)
-                .join(format!("{handle}.json")),
-        )
+        remove_json(&self.org_member_path(org, handle))
     }
 
     fn persist_project_member(&self, member: &StoredProjectMember) -> Result<Wrote, AuthError> {
         write_json(
-            &self
-                .base_dir
-                .join("project_members")
-                .join(&member.project)
-                .join(format!("{}.json", member.handle)),
+            &self.project_member_path(&member.project, &member.handle),
             member,
         )
     }
 
     fn delete_project_member_file(&self, project_id: &str, handle: &str) -> Result<(), AuthError> {
-        remove_json(
-            &self
-                .base_dir
-                .join("project_members")
-                .join(project_id)
-                .join(format!("{handle}.json")),
-        )
+        remove_json(&self.project_member_path(project_id, handle))
     }
+
+    /// Lets a test delete or rename between password verification and the
+    /// identity write. No-op unless the test installed barriers.
+    #[cfg(test)]
+    fn pause_before_write(&self) {
+        let gates = self
+            .pause_before_write
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone();
+        if let Some(gates) = gates {
+            gates.0.wait();
+            gates.1.wait();
+        }
+    }
+
+    #[cfg(not(test))]
+    fn pause_before_write(&self) {}
 
     fn to_account(account: &StoredAccount) -> Account {
         Account {
@@ -667,19 +688,20 @@ impl LocalAuthAdapter {
         )
     }
 
-    /// Check the name and insert a person under one `accounts` write, the
+    /// Check the name and insert a person under one `accounts` writer, the
     /// same critical section as [`AuthAdapter::create_org`].
     ///
     /// Two files and no transaction. The identity is written first and the
-    /// account second, both while the write guard is held. A crash between
+    /// account second, both while the accounts writer is held. A crash between
     /// them leaves `identities/{handle}.json` and no account file. That
     /// identity grants nothing: the taken-name check and project access key
     /// off the account, and the next create of the handle overwrites the
     /// identity. The reverse order would leave an account that owns
     /// `{handle}/*` and cannot log in.
     ///
-    /// Lock order is `accounts` then `identities`. Callers must not hold
-    /// `identities` and then take `accounts`.
+    /// Lock order is the accounts writer, then the identities writer. Callers
+    /// must not hold the identities writer and then take the accounts writer.
+    /// The map write locks are taken only for the inserts.
     fn insert_person(
         &self,
         handle: &str,
@@ -703,17 +725,21 @@ impl LocalAuthAdapter {
             last_login_at,
         };
 
-        let mut accounts = self.accounts.write().unwrap();
-        if let Some(existing) = accounts.get(handle) {
+        let _accounts = lock_writer(&self.accounts_writer);
+        if let Some(existing) = self.accounts.read().unwrap().get(handle) {
             return Err(conflict(existing.account_type));
         }
+        let _identities = lock_writer(&self.identities_writer);
         let identity_write = self.persist_identity(&identity)?;
         self.identities
             .write()
             .unwrap()
             .insert(handle.to_string(), identity.clone());
         let account_write = self.persist_account(&account)?;
-        accounts.insert(handle.to_string(), account);
+        self.accounts
+            .write()
+            .unwrap()
+            .insert(handle.to_string(), account);
         finish(identity_write)?;
         finish(account_write)?;
         Ok(identity)
@@ -738,19 +764,23 @@ impl LocalAuthAdapter {
     }
 
     fn purge_memberships(&self, handle: &str) -> Result<(), AuthError> {
-        let org_keys: Vec<(String, String)> = {
-            let members = self.org_members.read().unwrap();
-            members
-                .keys()
-                .filter(|(_, h)| h == handle)
-                .cloned()
-                .collect()
-        };
-        for key in &org_keys {
-            self.delete_org_member_file(&key.0, &key.1)?;
-            self.org_members.write().unwrap().remove(key);
+        {
+            let _writer = lock_writer(&self.org_members_writer);
+            let org_keys: Vec<(String, String)> = {
+                let members = self.org_members.read().unwrap();
+                members
+                    .keys()
+                    .filter(|(_, h)| h == handle)
+                    .cloned()
+                    .collect()
+            };
+            for key in &org_keys {
+                self.delete_org_member_file(&key.0, &key.1)?;
+                self.org_members.write().unwrap().remove(key);
+            }
         }
 
+        let _writer = lock_writer(&self.project_members_writer);
         let project_keys: Vec<(String, String)> = {
             let members = self.project_members.read().unwrap();
             members
@@ -789,8 +819,8 @@ impl AuthAdapter for LocalAuthAdapter {
                     return Err(AuthError::InvalidCredentials);
                 }
                 Some(_) => {
-                    // Verify outside the write lock: argon2 is deliberately
-                    // slow, and holding the map would serialize every login.
+                    // Verify outside the writer mutex: argon2 is deliberately
+                    // slow, and holding it would serialize every login.
                     let stored = self
                         .identities
                         .read()
@@ -804,7 +834,18 @@ impl AuthAdapter for LocalAuthAdapter {
                     ) {
                         return Err(AuthError::InvalidCredentials);
                     }
-                    let mut identity = stored;
+                    // A delete or a rename can land during the verify. Re-read
+                    // under the writer and keep that row; a missing row is the
+                    // same `UserNotFound` the write lock used to return.
+                    self.pause_before_write();
+                    let _writer = lock_writer(&self.identities_writer);
+                    let mut identity = self
+                        .identities
+                        .read()
+                        .unwrap()
+                        .get(&credentials.username)
+                        .cloned()
+                        .ok_or(AuthError::UserNotFound)?;
                     identity.last_login_at = Some(now.clone());
                     commit(self.persist_identity(&identity), || {
                         self.identities
@@ -829,6 +870,7 @@ impl AuthAdapter for LocalAuthAdapter {
 
         let token = uuid::Uuid::new_v4().to_string();
         let session = StoredSession::new(token.clone(), identity.id.clone(), issued_at);
+        let _sessions = lock_writer(&self.sessions_writer);
         commit(self.persist_session(&session), || {
             self.sessions
                 .write()
@@ -864,6 +906,7 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn logout(&self, token: &str) -> Result<(), AuthError> {
+        let _writer = lock_writer(&self.sessions_writer);
         if !self.sessions.read().unwrap().contains_key(token) {
             return Err(AuthError::SessionNotFound);
         }
@@ -873,6 +916,7 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn revoke_all_sessions(&self, identity_id: &str) -> Result<(), AuthError> {
+        let _writer = lock_writer(&self.sessions_writer);
         let tokens: Vec<String> = {
             let sessions = self.sessions.read().unwrap();
             sessions
@@ -922,6 +966,7 @@ impl AuthAdapter for LocalAuthAdapter {
         user_id: &str,
         updates: &UpdateUserRequest,
     ) -> Result<AuthUser, AuthError> {
+        let _writer = lock_writer(&self.identities_writer);
         let identity = {
             let identities = self.identities.read().unwrap();
             let mut identity = identities
@@ -956,8 +1001,12 @@ impl AuthAdapter for LocalAuthAdapter {
         // Account file first. A crash before the identity file is removed
         // leaves an identity with no account, which grants nothing. The
         // reverse would leave an account that owns `{handle}/*`.
-        self.delete_account_file(&handle)?;
-        self.accounts.write().unwrap().remove(&handle);
+        {
+            let _accounts = lock_writer(&self.accounts_writer);
+            self.delete_account_file(&handle)?;
+            self.accounts.write().unwrap().remove(&handle);
+        }
+        let _identities = lock_writer(&self.identities_writer);
         self.delete_identity_file(&handle)?;
         self.identities.write().unwrap().remove(&handle);
         Ok(())
@@ -979,6 +1028,7 @@ impl AuthAdapter for LocalAuthAdapter {
             last_used_at: None,
             revoked: false,
         };
+        let _writer = lock_writer(&self.api_keys_writer);
         commit(self.persist_api_key(&stored), || {
             self.api_keys
                 .write()
@@ -1010,6 +1060,7 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn revoke_api_key(&self, identity_id: &str, key_id: &str) -> Result<(), AuthError> {
+        let _writer = lock_writer(&self.api_keys_writer);
         let key = {
             let api_keys = self.api_keys.read().unwrap();
             let key = api_keys
@@ -1060,29 +1111,31 @@ impl AuthAdapter for LocalAuthAdapter {
             return Err(AuthError::InvalidHandle(msg));
         }
         // The creator check, the taken-name check, and the account file share
-        // this write. The file is written before the map insert. The guard is
-        // dropped before the owner row: `add_org_member` takes `accounts`
-        // again, and a failed owner row removes the account so the name can
-        // be retried. A crash between the two leaves an org with no owner.
-        let (account, durability) = {
-            let mut accounts = self.accounts.write().unwrap();
-            let creator_ready = accounts.contains_key(creator_handle)
-                && self.identities.read().unwrap().contains_key(creator_handle);
-            if !creator_ready {
-                return Err(AuthError::UserNotFound);
-            }
-            if accounts.contains_key(handle) {
-                return Err(AuthError::UserAlreadyExists);
-            }
-            let account = StoredAccount {
-                handle: handle.to_string(),
-                account_type: AccountType::Org,
-                created_at: chrono::Utc::now().to_rfc3339(),
-            };
-            let wrote = self.persist_account(&account)?;
-            accounts.insert(handle.to_string(), account.clone());
-            (account, finish(wrote))
+        // this writer. The account file is written before the owner row. The
+        // writer stays held through that row: `add_org_member` takes the org
+        // members writer, not this one. A failed owner row removes the account
+        // so the name can be retried. A crash between the two still leaves an
+        // org with no owner.
+        let _accounts = lock_writer(&self.accounts_writer);
+        let creator_ready = self.accounts.read().unwrap().contains_key(creator_handle)
+            && self.identities.read().unwrap().contains_key(creator_handle);
+        if !creator_ready {
+            return Err(AuthError::UserNotFound);
+        }
+        if self.accounts.read().unwrap().contains_key(handle) {
+            return Err(AuthError::UserAlreadyExists);
+        }
+        let account = StoredAccount {
+            handle: handle.to_string(),
+            account_type: AccountType::Org,
+            created_at: chrono::Utc::now().to_rfc3339(),
         };
+        let wrote = self.persist_account(&account)?;
+        self.accounts
+            .write()
+            .unwrap()
+            .insert(handle.to_string(), account.clone());
+        let durability = finish(wrote);
         match self.add_org_member(handle, creator_handle, OrgRole::Owner) {
             Ok(_) | Err(AuthError::UserAlreadyExists) => {
                 durability.map(|()| Self::to_account(&account))
@@ -1149,6 +1202,7 @@ impl AuthAdapter for LocalAuthAdapter {
                 "project id {project_id} is not account/name"
             )));
         }
+        let _writer = lock_writer(&self.project_members_writer);
         let key = (project_id.to_string(), handle.to_string());
         if self.project_members.read().unwrap().contains_key(&key) {
             return Err(AuthError::UserAlreadyExists);
@@ -1179,6 +1233,8 @@ impl AuthAdapter for LocalAuthAdapter {
         handle: &str,
         role: ProjectRole,
     ) -> Result<ProjectMember, AuthError> {
+        self.pause_before_write();
+        let _writer = lock_writer(&self.project_members_writer);
         let key = (project_id.to_string(), handle.to_string());
         let member = {
             let members = self.project_members.read().unwrap();
@@ -1201,6 +1257,7 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn remove_project_member(&self, project_id: &str, handle: &str) -> Result<(), AuthError> {
+        let _writer = lock_writer(&self.project_members_writer);
         let key = (project_id.to_string(), handle.to_string());
         if !self.project_members.read().unwrap().contains_key(&key) {
             return Err(AuthError::UserNotFound);
@@ -1236,6 +1293,7 @@ impl AuthAdapter for LocalAuthAdapter {
             Some(AccountType::Person) => return Err(AuthError::Unauthorized),
             None => return Err(AuthError::UserNotFound),
         }
+        let _writer = lock_writer(&self.org_members_writer);
         let key = (org.to_string(), handle.to_string());
         if self.org_members.read().unwrap().contains_key(&key) {
             return Err(AuthError::UserAlreadyExists);
@@ -1261,6 +1319,7 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn remove_org_member(&self, org: &str, handle: &str) -> Result<(), AuthError> {
+        let _writer = lock_writer(&self.org_members_writer);
         let key = (org.to_string(), handle.to_string());
         if !self.org_members.read().unwrap().contains_key(&key) {
             return Err(AuthError::UserNotFound);
@@ -2134,14 +2193,121 @@ mod tests {
         }
     }
 
-    fn count_accounts(adapter: &LocalAuthAdapter, handle: &str) -> usize {
+    /// Two barriers. The writer waits on the first after its slow work and
+    /// before its mutex; the test thread does the racing mutation, then both
+    /// pass the second.
+    fn install_pause(
+        adapter: &LocalAuthAdapter,
+    ) -> std::sync::Arc<(std::sync::Barrier, std::sync::Barrier)> {
+        let gates = std::sync::Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+        *adapter.pause_before_write.lock().unwrap() = Some(std::sync::Arc::clone(&gates));
+        gates
+    }
+
+    #[test]
+    fn login_does_not_resurrect_a_deleted_user() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let (dir, adapter) = adapter_without_auto_create();
+        let adapter = Arc::new(adapter);
+        let user = adapter
+            .create_user(&CreateUserRequest {
+                username: "carol".to_string(),
+                name: "Carol".to_string(),
+                password: "secret".to_string(),
+            })
+            .unwrap();
+        let gates = install_pause(&adapter);
+        let logging_in = Arc::clone(&adapter);
+        let join = thread::spawn(move || {
+            logging_in.login(&LoginCredentials {
+                username: "carol".to_string(),
+                password: Some("secret".to_string()),
+            })
+        });
+        gates.0.wait();
+        adapter.delete_user(&user.id).unwrap();
+        gates.1.wait();
+
+        let err = join.join().expect("login thread").unwrap_err();
+        assert!(matches!(err, AuthError::UserNotFound));
+        assert!(!adapter.identities.read().unwrap().contains_key("carol"));
+        assert!(!adapter.accounts.read().unwrap().contains_key("carol"));
+        assert!(adapter.sessions.read().unwrap().is_empty());
+        assert!(!dir.path().join("identities/carol.json").exists());
+        assert!(!dir.path().join("accounts/carol.json").exists());
+    }
+
+    #[test]
+    fn login_keeps_a_rename_that_lands_during_verify() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let (_dir, adapter) = adapter_without_auto_create();
+        let adapter = Arc::new(adapter);
+        let user = adapter
+            .create_user(&CreateUserRequest {
+                username: "carol".to_string(),
+                name: "Carol".to_string(),
+                password: "secret".to_string(),
+            })
+            .unwrap();
+        let gates = install_pause(&adapter);
+        let logging_in = Arc::clone(&adapter);
+        let join = thread::spawn(move || {
+            logging_in.login(&LoginCredentials {
+                username: "carol".to_string(),
+                password: Some("secret".to_string()),
+            })
+        });
+        gates.0.wait();
         adapter
-            .accounts
-            .read()
+            .update_user(
+                &user.id,
+                &UpdateUserRequest {
+                    name: Some("Renamed".to_string()),
+                },
+            )
+            .unwrap();
+        gates.1.wait();
+
+        let session = join.join().expect("login thread").unwrap();
+        assert_eq!(session.user.name, "Renamed");
+        let identity = adapter.identities.read().unwrap()["carol"].clone();
+        assert_eq!(identity.name, "Renamed");
+        assert!(identity.last_login_at.is_some());
+    }
+
+    #[test]
+    fn update_project_member_does_not_resurrect_a_removed_row() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let (dir, adapter) = adapter_without_auto_create();
+        let adapter = Arc::new(adapter);
+        adapter
+            .add_project_member("alice/shop", "bob", ProjectRole::Editor)
+            .unwrap();
+        let gates = install_pause(&adapter);
+        let updating = Arc::clone(&adapter);
+        let join = thread::spawn(move || {
+            updating.update_project_member("alice/shop", "bob", ProjectRole::Developer)
+        });
+        gates.0.wait();
+        adapter.remove_project_member("alice/shop", "bob").unwrap();
+        gates.1.wait();
+
+        let err = join.join().expect("update thread").unwrap_err();
+        assert!(matches!(err, AuthError::UserNotFound));
+        assert!(adapter
+            .list_project_members("alice/shop")
             .unwrap()
-            .values()
-            .filter(|account| account.handle == handle)
-            .count()
+            .is_empty());
+        assert!(!dir
+            .path()
+            .join("project_members/alice/shop/bob.json")
+            .exists());
     }
 
     #[test]
@@ -2172,8 +2338,14 @@ mod tests {
             {
                 let adapter = Arc::clone(&adapter);
                 let barrier = Arc::clone(&barrier);
+                // On main the taken-name check is a read lock dropped before
+                // the argon2 hash. Sleeping only the org threads lets that
+                // check pass and the org insert land inside the hash, so both
+                // creates return Ok. Here the check and the insert share the
+                // accounts writer, taken after the hash.
                 joins.push(thread::spawn(move || {
                     barrier.wait();
+                    thread::sleep(std::time::Duration::from_millis(5));
                     adapter
                         .create_org("sam", "alice")
                         .map(|account| account.account_type)
@@ -2190,7 +2362,6 @@ mod tests {
             }
         }
         assert_eq!(created.len(), 1, "{created:?}");
-        assert_eq!(count_accounts(&adapter, "sam"), 1);
         assert_eq!(
             adapter
                 .accounts
@@ -2210,7 +2381,6 @@ mod tests {
 
         drop(adapter);
         let reloaded = LocalAuthAdapter::new(dir.path(), false);
-        assert_eq!(count_accounts(&reloaded, "sam"), 1);
         assert_eq!(
             reloaded
                 .accounts
@@ -2248,7 +2418,7 @@ mod tests {
                             username: "sam".to_string(),
                             password: Some("secret".to_string()),
                         })
-                        .map(|_| ())
+                        .map(|_| "login")
                 }));
             }
             {
@@ -2256,19 +2426,30 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 joins.push(thread::spawn(move || {
                     barrier.wait();
-                    adapter.create_org("sam", "alice").map(|_| ())
+                    thread::sleep(std::time::Duration::from_millis(5));
+                    adapter.create_org("sam", "alice").map(|_| "org")
                 }));
             }
         }
 
+        let mut org_ok = 0;
+        let mut login_ok = 0;
         for join in joins {
             match join.join().expect("create thread") {
-                Ok(_) => {}
+                Ok("org") => org_ok += 1,
+                Ok("login") => login_ok += 1,
+                Ok(other) => panic!("unexpected ok: {other}"),
                 Err(AuthError::UserAlreadyExists | AuthError::InvalidCredentials) => {}
                 Err(err) => panic!("unexpected create error: {err}"),
             }
         }
-        assert_eq!(count_accounts(&adapter, "sam"), 1);
+        // On main both sides return Ok: the login check has already passed
+        // before the org insert. A later login of the winning person is also
+        // Ok, so the signal is an org create and a login both succeeding.
+        assert!(
+            org_ok == 0 || login_ok == 0,
+            "org_ok={org_ok} login_ok={login_ok}"
+        );
         let kind = adapter
             .accounts
             .read()
@@ -2278,7 +2459,6 @@ mod tests {
             .account_type;
         drop(adapter);
         let reloaded = LocalAuthAdapter::new(dir.path(), true);
-        assert_eq!(count_accounts(&reloaded, "sam"), 1);
         assert_eq!(
             reloaded
                 .accounts
