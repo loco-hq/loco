@@ -214,8 +214,8 @@ fn suite_actions() {
     // declaration points nowhere.
     let upstream_port = start_upstream();
     let upstream = format!("http://127.0.0.1:{upstream_port}");
-    let mut actions = loco_apps::actions::HandlerRegistry::default();
-    actions.register("alice/fixture", "echo", |ctx| async move {
+    let mut actions = loco_apps::actions::ActionRegistry::default();
+    actions.register_action("alice/fixture", "echo", |ctx| async move {
         Ok(serde_json::json!({
             "ran": true,
             "dataset_id": ctx.dataset_id,
@@ -223,7 +223,7 @@ fn suite_actions() {
             "input": ctx.input,
         }))
     });
-    actions.register("alice/pkg", "pull", |ctx| async move { pull(ctx).await });
+    actions.register_action("alice/pkg", "pull", |ctx| async move { pull(ctx).await });
     run_suite_in(
         &suites_dir().join("actions"),
         |_, extensions| {
@@ -237,13 +237,13 @@ fn suite_actions() {
 #[test]
 fn suite_connection_values() {
     // Registered here, not in the server binary. The addresses suite keeps
-    // an empty type-action registry, so `sf_east:set_owner` stays 501.
-    let mut type_actions = loco_apps::integrations::TypeActionRegistry::default();
-    type_actions.register("alice/pkg", "warehouse", "read", |ctx| async move {
+    // an empty action registry, so `sf_east:set_owner` stays 501.
+    let mut actions = loco_apps::actions::ActionRegistry::default();
+    actions.register_type_action("alice/pkg", "warehouse", "read", |ctx| async move {
         read_connection(ctx).await
     });
     run_suite_with(&suites_dir().join("connection_values"), |_, extensions| {
-        extensions.type_actions = type_actions;
+        extensions.actions = actions;
     });
 }
 
@@ -450,9 +450,17 @@ fn read_request(stream: &mut std::net::TcpStream) -> std::io::Result<String> {
 }
 
 async fn read_connection(
-    ctx: loco_apps::integrations::TypeActionContext,
+    ctx: loco_apps::actions::ActionContext,
 ) -> Result<serde_json::Value, loco_apps::actions::ActionFailure> {
-    let integration = ctx.connection.integration.clone();
+    let integration = match &ctx.connection.scope {
+        loco_apps::actions::ConnectionScope::Integration { integration, .. } => integration.clone(),
+        loco_apps::actions::ConnectionScope::Package { .. } => {
+            return Err(loco_apps::actions::ActionFailure::Failed {
+                message: "read was not addressed to an integration".to_string(),
+                diagnostics: Vec::new(),
+            });
+        }
+    };
     let loose = match ctx.secret("license") {
         Ok(value) => serde_json::json!(value),
         Err(err) => serde_json::json!({ "error": err.to_string() }),

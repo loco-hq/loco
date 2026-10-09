@@ -1186,17 +1186,6 @@ impl VersionSchema {
             .collect()
     }
 
-    /// The secret `name` that `owner` declares on the version this view sees.
-    ///
-    /// `name` is bare. A qualified string does not match, and [`Self::split`]
-    /// is not used, so the running project's own `name` is a different secret.
-    pub fn secret_of(&self, owner: &str, name: &str) -> Option<Arc<Secret>> {
-        let version = self.visible_version(owner)?;
-        self.store
-            .secrets()
-            .get(&Secret::to_path(owner, version, name))
-    }
-
     pub fn create_secret(&self, mut input: Secret) -> Result<Arc<Secret>, VersionSchemaError> {
         let _pins = self.write_guard()?;
         self.reject_shared_declaration_name(&input.name, true)?;
@@ -1260,16 +1249,6 @@ impl VersionSchema {
             .into_iter()
             .map(|(_, variable)| variable)
             .collect()
-    }
-
-    /// The variable `name` that `owner` declares on the version this view sees.
-    ///
-    /// Same bare-name rule as [`Self::secret_of`].
-    pub fn variable_of(&self, owner: &str, name: &str) -> Option<Arc<Variable>> {
-        let version = self.visible_version(owner)?;
-        self.store
-            .variables()
-            .get(&Variable::to_path(owner, version, name))
     }
 
     pub fn create_variable(
