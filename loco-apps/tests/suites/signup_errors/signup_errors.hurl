@@ -23,10 +23,13 @@ jsonpath "$.error" == "handle name \"lego-reseller\" must be 1-63 characters of 
 
 # That refusal did not create the account. A second login would succeed
 # if the first signup had stored it, and auto-create is on in this runner.
+# An illegal handle, an org handle, and a wrong password are one body.
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
 {"username": "lego-reseller", "password": "password"}
 HTTP 401
+[Captures]
+denied: body
 [Asserts]
 jsonpath "$.error" == "invalid credentials"
 
@@ -35,7 +38,14 @@ Content-Type: application/json
 {"username": "lego-reseller", "password": "password"}
 HTTP 401
 [Asserts]
-jsonpath "$.error" == "invalid credentials"
+body == "{{denied}}"
+
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{"username": "loco", "password": "password"}
+HTTP 401
+[Asserts]
+body == "{{denied}}"
 
 # 64 characters is over the cap. 63 is the longest handle signup accepts.
 POST http://127.0.0.1:{{port}}/auth/users
@@ -108,14 +118,13 @@ HTTP 409
 jsonpath "$.ok" == false
 jsonpath "$.error" == "user already exists"
 
-# Login of a wrong password stays a failed login.
+# Login of a wrong password stays a failed login, and the same body.
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json
 {"username": "alice", "password": "nope"}
 HTTP 401
 [Asserts]
-jsonpath "$.ok" == false
-jsonpath "$.error" == "invalid credentials"
+body == "{{denied}}"
 
 # A bad login body names the missing field. It is not 401 and not 422.
 POST http://127.0.0.1:{{port}}/auth/login

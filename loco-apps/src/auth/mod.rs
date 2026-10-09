@@ -18,11 +18,13 @@ use crate::server::AppState;
 #[derive(Debug)]
 pub enum AuthError {
     InvalidCredentials,
-    /// A new person handle failed the account-name rule. The string is that
-    /// rule, in the words `http/names.rs` uses, or that `public` is reserved.
-    /// Signup only. A handle already on disk is not re-checked, and inviting
-    /// one does not use this error.
+    /// A handle failed the account-name rule. The string is that rule.
+    /// Signup and org create use the capped sentence from `check_slug`
+    /// (`public` is reserved). Member add uses the charset only, with no
+    /// length cap. Login does not use this error.
     InvalidHandle(String),
+    /// A member handle is well-formed and names no account.
+    UnknownAccount(String),
     SessionExpired,
     SessionNotFound,
     UserNotFound,
@@ -39,6 +41,7 @@ impl fmt::Display for AuthError {
         match self {
             AuthError::InvalidCredentials => write!(f, "invalid credentials"),
             AuthError::InvalidHandle(msg) => write!(f, "{msg}"),
+            AuthError::UnknownAccount(handle) => write!(f, "unknown account: {handle}"),
             AuthError::SessionExpired => write!(f, "session expired"),
             AuthError::SessionNotFound => write!(f, "session not found"),
             AuthError::UserNotFound => write!(f, "user not found"),
@@ -334,6 +337,9 @@ pub fn auth_error_to_response(err: AuthError) -> Response {
             auth_error_response(StatusCode::UNAUTHORIZED, "invalid credentials")
         }
         AuthError::InvalidHandle(msg) => auth_error_response(StatusCode::BAD_REQUEST, &msg),
+        AuthError::UnknownAccount(handle) => {
+            auth_error_response(StatusCode::NOT_FOUND, &format!("unknown account: {handle}"))
+        }
         AuthError::SessionExpired | AuthError::SessionNotFound => {
             auth_error_response(StatusCode::UNAUTHORIZED, &err.to_string())
         }

@@ -11,7 +11,7 @@ use super::{
     CreateUserRequest, LoginCredentials, OrgMember, OrgRole, ProjectMember, ProjectRole,
     UpdateUserRequest, PUBLIC_USERNAME, TEST_PASSWORD,
 };
-use crate::http::names::check_slug;
+use crate::http::names::{check_slug, slug_charset_ok};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct StoredAccount {
@@ -330,6 +330,14 @@ impl LocalAuthAdapter {
         std::fs::write(path, serde_json::to_string_pretty(identity).unwrap()).ok();
     }
 
+    fn delete_account_file(&self, handle: &str) {
+        let _ = std::fs::remove_file(
+            self.base_dir
+                .join("accounts")
+                .join(format!("{handle}.json")),
+        );
+    }
+
     fn delete_identity_files(&self, handle: &str) {
         let _ = std::fs::remove_file(
             self.base_dir
@@ -438,29 +446,29 @@ impl LocalAuthAdapter {
             .map(|a| a.account_type)
     }
 
-    /// Charset of a handle that may be named, with no length cap: non-empty,
-    /// not `public`, no `/`, `[a-z0-9_]` starting with a letter or `_`.
-    /// Member add uses this. A handle already on disk can be longer than
-    /// 63, and inviting it — or making that person the owner of a new org —
-    /// must still succeed. A handle that does not exist yet stays a pending
-    /// invite when it passes.
-    fn handle_charset_ok(handle: &str) -> bool {
-        !handle.is_empty()
-            && handle != PUBLIC_USERNAME
-            && !handle.contains('/')
-            && handle
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
-            && handle
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+    /// Charset of a handle that may be invited, with no length cap.
+    /// `public` is reserved. A hyphen, a leading digit, or an empty name is
+    /// the 400 sentence. A handle longer than 63 is accepted: the cap
+    /// applies when the handle is created, not when it is invited. A
+    /// well-formed handle still has to name an account.
+    fn reject_member_handle(handle: &str) -> Option<String> {
+        if handle == PUBLIC_USERNAME {
+            return Some(format!("handle name {handle:?} is reserved"));
+        }
+        if slug_charset_ok(handle) {
+            return None;
+        }
+        Some(format!(
+            "handle name {handle:?} must be a-z, 0-9, and _, starting with a letter or _"
+        ))
     }
 
-    /// A handle that may be created: the charset above, at most 63
-    /// characters (`http/names.rs`), and not the reserved name `public`.
-    /// Called from `create_user`, `create_org` (the new org handle), and
+    /// A handle that may be created: the slug charset, at most 63 characters
+    /// (`http/names.rs`), and not the reserved name `public`. Called from
+    /// `create_user`, `create_org` (the new org handle), and
     /// `auto_create_person`. Load, login, and member add do not call this.
+    /// `auto_create_person` turns a rejection into `InvalidCredentials`, so
+    /// login does not gain a handle oracle.
     fn is_valid_handle(handle: &str) -> bool {
         Self::reject_handle(handle).is_none()
     }
@@ -904,8 +912,8 @@ impl AuthAdapter for LocalAuthAdapter {
     }
 
     fn create_org(&self, handle: &str, creator_handle: &str) -> Result<Account, AuthError> {
-        if !Self::is_valid_handle(handle) {
-            return Err(AuthError::InvalidCredentials);
+        if let Some(msg) = Self::reject_handle(handle) {
+            return Err(AuthError::InvalidHandle(msg));
         }
         if !self.identities.read().unwrap().contains_key(creator_handle) {
             return Err(AuthError::UserNotFound);
@@ -924,7 +932,15 @@ impl AuthAdapter for LocalAuthAdapter {
             .write()
             .unwrap()
             .insert(handle.to_string(), account.clone());
-        self.add_org_member(handle, creator_handle, OrgRole::Owner)?;
+        // The owner row is the other half of the org. A failure here used
+        // to leave the account with no owner and the name taken.
+        if let Err(err) = self.add_org_member(handle, creator_handle, OrgRole::Owner) {
+            self.accounts.write().unwrap().remove(handle);
+            self.delete_account_file(handle);
+            return Err(AuthError::Internal(format!(
+                "could not record the creator as owner: {err}"
+            )));
+        }
         Ok(Self::to_account(&account))
     }
 
@@ -972,8 +988,16 @@ impl AuthAdapter for LocalAuthAdapter {
         handle: &str,
         role: ProjectRole,
     ) -> Result<ProjectMember, AuthError> {
-        if !Self::handle_charset_ok(handle) || project_id.split_once('/').is_none() {
-            return Err(AuthError::InvalidCredentials);
+        if let Some(msg) = Self::reject_member_handle(handle) {
+            return Err(AuthError::InvalidHandle(msg));
+        }
+        if project_id.split_once('/').is_none() {
+            return Err(AuthError::Internal(format!(
+                "project id {project_id} is not account/name"
+            )));
+        }
+        if self.account_type(handle).is_none() {
+            return Err(AuthError::UnknownAccount(handle.to_string()));
         }
         let key = (project_id.to_string(), handle.to_string());
         if self.project_members.read().unwrap().contains_key(&key) {
@@ -1051,13 +1075,19 @@ impl AuthAdapter for LocalAuthAdapter {
         handle: &str,
         role: OrgRole,
     ) -> Result<OrgMember, AuthError> {
-        if !Self::handle_charset_ok(handle) || !Self::handle_charset_ok(org) {
-            return Err(AuthError::InvalidCredentials);
+        if let Some(msg) = Self::reject_member_handle(handle) {
+            return Err(AuthError::InvalidHandle(msg));
+        }
+        if let Some(msg) = Self::reject_member_handle(org) {
+            return Err(AuthError::InvalidHandle(msg));
         }
         match self.account_type(org) {
             Some(AccountType::Org) => {}
             Some(AccountType::Person) => return Err(AuthError::Unauthorized),
             None => return Err(AuthError::UserNotFound),
+        }
+        if self.account_type(handle).is_none() {
+            return Err(AuthError::UnknownAccount(handle.to_string()));
         }
         let key = (org.to_string(), handle.to_string());
         if self.org_members.read().unwrap().contains_key(&key) {
@@ -1508,6 +1538,13 @@ mod tests {
             .add_org_member("acme", "bob", OrgRole::Member)
             .unwrap();
         adapter
+            .create_user(&CreateUserRequest {
+                username: "carol".to_string(),
+                name: "Carol".to_string(),
+                password: TEST_PASSWORD.to_string(),
+            })
+            .unwrap();
+        adapter
             .add_project_member("acme/_", "carol", ProjectRole::Developer)
             .unwrap();
 
@@ -1557,14 +1594,120 @@ mod tests {
     }
 
     #[test]
-    fn invite_unknown_handle_is_pending() {
+    fn invite_unknown_handle_is_not_a_member() {
         let (_dir, adapter) = adapter();
-        let member = adapter
+        adapter.create_org("acme", "alice").unwrap();
+
+        let missing = adapter
             .add_project_member("alice/testapp", "carol", ProjectRole::Editor)
+            .unwrap_err();
+        assert!(matches!(missing, AuthError::UnknownAccount(handle) if handle == "carol"));
+        assert!(adapter
+            .list_project_members("alice/testapp")
+            .unwrap()
+            .is_empty());
+
+        let illegal = adapter
+            .add_project_member("alice/testapp", "bad-handle", ProjectRole::Editor)
+            .unwrap_err();
+        assert!(
+            matches!(illegal, AuthError::InvalidHandle(msg) if msg.contains("bad-handle") && !msg.contains("1-63"))
+        );
+
+        let long = "c".repeat(64);
+        let unknown_long = adapter
+            .add_org_member("acme", &long, OrgRole::Member)
+            .unwrap_err();
+        assert!(matches!(unknown_long, AuthError::UnknownAccount(handle) if handle == long));
+
+        let reserved = adapter
+            .add_org_member("acme", PUBLIC_USERNAME, OrgRole::Member)
+            .unwrap_err();
+        assert!(matches!(reserved, AuthError::InvalidHandle(msg) if msg.contains("reserved")));
+
+        let member = adapter
+            .add_project_member("alice/testapp", "bob", ProjectRole::Editor)
             .unwrap();
-        assert!(member.pending);
-        let listed = adapter.list_project_members("alice/testapp").unwrap();
-        assert!(listed.iter().any(|m| m.handle == "carol" && m.pending));
+        assert!(!member.pending);
+    }
+
+    #[test]
+    fn create_org_rejects_illegal_handle_and_stores_nothing() {
+        let (dir, adapter) = adapter();
+        let err = adapter.create_org("my-org", "alice").unwrap_err();
+        assert!(
+            matches!(err, AuthError::InvalidHandle(msg) if msg.contains("my-org") && msg.contains("1-63"))
+        );
+        assert!(!adapter.accounts.read().unwrap().contains_key("my-org"));
+        assert!(!dir.path().join("accounts/my-org.json").exists());
+    }
+
+    #[test]
+    fn create_org_removes_the_org_when_the_creator_cannot_be_owner() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("accounts")).unwrap();
+        std::fs::create_dir_all(dir.path().join("identities")).unwrap();
+        std::fs::write(
+            dir.path().join("accounts/lego-reseller.json"),
+            r#"{"handle":"lego-reseller","type":"person","created_at":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("identities/lego-reseller.json"),
+            r#"{"id":"legacy","handle":"lego-reseller","name":"Legacy","password":"password","created_at":"2020-01-01T00:00:00Z","last_login_at":null}"#,
+        )
+        .unwrap();
+        let adapter = LocalAuthAdapter::with_auto_create(dir.path(), false);
+
+        let err = adapter.create_org("acme", "lego-reseller").unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("could not record the creator as owner"),
+            "{message}"
+        );
+        assert!(matches!(err, AuthError::Internal(_)));
+        assert!(!adapter.accounts.read().unwrap().contains_key("acme"));
+        assert!(!dir.path().join("accounts/acme.json").exists());
+        assert!(adapter.list_org_members("acme").unwrap().is_empty());
+        assert!(adapter
+            .accounts
+            .read()
+            .unwrap()
+            .contains_key("lego-reseller"));
+    }
+
+    fn assert_invalid_credentials(
+        adapter: &LocalAuthAdapter,
+        username: &str,
+        password: Option<&str>,
+    ) {
+        let err = adapter
+            .login(&LoginCredentials {
+                username: username.to_string(),
+                password: password.map(str::to_string),
+            })
+            .unwrap_err();
+        let message = err.to_string();
+        assert_eq!(message, "invalid credentials", "{username}");
+        assert!(matches!(err, AuthError::InvalidCredentials));
+    }
+
+    #[test]
+    fn login_failures_are_one_error() {
+        let (_dir, off) = adapter_without_auto_create();
+        assert_invalid_credentials(&off, "alice", Some("nope"));
+        assert_invalid_credentials(&off, "nobody", Some(TEST_PASSWORD));
+        assert_invalid_credentials(&off, "loco", Some(TEST_PASSWORD));
+        assert_invalid_credentials(&off, "lego-reseller", Some(TEST_PASSWORD));
+        assert!(!off.accounts.read().unwrap().contains_key("nobody"));
+        assert!(!off.accounts.read().unwrap().contains_key("lego-reseller"));
+
+        // Auto-create still refuses an illegal handle as invalid credentials
+        // and does not store it. An org handle is the same refusal.
+        let (_dir, on) = adapter();
+        assert_invalid_credentials(&on, "lego-reseller", Some(TEST_PASSWORD));
+        assert!(!on.accounts.read().unwrap().contains_key("lego-reseller"));
+        assert_invalid_credentials(&on, "loco", Some(TEST_PASSWORD));
     }
 
     #[test]
