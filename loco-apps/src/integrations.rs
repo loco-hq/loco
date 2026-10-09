@@ -226,11 +226,17 @@ pub(crate) async fn dispatch_type_action(
             name: action.name().to_string(),
         };
     };
+    // Pending #120: the handler still holds the raw adapter. The connection
+    // reads variables through the lake store on that adapter, the same rows
+    // `AppState::variables` stores.
+    let variables = Arc::new(crate::values::LakeVariableStore::new(Arc::clone(
+        &deps.data,
+    )));
     let connection = Connection::new(
         dataset_id.to_string(),
         spec,
         deps.secrets,
-        deps.data.clone(),
+        variables,
         deps.http,
     );
     let missing = match connection.missing_required() {
@@ -353,7 +359,8 @@ mod tests {
     use crate::http::version_schema::{AddressResolution, VersionSchema};
     use crate::validation::kind;
     use crate::values::{
-        put_variable, KeyStatus, LakeSecretStore, SecretError, SecretMeta, SecretStore,
+        KeyStatus, LakeSecretStore, LakeVariableStore, SecretError, SecretMeta, SecretStore,
+        VariableStore,
     };
     use crate::{
         Integration, IntegrationAction, IntegrationSecret, IntegrationType, IntegrationVariable,
@@ -646,7 +653,9 @@ mod tests {
             .put(DATASET, "alice/pkg.store:token", "store-token")
             .unwrap();
         for id in ["sf_east:lane", "sf_west:lane", "alice/pkg.store:lane"] {
-            put_variable(fixture.data.as_ref(), DATASET, id, "1").unwrap();
+            LakeVariableStore::new(std::sync::Arc::clone(&fixture.data))
+                .set(DATASET, id, "1")
+                .unwrap();
         }
 
         ran.store(false, Ordering::SeqCst);
@@ -696,7 +705,9 @@ mod tests {
             .secrets
             .put(DATASET, "sf_east:consumer_key", "east-key")
             .unwrap();
-        put_variable(fixture.data.as_ref(), DATASET, "sf_east:region", "").unwrap();
+        LakeVariableStore::new(std::sync::Arc::clone(&fixture.data))
+            .set(DATASET, "sf_east:region", "")
+            .unwrap();
         let outcome = run(
             &fixture,
             &registry,
@@ -830,7 +841,9 @@ mod tests {
             .secrets
             .put(DATASET, "sf_east:token", "east-token")
             .unwrap();
-        put_variable(fixture.data.as_ref(), DATASET, "sf_east:lane", "1").unwrap();
+        LakeVariableStore::new(std::sync::Arc::clone(&fixture.data))
+            .set(DATASET, "sf_east:lane", "1")
+            .unwrap();
         let outcome = run(
             &fixture,
             &registry,

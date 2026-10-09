@@ -13,23 +13,25 @@ use crate::http::host;
 use crate::integrations::{SourceRegistry, TypeActionRegistry};
 use crate::seed;
 use crate::source::LakeSource;
-use crate::values::{KeyStatus, LakeSecretStore, SecretStore};
+use crate::values::{KeyStatus, LakeSecretStore, LakeVariableStore, SecretStore, VariableStore};
 use crate::{Bundle, Project, SchemaStore, Site};
 
 pub struct AppState {
-    /// Shared with [`crate::values::LakeSecretStore`]. Secret and variable
-    /// rows live in this lake, under `$secrets` and `$variables`.
-    /// `delete_dataset` stays here. Record verbs go through [`Self::lake`].
-    pub data_adapter: Arc<dyn DataAdapter>,
     /// Lake collections as a [`crate::source::CollectionSource`]. `/data` and
     /// `/data/query` call this for ordinary collections, and the same trait
     /// for an integration collection's registered source.
+    /// [`LakeSource::purge_dataset`] removes a dataset's rows after the
+    /// secret and variable stores. [`LakeSource::adapter`] is the raw adapter
+    /// action handlers still take, pending #120.
     pub lake: Arc<LakeSource>,
     pub auth_adapter: Box<dyn AuthAdapter>,
     pub schema: Arc<SchemaStore>,
     /// Plaintext trait. The lake impl encrypts. Handlers clone this `Arc`.
     /// See `crate::values`.
     pub secrets: Arc<dyn SecretStore>,
+    /// Plaintext. The lake impl stores `$variables`. Handlers clone this `Arc`.
+    /// See `crate::values`.
+    pub variables: Arc<dyn VariableStore>,
     /// Shared by action handlers. No proxy. A redirect that changes scheme,
     /// host, or port is not followed. See [`crate::actions::http_client`].
     pub http: reqwest::Client,
@@ -102,7 +104,7 @@ pub fn build_app(config: &Config, extensions: Extensions) -> Router {
         KeyStatus::Ready(_) => {}
     }
 
-    let data_adapter: Arc<dyn DataAdapter> =
+    let adapter: Arc<dyn DataAdapter> =
         Arc::from(config.lake.open().unwrap_or_else(|err| panic!("{err}")));
     match &config.lake {
         LakeConfig::Memory => println!("Using in-memory adapter"),
@@ -110,22 +112,23 @@ pub fn build_app(config: &Config, extensions: Extensions) -> Router {
             println!("Using SQLite adapter ({})", path.display());
         }
     }
-    let lake = Arc::new(LakeSource::new(data_adapter.clone()));
+    let lake = Arc::new(LakeSource::new(Arc::clone(&adapter)));
     let secrets: Arc<dyn SecretStore> = Arc::new(LakeSecretStore::new(
-        data_adapter.clone(),
+        Arc::clone(&adapter),
         config.secret_key.clone(),
     ));
+    let variables: Arc<dyn VariableStore> = Arc::new(LakeVariableStore::new(adapter));
     let http = crate::actions::http_client();
     let auth_adapter = config.auth.open();
     warn_projects_without_account(&schema, auth_adapter.as_ref());
     let default_site = resolve_default_site(&schema, config.default_site.as_deref());
 
     let state = Arc::new(AppState {
-        data_adapter,
         lake,
         auth_adapter,
         schema,
         secrets,
+        variables,
         http,
         default_site,
         actions: extensions.actions,

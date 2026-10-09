@@ -3,8 +3,10 @@
 //! The lake implements it ([`LakeSource`]) by calling the synchronous
 //! [`loco_lake::DataAdapter`] and finishing that call before the future
 //! yields, so the adapter lock is not held across an `.await`. An integration
-//! source awaits HTTP on the request task. `delete_dataset` is not a
-//! collection verb and stays on the adapter.
+//! source awaits HTTP on the request task. [`LakeSource::purge_dataset`] is
+//! not a collection verb: dataset delete calls the secret store and the
+//! variable store first, then this. [`LakeSource::adapter`] is the raw
+//! adapter action handlers still take, pending #120.
 //!
 //! A source declares what it will do. A verb, filter, order, limit, or cursor
 //! it does not declare is an error, never a widened or truncated page.
@@ -303,6 +305,19 @@ pub struct LakeSource {
 impl LakeSource {
     pub fn new(adapter: Arc<dyn DataAdapter>) -> Self {
         Self { adapter }
+    }
+
+    /// The raw adapter. Action handlers take this so they can patch records.
+    /// Pending #120. Nothing else in `handlers/` calls it.
+    pub(crate) fn adapter(&self) -> Arc<dyn DataAdapter> {
+        Arc::clone(&self.adapter)
+    }
+
+    /// Remove every lake row for `dataset_id`, including `$secrets` and
+    /// `$variables`. Dataset purge calls the stores first, so a store that
+    /// is not the lake is cleaned up on the same path. Not a collection verb.
+    pub(crate) fn purge_dataset(&self, dataset_id: &str) -> Result<(), loco_lake::Error> {
+        self.adapter.delete_dataset(dataset_id)
     }
 }
 

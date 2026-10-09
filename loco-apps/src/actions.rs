@@ -36,7 +36,7 @@ use serde_json::Map;
 use crate::auth::AuthUser;
 use crate::http::version_schema::{ConnectionDeclarations, VersionSchema};
 use crate::validation::{kind, validate_action_input, Diagnostic, ValidationReport};
-use crate::values::{get_variable, list_variables, SecretError, SecretStore};
+use crate::values::{with_default, LakeVariableStore, SecretError, SecretStore, VariableStore};
 
 /// TCP connect budget for one outbound call.
 pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -170,9 +170,9 @@ impl From<ConfigReadError> for ActionFailure {
 ///
 /// `secret` and `variable` read that integration's rows on [`Self::dataset_id`]
 /// and nothing else. A loose declaration of the same bare name, and another
-/// integration's row, are not returned. The secret store and the lake adapter
-/// stay private: a collection source receives this connection, not every secret on
-/// the dataset and not [`DataAdapter`].
+/// integration's row, are not returned. The secret store and the variable
+/// store stay private: a collection source receives this connection, not
+/// every value on the dataset.
 #[derive(Clone)]
 pub struct Connection {
     pub dataset_id: String,
@@ -181,7 +181,7 @@ pub struct Connection {
     /// `{account}/{project}.{name}` for a dependency's (`alice/pkg.store`).
     pub integration: String,
     secrets: Arc<dyn SecretStore>,
-    data: Arc<dyn DataAdapter>,
+    variables: Arc<dyn VariableStore>,
     /// Canonical type reference from the view that built this connection.
     type_ref: String,
     secret_decls: Vec<crate::http::version_schema::ConnectionSecretDecl>,
@@ -192,21 +192,21 @@ pub struct Connection {
 impl Connection {
     /// Build a connection for one integration.
     ///
-    /// `spec` is that integration's declarations. `secrets`, `data`, and
+    /// `spec` is that integration's declarations. `secrets`, `variables`, and
     /// `http` are what the reads use. A source builds one the same way a
     /// type action does.
     pub(crate) fn new(
         dataset_id: String,
         spec: ConnectionDeclarations,
         secrets: Arc<dyn SecretStore>,
-        data: Arc<dyn DataAdapter>,
+        variables: Arc<dyn VariableStore>,
         http: reqwest::Client,
     ) -> Self {
         Self {
             dataset_id,
             integration: spec.integration,
             secrets,
-            data,
+            variables,
             type_ref: spec.type_ref,
             secret_decls: spec.secrets,
             variable_decls: spec.variables,
@@ -243,13 +243,11 @@ impl Connection {
         let Some(decl) = self.variable_decls.iter().find(|decl| decl.name == name) else {
             return Err(self.undeclared("variable", name));
         };
-        match get_variable(
-            self.data.as_ref(),
-            &self.dataset_id,
-            &self.row_id(&decl.name),
-        ) {
-            Ok(Some(value)) => Ok(Some(value)),
-            Ok(None) => Ok(non_empty(&decl.default_value)),
+        match self
+            .variables
+            .get(&self.dataset_id, &self.row_id(&decl.name))
+        {
+            Ok(stored) => Ok(with_default(stored, &decl.default_value)),
             Err(err) => Err(ConfigReadError::Failed(err.to_string())),
         }
     }
@@ -305,8 +303,10 @@ impl Connection {
             .collect();
         variables.sort_by(|a, b| a.name.cmp(&b.name));
         if !variables.is_empty() {
-            let stored =
-                list_variables(self.data.as_ref(), &self.dataset_id).map_err(lake_failure)?;
+            let stored = self
+                .variables
+                .list(&self.dataset_id)
+                .map_err(variable_failure)?;
             for variable in variables {
                 let set = stored
                     .iter()
@@ -412,9 +412,11 @@ impl ActionContext {
             });
         };
         let id = self.schema.reference(&self.owner, decl.name());
-        match get_variable(self.data.as_ref(), &self.dataset_id, &id) {
-            Ok(Some(value)) => Ok(Some(value)),
-            Ok(None) => Ok(non_empty(decl.default())),
+        // Pending #120: the handler still holds the raw adapter. Variable
+        // rows are the lake store on that adapter, the same rows
+        // `AppState::variables` stores.
+        match LakeVariableStore::new(Arc::clone(&self.data)).get(&self.dataset_id, &id) {
+            Ok(stored) => Ok(with_default(stored, decl.default())),
             Err(err) => Err(ConfigReadError::Failed(err.to_string())),
         }
     }
@@ -585,7 +587,11 @@ fn missing_configuration(
     variables.retain(|variable| variable.required());
     variables.sort_by(|a, b| a.name().cmp(b.name()));
     if !variables.is_empty() {
-        let stored = list_variables(deps.data.as_ref(), dataset_id).map_err(lake_failure)?;
+        // Same adapter the handler holds (pending #120). The list is the
+        // lake variable store on it.
+        let stored = LakeVariableStore::new(Arc::clone(&deps.data))
+            .list(dataset_id)
+            .map_err(variable_failure)?;
         for variable in variables {
             let id = schema.reference(owner, variable.name());
             if stored.iter().any(|row| row.name == id) || !variable.default().is_empty() {
@@ -616,18 +622,10 @@ fn secret_failure(err: SecretError) -> ActionFailure {
     }
 }
 
-fn lake_failure(err: loco_lake::Error) -> ActionFailure {
+fn variable_failure(err: crate::values::VariableError) -> ActionFailure {
     ActionFailure::Failed {
         message: err.to_string(),
         diagnostics: Vec::new(),
-    }
-}
-
-fn non_empty(value: &str) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
     }
 }
 
@@ -695,7 +693,7 @@ mod tests {
 
     use super::*;
     use crate::validation::kind;
-    use crate::values::{put_variable, KeyStatus, LakeSecretStore, SecretMeta};
+    use crate::values::{KeyStatus, LakeSecretStore, LakeVariableStore, SecretMeta, VariableStore};
     use crate::{Action, ActionParam, ActionParamOption, Manifest, SchemaStore, Secret, Variable};
 
     const PROJECT: &str = "ben/crm";
@@ -1146,7 +1144,9 @@ mod tests {
         assert_eq!(messages(&outcome), vec!["variable 'region' is not set"]);
         assert!(!ran.load(Ordering::SeqCst));
 
-        put_variable(world.data.as_ref(), STORE_DATASET, "alice/pkg.region", "").unwrap();
+        LakeVariableStore::new(Arc::clone(&world.data))
+            .set(STORE_DATASET, "alice/pkg.region", "")
+            .unwrap();
         let present: Arc<dyn SecretStore> = Arc::new(ListOnly {
             names: vec!["alice/pkg.token".into()],
         });
@@ -1220,7 +1220,9 @@ mod tests {
             .secrets
             .put(STORE_DATASET, "alice/pkg.token", "")
             .unwrap();
-        put_variable(world.data.as_ref(), STORE_DATASET, "alice/pkg.region", "eu").unwrap();
+        LakeVariableStore::new(Arc::clone(&world.data))
+            .set(STORE_DATASET, "alice/pkg.region", "eu")
+            .unwrap();
 
         let store_schema = world.store_schema();
         let outcome = dispatch_pull(
@@ -1246,13 +1248,13 @@ mod tests {
             .secrets
             .put(STORE_DATASET, "sf_east:token", "connection-token")
             .unwrap();
-        put_variable(
-            world.data.as_ref(),
-            STORE_DATASET,
-            "alice/pkg.upstream",
-            "http://127.0.0.1:9/replaced",
-        )
-        .unwrap();
+        LakeVariableStore::new(Arc::clone(&world.data))
+            .set(
+                STORE_DATASET,
+                "alice/pkg.upstream",
+                "http://127.0.0.1:9/replaced",
+            )
+            .unwrap();
         let outcome = dispatch_pull(
             &store_schema,
             &world,
@@ -1282,7 +1284,9 @@ mod tests {
 
         // The package's own site reads the package dataset. The installer's
         // row is a different dataset and is not visible here.
-        put_variable(world.data.as_ref(), PKG_DATASET, "region", "pkg-region").unwrap();
+        LakeVariableStore::new(Arc::clone(&world.data))
+            .set(PKG_DATASET, "region", "pkg-region")
+            .unwrap();
         let package_schema = world.package_schema();
         let outcome = dispatch_pull(
             &package_schema,
@@ -1312,7 +1316,9 @@ mod tests {
             .secrets
             .put(STORE_DATASET, "alice/pkg.token", "installer-token")
             .unwrap();
-        put_variable(world.data.as_ref(), STORE_DATASET, "alice/pkg.region", "eu").unwrap();
+        LakeVariableStore::new(Arc::clone(&world.data))
+            .set(STORE_DATASET, "alice/pkg.region", "eu")
+            .unwrap();
         let missing: Arc<dyn SecretStore> =
             Arc::new(LakeSecretStore::new(world.data.clone(), KeyStatus::Missing));
         let mut registry = HandlerRegistry::default();

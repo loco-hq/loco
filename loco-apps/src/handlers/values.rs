@@ -95,7 +95,7 @@ async fn list_variables(
 ) -> Response {
     match scope
         .config
-        .list_variable_values(state.data_adapter.as_ref(), &dataset)
+        .list_variable_values(state.variables.as_ref(), &dataset)
     {
         Ok(rows) => ApiResponse::success(rows).into_response(),
         Err(err) => value_error_to_response(err),
@@ -110,7 +110,7 @@ async fn put_variable(
 ) -> Response {
     match scope
         .config
-        .set_variable_value(state.data_adapter.as_ref(), &dataset, &name, &body.value)
+        .set_variable_value(state.variables.as_ref(), &dataset, &name, &body.value)
     {
         Ok(view) => ApiResponse::success(view).into_response(),
         Err(err) => value_error_to_response(err),
@@ -124,7 +124,7 @@ async fn delete_variable(
 ) -> Response {
     match scope
         .config
-        .delete_variable_value(state.data_adapter.as_ref(), &dataset, &name)
+        .delete_variable_value(state.variables.as_ref(), &dataset, &name)
     {
         Ok(()) => ApiResponse::success("deleted").into_response(),
         Err(err) => value_error_to_response(err),

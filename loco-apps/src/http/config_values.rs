@@ -23,19 +23,16 @@ use std::sync::MutexGuard;
 
 use serde::Serialize;
 
-use loco_lake::DataAdapter;
-
 use super::project_config::lock_pins;
 use super::project_config::ProjectConfig;
 use super::version_schema::parse_address;
 use super::version_schema::ConnectionDeclarations;
 use super::version_schema::VersionSchema;
 use crate::values::check_name;
-use crate::values::delete_variable;
-use crate::values::list_variables;
-use crate::values::put_variable;
 use crate::values::SecretError;
 use crate::values::SecretStore;
+use crate::values::VariableError;
+use crate::values::VariableStore;
 use crate::Secret;
 use crate::Variable;
 
@@ -199,11 +196,13 @@ impl ProjectConfig {
 
     pub fn list_variable_values(
         &self,
-        data: &dyn DataAdapter,
+        variables: &dyn VariableStore,
         dataset: &str,
     ) -> Result<Vec<VariableValueView>, ValueError> {
         self.require_dataset(dataset)?;
-        let stored = list_variables(data, &self.dataset_id(dataset)).map_err(ValueError::Lake)?;
+        let stored = variables
+            .list(&self.dataset_id(dataset))
+            .map_err(variable_err)?;
         let mut rows = Vec::new();
         for decl in self.pinned_declarations(dataset, Kind::Variable) {
             let stored_as = value_id(&self.project_id(), &decl);
@@ -286,7 +285,7 @@ impl ProjectConfig {
 
     pub fn set_variable_value(
         &self,
-        data: &dyn DataAdapter,
+        variables: &dyn VariableStore,
         dataset: &str,
         name: &str,
         value: &str,
@@ -294,8 +293,9 @@ impl ProjectConfig {
         let _pins = self.pin_dataset(dataset)?;
         let decl = self.require_declaration(name, Kind::Variable)?;
         let stored_as = value_id(&self.project_id(), &decl);
-        let record = put_variable(data, &self.dataset_id(dataset), &stored_as, value)
-            .map_err(|err| lake_write_err(err, "variable", name))?;
+        let record = variables
+            .set(&self.dataset_id(dataset), &stored_as, value)
+            .map_err(variable_err)?;
         Ok(VariableValueView {
             name: decl.name,
             project: decl.project,
@@ -309,15 +309,20 @@ impl ProjectConfig {
 
     pub fn delete_variable_value(
         &self,
-        data: &dyn DataAdapter,
+        variables: &dyn VariableStore,
         dataset: &str,
         name: &str,
     ) -> Result<(), ValueError> {
         let _pins = self.pin_dataset(dataset)?;
         let stored_as = canonical_delete_name(&self.project_id(), name);
         check_name(&stored_as).map_err(ValueError::InvalidName)?;
-        delete_variable(data, &self.dataset_id(dataset), &stored_as)
-            .map_err(|err| lake_write_err(err, "variable", name))
+        match variables.delete(&self.dataset_id(dataset), &stored_as) {
+            Ok(()) => Ok(()),
+            Err(VariableError::NotFound) => Err(ValueError::NotFound(format!(
+                "variable value not found: {name}"
+            ))),
+            Err(err) => Err(variable_err(err)),
+        }
     }
 
     fn pin_dataset(&self, dataset: &str) -> Result<MutexGuard<'static, ()>, ValueError> {
@@ -467,6 +472,14 @@ impl ProjectConfig {
     }
 }
 
+fn variable_err(err: VariableError) -> ValueError {
+    match err {
+        VariableError::InvalidName(msg) => ValueError::InvalidName(msg),
+        VariableError::NotFound => ValueError::NotFound("variable value not found".to_string()),
+        VariableError::Lake(err) => ValueError::Lake(err),
+    }
+}
+
 fn secret_err(err: SecretError) -> ValueError {
     match err {
         SecretError::Unavailable(msg) => ValueError::Unavailable(msg),
@@ -474,21 +487,6 @@ fn secret_err(err: SecretError) -> ValueError {
         SecretError::NotFound => ValueError::NotFound("secret value not found".to_string()),
         SecretError::Failed(msg) => ValueError::Lake(loco_lake::Error::Internal(msg)),
         SecretError::Lake(err) => ValueError::Lake(err),
-    }
-}
-
-/// A lake `Internal` whose text is `invalid config value name` is the name
-/// check inside the variable helpers. Everything else is a real lake error.
-/// `NotFound` is the missing-value 404.
-fn lake_write_err(err: loco_lake::Error, noun: &str, name: &str) -> ValueError {
-    match err {
-        loco_lake::Error::NotFound => {
-            ValueError::NotFound(format!("{noun} value not found: {name}"))
-        }
-        loco_lake::Error::Internal(msg) if msg.starts_with("invalid config value name") => {
-            ValueError::InvalidName(msg)
-        }
-        other => ValueError::Lake(other),
     }
 }
 

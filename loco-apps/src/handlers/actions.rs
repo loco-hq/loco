@@ -98,8 +98,10 @@ async fn run_action(
         return resp;
     }
     let dataset_id = scope.dataset_id();
+    // Pending #120: action handlers still receive the raw `DataAdapter` so
+    // they can patch records. `LakeSource::adapter` is that one path.
     let deps = HandlerDeps {
-        data: state.data_adapter.clone(),
+        data: state.lake.adapter(),
         secrets: state.secrets.clone(),
         http: state.http.clone(),
     };

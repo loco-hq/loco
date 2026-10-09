@@ -211,8 +211,9 @@ impl ProjectConfig {
     ///
     /// `purge` is called with that dataset's name before its schema row is
     /// removed. The handler's purge deletes the dataset's secrets
-    /// (`SecretStore::delete_dataset`) and then its lake records. A purge
-    /// failure leaves the row in place.
+    /// (`SecretStore::delete_dataset`), then its variables
+    /// (`VariableStore::delete_dataset`), then its lake records
+    /// (`LakeSource::purge_dataset`). A purge failure leaves the row in place.
     ///
     /// Every store is attempted even when an earlier one fails, and the
     /// error names every key that could not be removed. A leftover fieldset
@@ -358,11 +359,10 @@ impl ProjectConfig {
     }
 
     /// Delete a dataset, refusing while a site pins it. `purge` deletes its
-    /// secrets and then its lake records, including `$variables`. It runs
-    /// after the pin check and before the dataset itself goes, so a failed
-    /// purge leaves the dataset in place. A value write holds `PINS` too, so
-    /// it either lands first and is swept or runs after and finds the
-    /// dataset gone.
+    /// secrets, then its variables, then its lake records. It runs after the
+    /// pin check and before the dataset itself goes, so a failed purge leaves
+    /// the dataset in place. A value write holds `PINS` too, so it either
+    /// lands first and is swept or runs after and finds the dataset gone.
     pub fn delete_dataset(
         &self,
         name: &str,
@@ -963,6 +963,7 @@ mod tests {
         store: Arc<SchemaStore>,
         data: Arc<dyn DataAdapter>,
         secrets: crate::values::LakeSecretStore,
+        variables: crate::values::LakeVariableStore,
         config: ProjectConfig,
     }
 
@@ -971,6 +972,7 @@ mod tests {
         let store = Arc::new(SchemaStore::load(dir.path()).unwrap());
         let data: Arc<dyn DataAdapter> = Arc::new(loco_lake::InMemoryAdapter::new());
         let secrets = crate::values::LakeSecretStore::new(data.clone(), ready_key());
+        let variables = crate::values::LakeVariableStore::new(data.clone());
         let config = ProjectConfig::new(store.clone(), "ben", "crm");
         config.create_project("CRM", "").unwrap();
         config.create_version(VERSION.to_string()).unwrap();
@@ -1091,6 +1093,7 @@ mod tests {
             store,
             data,
             secrets,
+            variables,
             config,
         }
     }
@@ -1332,20 +1335,17 @@ mod tests {
 
     #[test]
     fn project_delete_removes_secret_and_variable_values() {
-        use crate::values::{put_variable, SecretStore, SECRETS, VARIABLES};
+        use crate::values::{SecretStore, VariableStore, SECRETS, VARIABLES};
 
         let world = world(false);
         world
             .secrets
             .put(&dev_dataset(), "consumer_key", "s3cret")
             .unwrap();
-        put_variable(
-            world.data.as_ref(),
-            &dev_dataset(),
-            "api_base",
-            "https://set.example",
-        )
-        .unwrap();
+        world
+            .variables
+            .set(&dev_dataset(), "api_base", "https://set.example")
+            .unwrap();
         // A user row in the same dataset goes with the same purge.
         world
             .data
@@ -1384,20 +1384,17 @@ mod tests {
     /// is no separate value path that could remove one and keep the other.
     #[test]
     fn project_delete_keeps_values_when_the_purge_fails() {
-        use crate::values::{get_variable, SecretStore};
+        use crate::values::{SecretStore, VariableStore};
 
         let world = world(false);
         world
             .secrets
             .put(&dev_dataset(), "consumer_key", "s3cret")
             .unwrap();
-        crate::values::put_variable(
-            world.data.as_ref(),
-            &dev_dataset(),
-            "api_base",
-            "https://set.example",
-        )
-        .unwrap();
+        world
+            .variables
+            .set(&dev_dataset(), "api_base", "https://set.example")
+            .unwrap();
 
         let err = world
             .config
@@ -1415,7 +1412,9 @@ mod tests {
             Some("s3cret")
         );
         assert_eq!(
-            get_variable(world.data.as_ref(), &dev_dataset(), "api_base")
+            world
+                .variables
+                .get(&dev_dataset(), "api_base")
                 .unwrap()
                 .as_deref(),
             Some("https://set.example")
@@ -1436,7 +1435,7 @@ mod tests {
 
     #[test]
     fn dataset_delete_removes_only_that_datasets_values() {
-        use crate::values::{get_variable, put_variable, SecretStore};
+        use crate::values::{SecretStore, VariableStore};
 
         let world = world(false);
         world
@@ -1453,7 +1452,7 @@ mod tests {
             .put(&dev_dataset(), "consumer_key", "s3cret")
             .unwrap();
         let other = format!("{PROJECT}/other");
-        put_variable(world.data.as_ref(), &other, "api_base", "keep").unwrap();
+        world.variables.set(&other, "api_base", "keep").unwrap();
 
         let data = world.data.clone();
         world
@@ -1468,9 +1467,7 @@ mod tests {
             .is_none());
         assert!(world.config.dataset("dev").is_none());
         assert_eq!(
-            get_variable(world.data.as_ref(), &other, "api_base")
-                .unwrap()
-                .as_deref(),
+            world.variables.get(&other, "api_base").unwrap().as_deref(),
             Some("keep")
         );
         assert!(world.config.dataset("other").is_some());
@@ -1478,20 +1475,17 @@ mod tests {
 
     #[test]
     fn version_delete_leaves_dataset_values() {
-        use crate::values::{get_variable, put_variable, SecretStore};
+        use crate::values::{SecretStore, VariableStore};
 
         let world = world(false);
         world
             .secrets
             .put(&dev_dataset(), "consumer_key", "s3cret")
             .unwrap();
-        put_variable(
-            world.data.as_ref(),
-            &dev_dataset(),
-            "api_base",
-            "https://set.example",
-        )
-        .unwrap();
+        world
+            .variables
+            .set(&dev_dataset(), "api_base", "https://set.example")
+            .unwrap();
 
         world.config.delete_version(VERSION).unwrap();
 
@@ -1509,7 +1503,9 @@ mod tests {
             Some("s3cret")
         );
         assert_eq!(
-            get_variable(world.data.as_ref(), &dev_dataset(), "api_base")
+            world
+                .variables
+                .get(&dev_dataset(), "api_base")
                 .unwrap()
                 .as_deref(),
             Some("https://set.example")
@@ -1535,7 +1531,7 @@ mod tests {
             .is_empty());
         assert!(world
             .config
-            .list_variable_values(world.data.as_ref(), "dev")
+            .list_variable_values(&world.variables, "dev")
             .unwrap()
             .is_empty());
 
@@ -1553,7 +1549,7 @@ mod tests {
 
         let err = world
             .config
-            .set_variable_value(world.data.as_ref(), "dev", "consumer_key", "nope")
+            .set_variable_value(&world.variables, "dev", "consumer_key", "nope")
             .unwrap_err();
         assert!(matches!(err, ValueError::Undeclared(_)));
         let err = world
@@ -1570,14 +1566,14 @@ mod tests {
         // A write is allowed before any site pins the declaring version.
         let set = world
             .config
-            .set_variable_value(world.data.as_ref(), "dev", "api_base", "")
+            .set_variable_value(&world.variables, "dev", "api_base", "")
             .unwrap();
         assert!(set.set);
         assert_eq!(set.value.as_deref(), Some(""));
         assert_eq!(set.source, Some("value"));
         assert!(world
             .config
-            .list_variable_values(world.data.as_ref(), "dev")
+            .list_variable_values(&world.variables, "dev")
             .unwrap()
             .is_empty());
 
@@ -1593,7 +1589,7 @@ mod tests {
             .unwrap();
         let rows = world
             .config
-            .list_variable_values(world.data.as_ref(), "dev")
+            .list_variable_values(&world.variables, "dev")
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "api_base");
@@ -1604,11 +1600,11 @@ mod tests {
 
         world
             .config
-            .delete_variable_value(world.data.as_ref(), "dev", "api_base")
+            .delete_variable_value(&world.variables, "dev", "api_base")
             .unwrap();
         let rows = world
             .config
-            .list_variable_values(world.data.as_ref(), "dev")
+            .list_variable_values(&world.variables, "dev")
             .unwrap();
         assert!(!rows[0].set);
         assert_eq!(rows[0].source, Some("default"));
@@ -1678,7 +1674,7 @@ mod tests {
         world
             .config
             .set_variable_value(
-                world.data.as_ref(),
+                &world.variables,
                 "dev",
                 &qualified_var,
                 "https://set.example",
@@ -1686,17 +1682,17 @@ mod tests {
             .unwrap();
         let rows = world
             .config
-            .list_variable_values(world.data.as_ref(), "dev")
+            .list_variable_values(&world.variables, "dev")
             .unwrap();
         assert!(rows[0].set);
         assert_eq!(rows[0].value.as_deref(), Some("https://set.example"));
         world
             .config
-            .delete_variable_value(world.data.as_ref(), "dev", &qualified_var)
+            .delete_variable_value(&world.variables, "dev", &qualified_var)
             .unwrap();
         let rows = world
             .config
-            .list_variable_values(world.data.as_ref(), "dev")
+            .list_variable_values(&world.variables, "dev")
             .unwrap();
         assert!(!rows[0].set);
         assert_eq!(rows[0].source, Some("default"));
@@ -1751,7 +1747,7 @@ mod tests {
 
         let rows = world
             .config
-            .list_variable_values(world.data.as_ref(), "dev")
+            .list_variable_values(&world.variables, "dev")
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].set);
@@ -1762,16 +1758,11 @@ mod tests {
 
         world
             .config
-            .set_variable_value(
-                world.data.as_ref(),
-                "dev",
-                "api_base",
-                "https://set.example",
-            )
+            .set_variable_value(&world.variables, "dev", "api_base", "https://set.example")
             .unwrap();
         let rows = world
             .config
-            .list_variable_values(world.data.as_ref(), "dev")
+            .list_variable_values(&world.variables, "dev")
             .unwrap();
         assert!(rows[0].set);
         assert_eq!(rows[0].source, Some("value"));

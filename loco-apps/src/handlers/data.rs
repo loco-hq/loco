@@ -542,7 +542,7 @@ fn connect(
         dataset_id.to_string(),
         spec.clone(),
         state.secrets.clone(),
-        state.data_adapter.clone(),
+        Arc::clone(&state.variables),
         state.http.clone(),
     );
     match connection.missing_required() {

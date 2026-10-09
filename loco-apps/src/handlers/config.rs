@@ -264,18 +264,23 @@ pub async fn delete_dataset(
     }
 }
 
-/// Secrets first, then the lake. The secret-store error is the same purge
-/// string a lake error becomes, and a failure there leaves the lake rows in
-/// place. `SecretStore::delete_dataset` is what a non-lake store cleans up;
-/// the lake impl only removes `$secrets` rows the purge deletes anyway.
+/// Secrets, then variables, then the lake. A secret-store error leaves the
+/// variable rows and the lake in place. A variable-store error leaves the
+/// lake in place. Each store's `delete_dataset` is what a non-lake impl
+/// cleans up; the lake impls only remove `$secrets` and `$variables` rows
+/// the purge deletes anyway.
 fn purge_dataset(state: &AppState, dataset_id: &str) -> Result<(), String> {
     state
         .secrets
         .delete_dataset(dataset_id)
         .map_err(|err| err.to_string())?;
     state
-        .data_adapter
+        .variables
         .delete_dataset(dataset_id)
+        .map_err(|err| err.to_string())?;
+    state
+        .lake
+        .purge_dataset(dataset_id)
         .map_err(|err| err.to_string())
 }
 

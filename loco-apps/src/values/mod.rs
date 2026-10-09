@@ -1,11 +1,11 @@
 //! Dataset-scoped secret and variable values.
 //!
 //! Declarations live on a version and are what `/schema` serves. A value
-//! belongs to one dataset. Secrets go through [`SecretStore`]: the trait is
-//! plaintext in, plaintext out, and encryption stays inside the impl so a
-//! later cloud store can replace [`LakeSecretStore`] without a second
-//! shape. Variables are plain lake records in [`VARIABLES`]; they have no
-//! trait yet.
+//! belongs to one dataset. Both stores are plaintext in, plaintext out.
+//! Encryption stays inside [`LakeSecretStore`], so a later cloud store can
+//! replace it without a second shape. [`VariableStore`] is the same idea
+//! for a plain string: [`LakeVariableStore`] writes [`VARIABLES`] and needs
+//! no key.
 //!
 //! Neither collection can be declared. A collection name is a slug
 //! (`[a-z0-9_.-]+`), which excludes `$`, and `VersionSchema` refuses to
@@ -30,11 +30,8 @@ use loco_lake::{DataAdapter, Error as LakeError, Record, Value};
 pub use lake::LakeSecretStore;
 pub use seal::parse_secret_key;
 pub use seal::KeyStatus;
-pub use variables::delete_variable;
-pub use variables::get_variable;
-pub use variables::list_variables;
-pub use variables::put_variable;
-pub use variables::VariableMeta;
+pub use variables::with_default;
+pub use variables::LakeVariableStore;
 
 /// Lake collection for secret ciphertext. Not a schema collection.
 pub const SECRETS: &str = "$secrets";
@@ -98,10 +95,68 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, dataset_id: &str, name: &str) -> Result<(), SecretError>;
     fn list(&self, dataset_id: &str) -> Result<Vec<SecretMeta>, SecretError>;
     /// Remove this dataset's secrets. Dataset and project delete call this
-    /// before [`DataAdapter::delete_dataset`], so a store that is not the
-    /// lake is cleaned up on the same path. The lake impl deletes `$secrets`
-    /// rows the purge would remove anyway.
+    /// first, then [`VariableStore::delete_dataset`], then
+    /// [`crate::source::LakeSource::purge_dataset`]. A failure here leaves
+    /// the variable rows and the lake in place. The lake impl deletes
+    /// `$secrets` rows the purge would remove anyway.
     fn delete_dataset(&self, dataset_id: &str) -> Result<(), SecretError>;
+}
+
+/// `name`, `value`, and `updated_at` of one stored variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariableMeta {
+    pub name: String,
+    pub value: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug)]
+pub enum VariableError {
+    /// The name cannot be a record id.
+    InvalidName(String),
+    NotFound,
+    Lake(LakeError),
+}
+
+impl std::fmt::Display for VariableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidName(msg) => write!(f, "{msg}"),
+            Self::NotFound => write!(f, "variable value not found"),
+            Self::Lake(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for VariableError {}
+
+impl From<LakeError> for VariableError {
+    fn from(err: LakeError) -> Self {
+        match err {
+            LakeError::NotFound => Self::NotFound,
+            other => Self::Lake(other),
+        }
+    }
+}
+
+/// Plaintext in, plaintext out. A variable needs no key.
+///
+/// `dataset_id` is `{account}/{project}/{dataset}`, the lake's dataset id.
+/// [`Self::get`] returns the stored string, including `""`, or `None` when
+/// no row exists. A declaration default is not this store's concern:
+/// callers apply it with [`with_default`].
+pub trait VariableStore: Send + Sync {
+    fn set(&self, dataset_id: &str, name: &str, value: &str)
+        -> Result<VariableMeta, VariableError>;
+    fn get(&self, dataset_id: &str, name: &str) -> Result<Option<String>, VariableError>;
+    fn delete(&self, dataset_id: &str, name: &str) -> Result<(), VariableError>;
+    fn list(&self, dataset_id: &str) -> Result<Vec<VariableMeta>, VariableError>;
+    /// Remove this dataset's variables. Dataset and project delete call this
+    /// after [`SecretStore::delete_dataset`] and before
+    /// [`crate::source::LakeSource::purge_dataset`]. A failure here leaves
+    /// the lake in place. The lake impl deletes `$variables` rows the purge
+    /// would remove anyway.
+    fn delete_dataset(&self, dataset_id: &str) -> Result<(), VariableError>;
 }
 
 pub(crate) fn check_name(name: &str) -> Result<(), String> {
