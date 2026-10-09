@@ -17,6 +17,17 @@ jsonpath "$.signup.rejected_handle" contains "1-63"
 jsonpath "$.signup.missing_field" contains "400"
 jsonpath "$.signup.missing_field" contains "password is required"
 jsonpath "$.routes" count == 51
+jsonpath "$.prefixes" count == 5
+jsonpath "$.prefixes[0].routes" not exists
+jsonpath "$.site.example" == "http://dev.inventory.lego_reseller.localhost:{{port}}/"
+jsonpath "$.site.url" == "http://{site}.{project}.{account}.localhost:{{port}}/"
+jsonpath "$.site.note" contains "wildcard DNS"
+jsonpath "$.site.note" contains "LOCO_DEFAULT_SITE"
+jsonpath "$.site.note" contains "#145"
+jsonpath "$.guide[8].do" contains "http://dev.inventory.lego_reseller.localhost:{{port}}/"
+jsonpath "$.guide[9].do" contains "http://www.inventory.lego_reseller.localhost:{{port}}/"
+jsonpath "$.guide[8].do" not contains "{port}"
+jsonpath "$.site.example" not contains ":3000"
 jsonpath "$.routes[0].method" == "GET"
 jsonpath "$.routes[0].path" == "/.well-known/loco.json"
 
@@ -264,6 +275,7 @@ HTTP 200
 [Asserts]
 header "Content-Type" contains "application/json"
 jsonpath "$.name" == "loco"
+jsonpath "$.site.example" == "http://dev.inventory.lego_reseller.localhost:{{port}}/"
 
 GET http://127.0.0.1:{{port}}/llms.txt
 Host: dev.inventory.reseller.localhost:{{port}}
@@ -324,256 +336,309 @@ jsonpath "$.data[0].fields.sku" == "3001"
 
 # Mount check. discovery.rs asserts each of these request lines exists.
 # A body that says "no such endpoint" means the path is not mounted.
-# The discovery document itself contains that phrase, so its probe is 200 only.
+# status != 405 means this method is mounted: a wrong method is 405 with an empty body.
+# The discovery document itself contains "no such endpoint", so its probe is 200.
 POST http://127.0.0.1:{{port}}/auth/login
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/auth/logout
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/auth/me
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/auth/users
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 PUT http://127.0.0.1:{{port}}/auth/users/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 DELETE http://127.0.0.1:{{port}}/auth/users/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/auth/api-keys
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/auth/api-keys/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 DELETE http://127.0.0.1:{{port}}/auth/api-keys/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/config/project
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/project/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/project/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/config/dataset/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/dataset/x/x/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/dataset/x/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/config/site/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/site/x/x/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/site/x/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 PUT http://127.0.0.1:{{port}}/config/site/x/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/config/version/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/config/version/x/x/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/schema/x/x/x/manifest
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 PUT http://127.0.0.1:{{port}}/schema/x/x/x/manifest
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/schema/x/x/x/collection
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/schema/x/x/x/collection/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/schema/x/x/x/collection/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 PUT http://127.0.0.1:{{port}}/schema/x/x/x/collection/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 DELETE http://127.0.0.1:{{port}}/schema/x/x/x/collection/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/schema/x/x/x/field
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/schema/x/x/x/field/x/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 PUT http://127.0.0.1:{{port}}/schema/x/x/x/field/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 DELETE http://127.0.0.1:{{port}}/schema/x/x/x/field/x/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/schema/x/x/x/permission_set
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/schema/x/x/x/permission_set/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/schema/x/x/x/permission_set/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 PUT http://127.0.0.1:{{port}}/schema/x/x/x/permission_set/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 PUT http://127.0.0.1:{{port}}/schema/x/x/x/bundle
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/schema/x/x/x/bundle
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 DELETE http://127.0.0.1:{{port}}/schema/x/x/x/bundle
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/data/x/add
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/data/x/list
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/data/x/get/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 PUT http://127.0.0.1:{{port}}/data/x/update/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 DELETE http://127.0.0.1:{{port}}/data/x/delete/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/data/x/fields
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/data/query
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/actions
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/actions/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 POST http://127.0.0.1:{{port}}/actions/x
 HTTP *
 [Asserts]
+status != 405
 body not contains "no such endpoint"
 
 GET http://127.0.0.1:{{port}}/.well-known/loco.json
 HTTP 200
+[Asserts]
+status != 405
 
 GET http://127.0.0.1:{{port}}/llms.txt
 HTTP 200
 [Asserts]
+status != 405
 body not contains "no such endpoint"

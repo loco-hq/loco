@@ -142,7 +142,7 @@ Reserved prefixes always win, on every host:
 
 `/data` `/schema` `/config` `/auth` `/actions`
 
-`GET /.well-known/loco.json` and `GET /llms.txt` are routes on the root router, served on every host, and they are not part of the bundle. A site's `index.html` cannot shadow them.
+`GET /.well-known/loco.json` and `GET /llms.txt` are routes on the root router, served on every host, and they are not part of the bundle. A site's `index.html` cannot shadow them. A bundle file at either path is never served: the server answers both on every host, and those routes shadow the bundle.
 
 A request for `/auth`, `/schema`, `/data`, or `/config` itself — nothing is mounted on that exact path — is a JSON 404 that names that prefix's routes and sets `see` to `/.well-known/loco.json`. `GET /actions` is the action list, so it is that route and not this catalog. Any other unknown path under a reserved prefix is `404 {"ok":false,"error":"no such endpoint: {path}","see":"/.well-known/loco.json"}`. A host that names no site uses that same body, including `see`. A miss inside a site's bundle (a missing hashed asset, a missing bundle, a non-GET to a static path on a site host) stays `no such endpoint` and does not set `see`.
 
