@@ -42,13 +42,13 @@
             "Content-Type": "application/json"
           },
           "json": {
-            "name": "Lego Reseller",
+            "name": "Book Club",
             "password": "any-non-empty",
-            "username": "lego_reseller"
+            "username": "book_club"
           },
           "method": "POST",
           "path": "/auth/users",
-          "success": "201. data.username is lego_reseller. data.id is a UUID. No token."
+          "success": "201. data.username is book_club. data.id is a UUID. No token."
         }
       ],
       "title": "Create an account"
@@ -64,7 +64,7 @@
           },
           "json": {
             "password": "any-non-empty",
-            "username": "lego_reseller"
+            "username": "book_club"
           },
           "method": "POST",
           "path": "/auth/login",
@@ -74,7 +74,7 @@
       "title": "Log in"
     },
     {
-      "do": "POST /config/project with the bearer token. Omit account: the project is created under your handle. name is a slug such as inventory (see names.project_dataset_site). The response is the project. The id you will use is {handle}/{name}, for example lego_reseller/inventory. The server also creates version 0.0.1-dev, dataset dev, and site dev. Site dev pins that version and that dataset. 0.0.1-dev ends in -dev, so it is a draft and accepts /schema writes. Confirm the pin with GET /config/site/lego_reseller/inventory/dev: data.version is 0.0.1-dev and data.dataset is dev. You are the developer of every project under your handle.",
+      "do": "POST /config/project with the bearer token. Omit account: the project is created under your handle. name is a slug such as shelf (see names.project_dataset_site). The response is the project. The id you will use is {handle}/{name}, for example book_club/shelf. The server also creates version 0.0.1-dev, dataset dev, and site dev. Site dev pins that version and that dataset. 0.0.1-dev ends in -dev, so it is a draft and accepts /schema writes. Confirm the pin with GET /config/site/book_club/shelf/dev: data.version is 0.0.1-dev and data.dataset is dev. You are the developer of every project under your handle.",
       "n": 4,
       "requests": [
         {
@@ -83,25 +83,25 @@
             "Content-Type": "application/json"
           },
           "json": {
-            "description": "A parts list",
-            "label": "Inventory",
-            "name": "inventory"
+            "description": "A reading list",
+            "label": "Shelf",
+            "name": "shelf"
           },
           "method": "POST",
           "path": "/config/project",
-          "success": "201. The project id is lego_reseller/inventory."
+          "success": "201. The project id is book_club/shelf."
         },
         {
           "auth": "bearer",
           "method": "GET",
           "path": "/config/site/{account}/{project}/{name}",
-          "success": "200 for /config/site/lego_reseller/inventory/dev. data.version is 0.0.1-dev. data.dataset is dev."
+          "success": "200 for /config/site/book_club/shelf/dev. data.version is 0.0.1-dev. data.dataset is dev."
         }
       ],
       "title": "Create a project"
     },
     {
-      "do": "Write schema on the draft: /schema/lego_reseller/inventory/0.0.1-dev/.... Create the collection first, then its fields. A collection name is one or more of a-z, 0-9, '_', '.', and '-'. parts is legal. A field type is one of string, integer, float, boolean. Anything else is 400 and the error says unknown field type. required true means a create must send a value: missing, null, or \"\" for a string is an error, and the message looks like field 'qty' is required. An update checks a required field only when the patch names it. options, a list of {value, label}, is only for a string field; omit it to allow any string. You do not manage fieldsets. The server creates the default one.",
+      "do": "Write schema on the draft: /schema/book_club/shelf/0.0.1-dev/.... Create the collection first, then its fields. A collection name is one or more of a-z, 0-9, '_', '.', and '-'. books is legal. A field type is one of string, integer, float, boolean. Anything else is 400 and the error says unknown field type. required true means a create must send a value: missing, null, or \"\" for a string is an error, and the message looks like field 'title' is required. An update checks a required field only when the patch names it. options, a list of {value, label}, is only for a string field; omit it to allow any string. You do not manage fieldsets. The server creates the default one.",
       "n": 5,
       "requests": [
         {
@@ -110,13 +110,13 @@
             "Content-Type": "application/json"
           },
           "json": {
-            "label": "Part",
-            "label_plural": "Parts",
-            "name": "parts"
+            "label": "Book",
+            "label_plural": "Books",
+            "name": "books"
           },
           "method": "POST",
           "path": "/schema/{account}/{project}/{version}/collection",
-          "success": "201. data.name is parts."
+          "success": "201. data.name is books."
         },
         {
           "auth": "bearer",
@@ -124,15 +124,15 @@
             "Content-Type": "application/json"
           },
           "json": {
-            "collection": "parts",
-            "label": "SKU",
-            "name": "sku",
+            "collection": "books",
+            "label": "Title",
+            "name": "title",
             "required": true,
             "type": "string"
           },
           "method": "POST",
           "path": "/schema/{account}/{project}/{version}/field",
-          "success": "201. data.name is sku. data.type is string."
+          "success": "201. data.name is title. data.type is string."
         },
         {
           "auth": "bearer",
@@ -140,85 +140,43 @@
             "Content-Type": "application/json"
           },
           "json": {
-            "collection": "parts",
-            "label": "Quantity",
-            "name": "qty",
+            "collection": "books",
+            "label": "Author",
+            "name": "author",
             "required": true,
-            "type": "integer"
+            "type": "string"
           },
           "method": "POST",
           "path": "/schema/{account}/{project}/{version}/field",
-          "success": "201. data.name is qty. data.type is integer."
+          "success": "201. data.name is author. data.type is string."
+        },
+        {
+          "auth": "bearer",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json": {
+            "collection": "books",
+            "label": "Finished",
+            "name": "finished",
+            "required": false,
+            "type": "boolean"
+          },
+          "method": "POST",
+          "path": "/schema/{account}/{project}/{version}/field",
+          "success": "201. data.name is finished. data.type is boolean."
         }
       ],
       "title": "Declare the collection and its fields"
     },
     {
-      "do": "A hosted page sends no token. Public can list, add, and update only if you grant those verbs and assign the set on the manifest. Create a permission set whose collections entry names the bare collection parts (this project's own collection, not account/project@version). Set read, create, and update to true. A verb you omit is false. Leave delete false. delete true means anyone who can open the site can delete every row. Then PUT the manifest with public_permission_sets set to that set's name. Policy lives on the version, so every site that pins this version shares it. PUT of the permission set later replaces the collections list; send the whole list you want to keep.",
+      "do": "You are already a developer, so your token reads and writes books. No permission set is required. The page logs in. To add an editor, POST /config/member/book_club/shelf with {\"handle\": \"their_handle\", \"role\": \"editor\"}. See names.member. Public is an opt-in, only for data you mean anyone to read or write. Skip it for this page. To let anyone read, POST a permission set {\"name\": \"books_read\", \"label\": \"Readers\", \"collections\": [{\"collection\": \"books\", \"read\": true, \"create\": false, \"update\": false, \"delete\": false}]} and PUT the manifest {\"public_permission_sets\": [\"books_read\"]}. A verb you omit is false. A create or update grant to public lets anyone with the URL change the data. The set is on the version, so every site that pins it shares it.",
       "n": 6,
-      "requests": [
-        {
-          "auth": "bearer",
-          "headers": {
-            "Content-Type": "application/json"
-          },
-          "json": {
-            "collections": [
-              {
-                "collection": "parts",
-                "create": true,
-                "delete": false,
-                "read": true,
-                "update": true
-              }
-            ],
-            "label": "Public parts",
-            "name": "parts_public"
-          },
-          "method": "POST",
-          "path": "/schema/{account}/{project}/{version}/permission_set",
-          "success": "201. data.name is parts_public. data.collections[0].delete is false."
-        },
-        {
-          "auth": "bearer",
-          "headers": {
-            "Content-Type": "application/json"
-          },
-          "json": {
-            "collections": [
-              {
-                "collection": "parts",
-                "create": true,
-                "delete": false,
-                "read": true,
-                "update": true
-              }
-            ],
-            "label": "Public parts"
-          },
-          "method": "PUT",
-          "path": "/schema/{account}/{project}/{version}/permission_set/{name}",
-          "success": "200 when you need to replace the grants. The path name is parts_public."
-        },
-        {
-          "auth": "bearer",
-          "headers": {
-            "Content-Type": "application/json"
-          },
-          "json": {
-            "public_permission_sets": [
-              "parts_public"
-            ]
-          },
-          "method": "PUT",
-          "path": "/schema/{account}/{project}/{version}/manifest",
-          "success": "200. data.public_permission_sets[0] is parts_public."
-        }
-      ],
-      "title": "Let visitors read and edit"
+      "requests": [],
+      "title": "Members write; public is opt-in"
     },
     {
-      "do": "Records are site-scoped. Send the bearer token plus X-Project-Id: lego_reseller/inventory and X-Site-Id: dev. The add body is the fields themselves: {\"sku\": \"3001\", \"qty\": 2}. qty is a number. The response record is {id, dataset_id, created_at, created_by, updated_at, updated_by, owner, fields}. Read data.fields.sku. data.id is the record id for get, update, and delete. List returns every row: data is an array, and each row has the same shape. Update is a partial patch: {\"qty\": 3} changes qty and leaves sku. Query is optional. POST /data/query with {\"queries\": {\"parts\": {\"collection\": \"parts\", \"limit\": 50}}} returns data.parts.records (the same record shape) and data.parts.cursor (null when there are no further rows). Limit defaults to 50 and cannot exceed 500. GET /data/parts/fields returns labels and options for a hosted page that does not know its version. An unknown field, a string where an integer belongs, or a string outside options is 400 validation failed plus diagnostics.",
+      "do": "Records are site-scoped. Send the bearer token plus X-Project-Id: book_club/shelf and X-Site-Id: dev. The add body is the fields themselves: {\"title\": \"Dune\", \"author\": \"Herbert\"}. The response record is {id, dataset_id, created_at, created_by, updated_at, updated_by, owner, fields}. Read data.fields.title. data.id is the record id for get, update, and delete. List returns every row: data is an array, and each row has the same shape. Update is a partial patch: {\"finished\": true} sets finished and leaves title. Query is optional. POST /data/query with {\"queries\": {\"books\": {\"collection\": \"books\", \"limit\": 50}}} returns data.books.records (the same record shape) and data.books.cursor (null when there are no further rows). Limit defaults to 50 and cannot exceed 500. GET /data/books/fields returns labels and options for a hosted page that does not know its version. An unknown field, a string where an integer belongs, or a string outside options is 400 validation failed plus diagnostics.",
       "n": 7,
       "requests": [
         {
@@ -227,18 +185,18 @@
             "Content-Type": "application/json"
           },
           "json": {
-            "qty": 2,
-            "sku": "3001"
+            "author": "Herbert",
+            "title": "Dune"
           },
           "method": "POST",
           "path": "/data/{collection}/add",
-          "success": "201 with X-Project-Id: lego_reseller/inventory and X-Site-Id: dev. data.fields.sku is 3001. data.fields.qty is 2. Save data.id."
+          "success": "201 with X-Project-Id: book_club/shelf and X-Site-Id: dev. data.fields.title is Dune. data.fields.author is Herbert. Save data.id."
         },
         {
           "auth": "site",
           "method": "GET",
           "path": "/data/{collection}/list",
-          "success": "200. data is an array. data[0].fields.sku is the SKU. Same site headers."
+          "success": "200. data is an array. data[0].fields.title is the title. Same site headers."
         },
         {
           "auth": "site",
@@ -246,11 +204,11 @@
             "Content-Type": "application/json"
           },
           "json": {
-            "qty": 3
+            "finished": true
           },
           "method": "PUT",
           "path": "/data/{collection}/update/{id}",
-          "success": "200. data.fields.qty is 3 and data.fields.sku is still 3001. {id} is the record id."
+          "success": "200. data.fields.finished is true and data.fields.title is still Dune. {id} is the record id."
         },
         {
           "auth": "site",
@@ -259,15 +217,15 @@
           },
           "json": {
             "queries": {
-              "parts": {
-                "collection": "parts",
+              "books": {
+                "collection": "books",
                 "limit": 50
               }
             }
           },
           "method": "POST",
           "path": "/data/query",
-          "success": "200. data.parts.records is an array. data.parts.records[0].fields.sku is the SKU. data.parts.cursor is null when the page is the last one."
+          "success": "200. data.books.records is an array. data.books.records[0].fields.title is the title. data.books.cursor is null when the page is the last one."
         },
         {
           "auth": "site",
@@ -279,8 +237,8 @@
       "title": "Write a record"
     },
     {
-      "do": "Save index_html as a file named index.html. From the directory that contains that file, zip it so the archive entry is index.html and not dist/index.html. On a Mac or Linux shell: zip bundle.zip index.html. PUT the raw zip bytes to the draft bundle URL. Content-Type is application/zip. Do not send JSON and do not base64-encode the zip. Success is 200, not 201, and data is {hash, uploaded_at, size, files}. GET of the same path returns that metadata, not the files. A missing bundle is 404 and the error is no bundle for {project} at version {version}. The PUT is refused at 32 MiB of body, 64 MiB unpacked, 16 MiB in one file, or 2000 files, and when an entry contains .., is absolute, is a symlink, or when index.html is not at the zip root. Only a draft accepts the PUT. The page fetches /data/parts/list, POST /data/parts/add, and PUT /data/parts/update/{id} on the same origin, with no token and no site headers. It works only when a visitor loads it from the site URL in the next step, and only because step 6 granted public read, create, and update.",
-      "index_html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Parts</title>\n</head>\n<body>\n<h1>discovery page</h1>\n<p id=\"status\"></p>\n<ul id=\"parts\"></ul>\n<form id=\"add\">\n<label>SKU <input name=\"sku\" required></label>\n<label>Qty <input name=\"qty\" type=\"number\" required value=\"1\"></label>\n<button type=\"submit\">Add</button>\n</form>\n<script>\nconst list = document.getElementById(\"parts\");\nconst status = document.getElementById(\"status\");\n\nfunction show(row) {\n  const li = document.createElement(\"li\");\n  li.textContent = row.fields.sku + \" (\" + row.fields.qty + \") \";\n  const button = document.createElement(\"button\");\n  button.type = \"button\";\n  button.textContent = \"+1\";\n  button.addEventListener(\"click\", async () => {\n    const res = await fetch(\"/data/parts/update/\" + row.id, {\n      method: \"PUT\",\n      headers: { \"Content-Type\": \"application/json\" },\n      body: JSON.stringify({ qty: Number(row.fields.qty) + 1 })\n    });\n    const body = await res.json();\n    if (!body.ok) {\n      status.textContent = body.error || \"update failed\";\n      return;\n    }\n    load();\n  });\n  li.appendChild(button);\n  list.appendChild(li);\n}\n\nasync function load() {\n  const res = await fetch(\"/data/parts/list\");\n  const body = await res.json();\n  if (!body.ok) {\n    status.textContent = body.error || \"list failed\";\n    return;\n  }\n  status.textContent = \"\";\n  list.replaceChildren();\n  for (const row of body.data) show(row);\n}\n\ndocument.getElementById(\"add\").addEventListener(\"submit\", async (event) => {\n  event.preventDefault();\n  const form = event.currentTarget;\n  const res = await fetch(\"/data/parts/add\", {\n    method: \"POST\",\n    headers: { \"Content-Type\": \"application/json\" },\n    body: JSON.stringify({ sku: form.sku.value, qty: Number(form.qty.value) })\n  });\n  const body = await res.json();\n  if (!body.ok) {\n    status.textContent = body.error || \"add failed\";\n    return;\n  }\n  form.sku.value = \"\";\n  load();\n});\n\nload();\n</script>\n</body>\n</html>\n",
+      "do": "Save index_html as a file named index.html. From the directory that contains that file, zip it so the archive entry is index.html and not dist/index.html. On a Mac or Linux shell: zip bundle.zip index.html. PUT the raw zip bytes to the draft bundle URL. Content-Type is application/zip. Do not send JSON and do not base64-encode the zip. Success is 200, not 201, and data is {hash, uploaded_at, size, files}. GET of the same path returns that metadata, not the files. A missing bundle is 404 and the error is no bundle for {project} at version {version}. The PUT is refused at 32 MiB of body, 64 MiB unpacked, 16 MiB in one file, or 2000 files, and when an entry contains .., is absolute, is a symlink, or when index.html is not at the zip root. Only a draft accepts the PUT. index_html POSTs /auth/login on this origin, stores data.token in localStorage under loco_session: plus location.origin, and sends Authorization: Bearer on /data/books list, add, and update. Log out POSTs /auth/logout and drops the token. No site headers. No token is 403. No public grant is required.",
+      "index_html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Reading list</title></head>\n<body>\n<h1>discovery page</h1>\n<p id=\"status\"></p>\n<form id=\"login\">\n<label>Handle <input name=\"username\" required></label>\n<label>Password <input name=\"password\" type=\"password\" required></label>\n<button>Log in</button>\n</form>\n<button id=\"logout\" type=\"button\" hidden>Log out</button>\n<ul id=\"books\"></ul>\n<form id=\"add\" hidden>\n<label>Title <input name=\"title\" required></label>\n<label>Author <input name=\"author\" required></label>\n<button>Add</button>\n</form>\n<script>\nconst key = \"loco_session:\" + location.origin;\nconst list = document.getElementById(\"books\");\nconst status = document.getElementById(\"status\");\nconst loginForm = document.getElementById(\"login\");\nconst addForm = document.getElementById(\"add\");\nconst logoutButton = document.getElementById(\"logout\");\nconst token = () => localStorage.getItem(key);\nfunction headers(json) {\n  const h = {};\n  if (token()) h[\"Authorization\"] = \"Bearer \" + token();\n  if (json) h[\"Content-Type\"] = \"application/json\";\n  return h;\n}\nasync function call(path, opt) {\n  const body = await (await fetch(path, opt)).json();\n  if (!body.ok) status.textContent = body.error || \"failed\";\n  return body;\n}\nfunction show(row) {\n  const li = document.createElement(\"li\");\n  li.textContent = row.fields.title + \" — \" + row.fields.author + (row.fields.finished ? \" (read)\" : \"\");\n  const button = document.createElement(\"button\");\n  button.type = \"button\";\n  button.textContent = \"Read\";\n  button.onclick = async () => {\n    const body = await call(\"/data/books/update/\" + row.id, {\n      method: \"PUT\", headers: headers(true), body: JSON.stringify({ finished: true })\n    });\n    if (body.ok) load();\n  };\n  li.appendChild(button);\n  list.appendChild(li);\n}\nasync function load() {\n  const body = await call(\"/data/books/list\", { headers: headers() });\n  if (!body.ok) return;\n  status.textContent = \"\";\n  list.replaceChildren();\n  body.data.forEach(show);\n}\nfunction signedIn(on) {\n  loginForm.hidden = on;\n  addForm.hidden = !on;\n  logoutButton.hidden = !on;\n  if (on) load(); else list.replaceChildren();\n}\nloginForm.onsubmit = async (event) => {\n  event.preventDefault();\n  const body = await call(\"/auth/login\", {\n    method: \"POST\",\n    headers: { \"Content-Type\": \"application/json\" },\n    body: JSON.stringify({ username: loginForm.username.value, password: loginForm.password.value })\n  });\n  if (!body.ok) return;\n  localStorage.setItem(key, body.data.token);\n  status.textContent = \"\";\n  signedIn(true);\n};\nlogoutButton.onclick = async () => {\n  await fetch(\"/auth/logout\", { method: \"POST\", headers: headers() });\n  localStorage.removeItem(key);\n  status.textContent = \"\";\n  signedIn(false);\n};\naddForm.onsubmit = async (event) => {\n  event.preventDefault();\n  const body = await call(\"/data/books/add\", {\n    method: \"POST\", headers: headers(true),\n    body: JSON.stringify({ title: addForm.title.value, author: addForm.author.value })\n  });\n  if (!body.ok) return;\n  addForm.reset();\n  load();\n};\nsignedIn(!!token());\n</script>\n</body>\n</html>\n",
       "n": 8,
       "requests": [
         {
@@ -291,7 +249,7 @@
           },
           "method": "PUT",
           "path": "/schema/{account}/{project}/{version}/bundle",
-          "success": "200 on /schema/lego_reseller/inventory/0.0.1-dev/bundle. data.files is at least 1. data.hash is a string."
+          "success": "200 on /schema/book_club/shelf/0.0.1-dev/bundle. data.files is at least 1. data.hash is a string."
         },
         {
           "auth": "bearer",
@@ -303,13 +261,13 @@
       "title": "Upload the page"
     },
     {
-      "do": "Site dev already pins 0.0.1-dev and dataset dev, so there is nothing to re-pin. Open http://dev.inventory.lego_reseller.{listen-host}/. The page heading is discovery page. The list is loaded by the browser with no token. 127.0.0.1 and the bare hostname are not that site. If you curl an IP, send Host: dev.inventory.lego_reseller.{listen-host} and you will get the HTML. A curl of the site host to GET /data/parts/list, with only that Host and no token, is 200 and data is the array of rows. GET /.well-known/loco.json on that same host is still this JSON, not the HTML.",
+      "do": "Site dev already pins 0.0.1-dev and dataset dev, so there is nothing to re-pin. Open http://dev.shelf.book_club.{listen-host}/. The heading is discovery page. Log in on the page. 127.0.0.1 and the bare hostname are not that site. If you curl an IP, send Host: dev.shelf.book_club.{listen-host}. GET /data/books/list with that Host and no token is 403; with Authorization: Bearer it is 200. POST /data/books/add with the token is 201, and without it is 403. GET /.well-known/loco.json on that host is still this JSON, not the HTML.",
       "n": 9,
       "requests": [],
       "title": "Open the site"
     },
     {
-      "do": "POST /config/version/lego_reseller/inventory with {\"version\": \"0.0.1\", \"from\": \"0.0.1-dev\"}. That copies the schema and the bundle into 0.0.1. It does not copy records, datasets, sites, or secret values. The public grants are part of the copied manifest, so they come along. 0.0.1 does not end in -dev, so it is published: further /schema writes to it are refused, and its hashed assets are cached as immutable while index.html revalidates. Then create site www with {\"name\": \"www\", \"label\": \"Public\", \"version\": \"0.0.1\", \"dataset\": \"dev\"}. Reusing dataset dev keeps the rows you already wrote. Open http://www.inventory.lego_reseller.{listen-host}/. To change the published site, edit 0.0.1-dev (or a new draft), copy to a new version name such as 0.0.2, and PUT /config/site/lego_reseller/inventory/www with {\"version\": \"0.0.2\", \"dataset\": \"dev\"}. Copying onto a version that already exists is 409 and the error starts with already exists. Publish the next snapshot under a new name.",
+      "do": "POST /config/version/book_club/shelf with {\"version\": \"0.0.1\", \"from\": \"0.0.1-dev\"}. That copies the schema and the bundle into 0.0.1. It does not copy records, datasets, sites, or secret values. A public permission set on the manifest is copied with it. This example assigns none. 0.0.1 does not end in -dev, so it is published: further /schema writes to it are refused, and its hashed assets are cached as immutable while index.html revalidates. Then create site www with {\"name\": \"www\", \"label\": \"Shelf\", \"version\": \"0.0.1\", \"dataset\": \"dev\"}. Reusing dataset dev keeps the rows you already wrote. Open http://www.shelf.book_club.{listen-host}/. To change the published site, edit 0.0.1-dev (or a new draft), copy to a new version name such as 0.0.2, and PUT /config/site/book_club/shelf/www with {\"version\": \"0.0.2\", \"dataset\": \"dev\"}. Copying onto a version that already exists is 409 and the error starts with already exists. Publish the next snapshot under a new name.",
       "n": 10,
       "requests": [
         {
@@ -323,7 +281,7 @@
           },
           "method": "POST",
           "path": "/config/version/{account}/{project}",
-          "success": "201. data.version is 0.0.1. The bundle and the public grants were copied. The records were not."
+          "success": "201. data.version is 0.0.1. The bundle was copied. Records were not."
         },
         {
           "auth": "bearer",
@@ -332,13 +290,13 @@
           },
           "json": {
             "dataset": "dev",
-            "label": "Public",
+            "label": "Shelf",
             "name": "www",
             "version": "0.0.1"
           },
           "method": "POST",
           "path": "/config/site/{account}/{project}",
-          "success": "201. Open http://www.inventory.lego_reseller.{listen-host}/."
+          "success": "201. Open http://www.shelf.book_club.{listen-host}/."
         }
       ],
       "title": "Publish"
@@ -361,7 +319,7 @@
     "api_key": "Optional. POST /auth/api-keys with {\"label\": \"agent\"} returns data.key once and data.id. GET /auth/api-keys/list does not show the secret. DELETE /auth/api-keys/{id} revokes it, using data.id. A key does not expire until it is revoked. Send it as the same Bearer token. Org accounts cannot log in and are not needed for a first app.",
     "body": {
       "password": "the password from signup",
-      "username": "lego_reseller"
+      "username": "book_club"
     },
     "content_type": "application/json",
     "failure": "401 {\"ok\": false, \"error\": \"invalid credentials\"} for a wrong password, an empty password, an unknown handle, an illegal handle, or an org handle. Those are the same body. Login does not create an account and does not say which of those it was. A body that is not JSON, or that omits username, is 400 {\"ok\": false, \"error\": \"...\"} and the error names the field. That 400 is the body check. It is not the signup error \"password is required\".",
@@ -372,12 +330,12 @@
   },
   "name": "loco",
   "names": {
-    "collection": "One or more of a-z, 0-9, '_', '.', and '-'. '$' is reserved and is rejected. parts is legal.",
-    "field_and_permission_set": "Use lowercase letters and underscores: sku, qty, parts_public.",
-    "handle": "The username you sign up with. 1-63 characters of a-z, 0-9, and _, starting with a letter or _. public is reserved. lego_reseller is legal. lego-reseller, Lego, and 1lego are not. The display name may contain spaces and capitals. The project account is the handle, not the user UUID.",
+    "collection": "One or more of a-z, 0-9, '_', '.', and '-'. '$' is reserved and is rejected. books is legal.",
+    "field_and_permission_set": "Use lowercase letters and underscores: title, author, books_read.",
+    "handle": "The username you sign up with. 1-63 characters of a-z, 0-9, and _, starting with a letter or _. public is reserved. book_club is legal. book-club, Book, and 1book are not. The display name may contain spaces and capitals. The project account is the handle, not the user UUID.",
     "member": "POST /config/org/{org}/member and POST /config/member/{account}/{project} add an account that already exists. An account already on disk is accepted whatever its charset, including a hyphen or more than 63 characters. A missing illegal handle such as bad-handle is 400 and the error quotes the charset a-z, 0-9, and _, starting with a letter or _. public is reserved. A well-formed handle that names no account is 404 unknown account: {handle}. Signup answers 409 user already exists, with no token, for a handle that passes the signup rule. POST /config/project with account set to the handle answers 404 unknown account or 403 to any authenticated caller, including a legacy or over-63 handle. Success is 201.",
     "org": "POST /config/org with {\"handle\": \"acme\"}. The new handle uses the signup rule: 1-63 characters of a-z, 0-9, and _, starting with a letter or _. public is reserved. An illegal handle is 400 and the error quotes that rule. handle name \"my-org\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. Nothing is stored. A taken handle is 409 user already exists. Success is 201 and the caller is the owner.",
-    "project_dataset_site": "1-63 characters of a-z, 0-9, and _, starting with a letter or _. A bad name is 400 and the error quotes this rule. inventory, dev, and www are legal.",
+    "project_dataset_site": "1-63 characters of a-z, 0-9, and _, starting with a letter or _. A bad name is 400 and the error quotes this rule. shelf, dev, and www are legal.",
     "version": "1-63 characters of a-z, 0-9, '.', '_', and '-', not starting with '.'. No '@'. A name that ends in -dev is a draft and accepts /schema writes. Any other name is published and refuses /schema writes. 0.0.1-dev and 0.0.1 are the names this guide uses."
   },
   "prefixes": [
@@ -402,7 +360,7 @@
       "summary": "Declared actions. GET /actions is this list. A new app's records go through /data, because a declared action with no handler is 501."
     }
   ],
-  "read_this": "Read guide in order. A path containing {account} or another {name} is a pattern: substitute your handle, project, version, collection, and ids. The do text of each step gives the concrete URLs for the parts example. There is no OpenAPI document, no /docs page, and no loco command on this server. docs is empty. Fieldsets, secrets, variables, integrations, and declared actions exist and are not required to publish a list-and-edit page. When a JSON error includes see, GET that path and read it again. Send Content-Type: application/json on every JSON body. CORS allows every origin, method, and header. Responses are JSON.",
+  "read_this": "Read guide in order. A path containing {account} or another {name} is a pattern: substitute your handle, project, version, collection, and ids. The do text of each step gives the concrete URLs for the reading-list example. There is no OpenAPI document, no /docs page, and no loco command on this server. docs is empty. Fieldsets, secrets, variables, integrations, and declared actions exist and are not required to publish a list-and-edit page. When a JSON error includes see, GET that path and read it again. Send Content-Type: application/json on every JSON body. CORS allows every origin, method, and header. Responses are JSON.",
   "routes": [
     {
       "auth": "none",
@@ -552,7 +510,7 @@
       "auth": "bearer",
       "method": "PUT",
       "path": "/schema/{account}/{project}/{version}/manifest",
-      "summary": "Update the manifest. {\"public_permission_sets\":[\"parts_public\"]} assigns that set to public."
+      "summary": "Update the manifest. {\"public_permission_sets\":[\"books_read\"]} assigns that read-only set to public."
     },
     {
       "auth": "bearer",
@@ -660,7 +618,7 @@
       "auth": "site",
       "method": "GET",
       "path": "/data/{collection}/list",
-      "summary": "Every record. data is an array. Read data[0].fields.sku, not data[0].sku."
+      "summary": "Every record. data is an array. Read data[0].fields.title, not data[0].title."
     },
     {
       "auth": "site",
@@ -690,7 +648,7 @@
       "auth": "site",
       "method": "POST",
       "path": "/data/query",
-      "summary": "Batched reads. Records for a query named parts are at data.parts.records."
+      "summary": "Batched reads. Records for a query named books are at data.books.records."
     },
     {
       "auth": "site",
@@ -713,22 +671,22 @@
   ],
   "signup": {
     "body": {
-      "name": "Lego Reseller",
+      "name": "Book Club",
       "password": "any-non-empty",
-      "username": "lego_reseller"
+      "username": "book_club"
     },
     "content_type": "application/json",
-    "handle": "username is the handle. It must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. The reserved word public is refused. lego_reseller is legal. lego-reseller, Lego, 1lego, and a 64-character handle are not. name may contain spaces and capitals. There is no password complexity rule. A hyphen in the password is fine.",
+    "handle": "username is the handle. It must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. The reserved word public is refused. book_club is legal. book-club, Book, 1book, and a 64-character handle are not. name may contain spaces and capitals. There is no password complexity rule. A hyphen in the password is fine.",
     "method": "POST",
     "missing_field": "A JSON body that does not parse, or that omits a required field, is 400 {\"ok\": false, \"error\": \"...\"} and the error names the field. On POST /auth/users the required JSON fields are username and name. Send both. The same 400 applies to POST /auth/login when username is missing, to PUT /auth/users/{id} when the body is not JSON, and to POST /auth/api-keys when label is missing. A missing, empty, or whitespace-only password on signup is 400 {\"ok\": false, \"error\": \"password is required\"}.",
     "path": "/auth/users",
-    "rejected_handle": "400. error is handle name \"lego-reseller\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. The message quotes the handle you sent. The reserved word public is 400 and error is handle name \"public\" is reserved. Change the handle and retry. A wrong password or an unknown user on POST /auth/login is 401 and error is invalid credentials.",
+    "rejected_handle": "400. error is handle name \"book-club\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. The message quotes the handle you sent. The reserved word public is 400 and error is handle name \"public\" is reserved. Change the handle and retry. A wrong password or an unknown user on POST /auth/login is 401 and error is invalid credentials.",
     "success": "201. data.username is the handle. data.id is a UUID. Use that UUID only for PUT and DELETE /auth/users/{id}. There is no token in this response. Call POST /auth/login next. The project account is data.username, not data.id.",
     "taken": "409 {\"ok\": false, \"error\": \"user already exists\"}. Pick a different handle."
   },
   "site": {
-    "example": "http://dev.inventory.lego_reseller.{listen-host}/",
-    "note": "site.example and the open-the-site URLs in guide steps 9 and 10 are built from the Host of this response, so they name this server. A name ending in .localhost resolves to the machine serving the response. When that Host is an IP address, those URLs use localhost and the same port, because an IP is not a site host. Curling an IP serves the API only, unless you also send Host: dev.inventory.lego_reseller.{listen-host}. The host with no site labels is the API only. After you publish, http://{listen-host}/ is still JSON. Open the three-label host. A deployment needs those site hostnames to resolve to this server, with wildcard DNS for the three labels in front of the listen host, or it sets LOCO_DEFAULT_SITE to {account}/{project}/{site} and serves that site at the apex. Issue #145 will replace these three-level site hosts. Hosted files are public. Do not put a bearer token in the page.",
+    "example": "http://dev.shelf.book_club.{listen-host}/",
+    "note": "site.example and the open-the-site URLs in guide steps 9 and 10 are built from the Host of this response, so they name this server. A name ending in .localhost resolves to the machine serving the response. When that Host is an IP address, those URLs use localhost and the same port, because an IP is not a site host. Curling an IP serves the API only, unless you also send Host: dev.shelf.book_club.{listen-host}. The host with no site labels is the API only. After you publish, http://{listen-host}/ is still JSON. Open the three-label host. A deployment needs those site hostnames to resolve to this server, with wildcard DNS for the three labels in front of the listen host, or it sets LOCO_DEFAULT_SITE to {account}/{project}/{site} and serves that site at the apex. Issue #145 will replace these three-level site hosts. The HTML is public. Do not embed a token in the file. The page logs in and stores one for this origin.",
     "url": "http://{site}.{project}.{account}.{listen-host}/"
   },
   "summary": "Loco is an HTTP API. You declare a collection, store records in it, upload a static page, and open that page on a site URL. This JSON is the whole interface. Follow guide from n=1. Do not invent paths.",

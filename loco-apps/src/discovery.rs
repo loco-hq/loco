@@ -291,7 +291,7 @@ mod tests {
             "api.example.com:443"
         );
         assert_eq!(
-            request_listen_host("dev.inventory.reseller.localhost:3917", true),
+            request_listen_host("dev.shelf.book_club.localhost:3917", true),
             "localhost:3917"
         );
         assert_eq!(
@@ -299,7 +299,7 @@ mod tests {
             "example.com"
         );
         assert_eq!(
-            request_listen_host("dev.inventory.lego_reseller.api.example.com:8443", true),
+            request_listen_host("dev.shelf.book_club.api.example.com:8443", true),
             "api.example.com:8443"
         );
         assert_eq!(request_listen_host("", false), "localhost");
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(doc["docs"].as_array().unwrap().len(), 0);
         assert_eq!(
             doc["site"]["example"],
-            "http://dev.inventory.lego_reseller.api.example:3917/"
+            "http://dev.shelf.book_club.api.example:3917/"
         );
         assert_eq!(
             doc["site"]["url"],
@@ -361,8 +361,8 @@ mod tests {
         assert!(note.contains("#145"), "{note}");
         let open = doc["guide"][8]["do"].as_str().unwrap();
         let publish = doc["guide"][9]["do"].as_str().unwrap();
-        assert!(open.contains("http://dev.inventory.lego_reseller.api.example:3917/"));
-        assert!(publish.contains("http://www.inventory.lego_reseller.api.example:3917/"));
+        assert!(open.contains("http://dev.shelf.book_club.api.example:3917/"));
+        assert!(publish.contains("http://www.shelf.book_club.api.example:3917/"));
         assert!(
             !open.contains(":3000") && !open.contains("{port}"),
             "{open}"
@@ -371,14 +371,11 @@ mod tests {
         let handle = doc["signup"]["handle"].as_str().unwrap();
         assert!(handle.contains("1-63"), "{handle}");
         assert!(handle.contains("a-z"), "{handle}");
-        assert!(handle.contains("lego_reseller"), "{handle}");
+        assert!(handle.contains("book_club"), "{handle}");
         let rejected = doc["signup"]["rejected_handle"].as_str().unwrap();
         assert!(rejected.contains("400"), "{rejected}");
         assert!(rejected.contains("1-63"), "{rejected}");
-        assert!(
-            rejected.contains("handle name \"lego-reseller\""),
-            "{rejected}"
-        );
+        assert!(rejected.contains("handle name \"book-club\""), "{rejected}");
         let missing = doc["signup"]["missing_field"].as_str().unwrap();
         assert!(missing.contains("400"), "{missing}");
         assert!(missing.contains("username"), "{missing}");
@@ -434,10 +431,40 @@ mod tests {
         }
         assert!(saw_page, "guide does not include the page to upload");
         assert!(INDEX_HTML.contains("discovery page"));
-        assert!(INDEX_HTML.contains("/data/parts/list"));
-        assert!(INDEX_HTML.contains("/data/parts/add"));
-        assert!(INDEX_HTML.contains("/data/parts/update/"));
-        assert!(!INDEX_HTML.contains("Authorization"));
+        assert!(INDEX_HTML.contains("/auth/login"));
+        assert!(INDEX_HTML.contains("/auth/logout"));
+        assert!(INDEX_HTML.contains("Authorization"));
+        assert!(INDEX_HTML.contains("Bearer"));
+        assert!(INDEX_HTML.contains("localStorage"));
+        assert!(INDEX_HTML.contains("location.origin"));
+        assert!(INDEX_HTML.contains("/data/books/list"));
+        assert!(INDEX_HTML.contains("/data/books/add"));
+        assert!(INDEX_HTML.contains("/data/books/update/"));
+        assert!(!INDEX_HTML.contains("parts"));
+    }
+
+    #[test]
+    fn guide_example_is_a_member_reading_list() {
+        let raw = include_str!("discovery.json");
+        assert!(!raw.contains("A hosted page sends no token"));
+        assert!(!raw.contains("lego_reseller"));
+        assert!(
+            !raw.contains("parts"),
+            "discovery.json contains \"parts\" at {}",
+            raw.find("parts").unwrap_or(0)
+        );
+        let doc = document_for("localhost");
+        let members = doc["guide"][5]["do"].as_str().unwrap();
+        assert!(members.contains("role\": \"editor\""), "{members}");
+        assert!(members.contains("books_read"), "{members}");
+        assert!(
+            members.contains("only for data you mean anyone to read or write"),
+            "{members}"
+        );
+        assert!(
+            members.contains("lets anyone with the URL change the data"),
+            "{members}"
+        );
     }
 
     #[test]
@@ -537,7 +564,7 @@ mod tests {
         let discovery_body: Value = serde_json::from_str(&discovery.text().await.unwrap()).unwrap();
         assert_eq!(
             discovery_body["site"]["example"],
-            format!("http://dev.inventory.lego_reseller.localhost:{port}/")
+            format!("http://dev.shelf.book_club.localhost:{port}/")
         );
         assert!(discovery_body["site"]["note"]
             .as_str()
