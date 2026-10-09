@@ -18,6 +18,7 @@ use base64::Engine;
 /// `LOCO_SECRET_KEY` as this process will use it.
 ///
 /// `Ready` is not `Debug`-printed: the bytes are the key.
+#[derive(Clone)]
 pub enum KeyStatus {
     /// The variable is unset. Secret writes are 503; the process still boots
     /// so variable writes work.
@@ -38,11 +39,13 @@ impl std::fmt::Debug for KeyStatus {
 }
 
 impl KeyStatus {
-    /// Read `LOCO_SECRET_KEY` once at boot.
-    pub fn from_env() -> Self {
-        match std::env::var("LOCO_SECRET_KEY") {
-            Err(_) => Self::Missing,
-            Ok(raw) => match parse_secret_key(&raw) {
+    /// `None` is an unset `LOCO_SECRET_KEY`. A present value is parsed.
+    /// A bad one stays [`Invalid`](Self::Invalid) so the process still boots.
+    /// The environment is read by `crate::config`, not here.
+    pub fn parse(raw: Option<&str>) -> Self {
+        match raw {
+            None => Self::Missing,
+            Some(raw) => match parse_secret_key(raw) {
                 Ok(key) => Self::Ready(key),
                 Err(msg) => Self::Invalid(msg),
             },

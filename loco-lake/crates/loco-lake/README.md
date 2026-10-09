@@ -23,7 +23,7 @@ pub trait DataAdapter: Send + Sync {
 
 ### InMemoryAdapter
 
-`RwLock<HashMap<…>>`. Data does not survive restarts. Used by the Hurl suites (`LOCO_ADAPTER=memory`).
+`RwLock<HashMap<…>>`. Data does not survive restarts. The Hurl runner opens this adapter (`LakeConfig::Memory`).
 
 ```rust
 let adapter = InMemoryAdapter::new();

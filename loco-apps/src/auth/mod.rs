@@ -2,6 +2,7 @@ pub mod local;
 pub mod secret;
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
@@ -12,6 +13,24 @@ use axum::Json;
 use serde::Serialize;
 
 use crate::server::AppState;
+
+/// Auth adapter to open. Adding an adapter is a new variant and a match arm
+/// in [`AuthConfig::open`].
+#[derive(Debug)]
+pub enum AuthConfig {
+    Local { dir: PathBuf, auto_create: bool },
+}
+
+impl AuthConfig {
+    pub fn open(&self) -> Box<dyn AuthAdapter> {
+        match self {
+            Self::Local { dir, auto_create } => {
+                println!("Using local filesystem auth adapter ({})", dir.display());
+                Box::new(local::LocalAuthAdapter::with_auto_create(dir, *auto_create))
+            }
+        }
+    }
+}
 
 // --- Error ---
 

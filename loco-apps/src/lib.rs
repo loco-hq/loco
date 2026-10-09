@@ -7,6 +7,7 @@ pub mod actions;
 pub mod auth;
 pub mod bricklink;
 pub mod bundle;
+pub mod config;
 pub mod discovery;
 pub mod handlers;
 pub mod http;

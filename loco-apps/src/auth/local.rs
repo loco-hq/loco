@@ -137,12 +137,17 @@ pub struct LocalAuthAdapter {
 }
 
 impl LocalAuthAdapter {
-    /// Auto-create comes from the environment: off unless
-    /// `LOCO_AUTH_AUTO_CREATE=1` (or `cfg(test)`, for this crate's own tests).
+    /// Auto-create is off in a production build. This crate's own unit tests
+    /// turn it on (`cfg(test)`). The server does not call this: it opens
+    /// [`crate::auth::AuthConfig`], which carries the flag from
+    /// `LOCO_AUTH_AUTO_CREATE`.
     pub fn new(base_dir: &Path) -> Self {
-        Self::with_auto_create(base_dir, Self::auto_create_from_env())
+        Self::with_auto_create(base_dir, cfg!(test))
     }
 
+    /// `auto_create` off is the production default. An unknown handle would
+    /// otherwise take the `{handle}/*` namespace, because owning the person
+    /// account implies developer on it.
     pub fn with_auto_create(base_dir: &Path, auto_create: bool) -> Self {
         let adapter = LocalAuthAdapter {
             base_dir: base_dir.to_path_buf(),
@@ -500,18 +505,6 @@ impl LocalAuthAdapter {
             .values()
             .find(|i| i.id == id)
             .cloned()
-    }
-
-    /// First login of an unknown handle creates a person account + identity.
-    /// Only when `cfg(test)` or `LOCO_AUTH_AUTO_CREATE=1` — Hurl suites use
-    /// the env flag so they do not need per-suite auth fixtures. Off by
-    /// default: an unknown handle would otherwise take the `{handle}/*`
-    /// namespace, because owning the person account implies developer on it.
-    fn auto_create_from_env() -> bool {
-        cfg!(test)
-            || std::env::var("LOCO_AUTH_AUTO_CREATE")
-                .ok()
-                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
     }
 
     fn auto_create_person(
