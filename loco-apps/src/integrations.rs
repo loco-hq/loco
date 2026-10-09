@@ -147,7 +147,9 @@ mod tests {
     use loco_lake::InMemoryAdapter;
     use serde_json::{json, Map};
 
-    use crate::actions::{dispatch, ActionRegistry, Dispatch, HandlerDeps};
+    use crate::actions::{
+        dispatch, ActionFailure, ActionRegistry, ConnectionScope, Dispatch, HandlerDeps,
+    };
     use crate::auth::AuthUser;
     use crate::http::version_schema::{AddressResolution, VersionSchema};
     use crate::validation::kind;
@@ -393,7 +395,15 @@ mod tests {
             let flag = std::sync::Arc::clone(&flag);
             async move {
                 flag.store(true, Ordering::SeqCst);
-                let integration = ctx.connection.integration.clone();
+                let integration = match &ctx.connection.scope {
+                    ConnectionScope::Integration { integration, .. } => integration.clone(),
+                    ConnectionScope::Package { .. } => {
+                        return Err(ActionFailure::Failed {
+                            message: "read was not addressed to an integration".to_string(),
+                            diagnostics: Vec::new(),
+                        });
+                    }
+                };
                 let loose = match ctx.secret("license") {
                     Ok(value) => json!(value),
                     Err(err) => json!({ "error": err.to_string() }),

@@ -104,7 +104,7 @@ async fn run_action(
         data: state.lake.adapter(),
         secrets: state.secrets.clone(),
         variables: state.variables.clone(),
-        http: reqwest::Client::clone(state.http.as_ref()),
+        http: state.http.clone(),
     };
     let outcome = dispatch(
         &scope.schema,

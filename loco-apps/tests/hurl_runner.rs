@@ -452,7 +452,15 @@ fn read_request(stream: &mut std::net::TcpStream) -> std::io::Result<String> {
 async fn read_connection(
     ctx: loco_apps::actions::ActionContext,
 ) -> Result<serde_json::Value, loco_apps::actions::ActionFailure> {
-    let integration = ctx.connection.integration.clone();
+    let integration = match &ctx.connection.scope {
+        loco_apps::actions::ConnectionScope::Integration { integration, .. } => integration.clone(),
+        loco_apps::actions::ConnectionScope::Package { .. } => {
+            return Err(loco_apps::actions::ActionFailure::Failed {
+                message: "read was not addressed to an integration".to_string(),
+                diagnostics: Vec::new(),
+            });
+        }
+    };
     let loose = match ctx.secret("license") {
         Ok(value) => serde_json::json!(value),
         Err(err) => serde_json::json!({ "error": err.to_string() }),

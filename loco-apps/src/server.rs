@@ -36,7 +36,7 @@ pub struct AppState {
     /// This server's client, built once in [`build_app`]. No proxy. A redirect
     /// that changes scheme, host, or port is not followed. See
     /// [`crate::actions::http_client`].
-    pub http: Arc<reqwest::Client>,
+    pub http: reqwest::Client,
     /// The site the apex serves at `/`, as `({account}/{project}, {site})`.
     /// `None` is the API-only process. A host that names a site of its own
     /// always wins over this.
@@ -78,10 +78,6 @@ impl Default for Extensions {
 }
 
 pub fn build_app(config: &Config, extensions: Extensions) -> Router {
-    router(build_state(config, extensions))
-}
-
-fn build_state(config: &Config, extensions: Extensions) -> Arc<AppState> {
     // Seed committed projects the store lacks, then load the store. Writes
     // go only to `schemas/instances/`; `schemas/seed/` is read, never written.
     let root = &config.root;
@@ -114,12 +110,12 @@ fn build_state(config: &Config, extensions: Extensions) -> Arc<AppState> {
         config.secret_key.clone(),
     ));
     let variables: Arc<dyn VariableStore> = Arc::new(LakeVariableStore::new(adapter));
-    let http = Arc::new(crate::actions::http_client());
+    let http = crate::actions::http_client();
     let auth_adapter = config.auth.open();
     warn_projects_without_account(&schema, auth_adapter.as_ref());
     let default_site = resolve_default_site(&schema, config.default_site.as_deref());
 
-    Arc::new(AppState {
+    let state = Arc::new(AppState {
         lake,
         auth_adapter,
         schema,
@@ -128,10 +124,8 @@ fn build_state(config: &Config, extensions: Extensions) -> Arc<AppState> {
         http,
         default_site,
         extensions,
-    })
-}
+    });
 
-fn router(state: Arc<AppState>) -> Router {
     Router::new()
         // Registered here, not under a nest, so a site bundle cannot shadow
         // them. Every host answers these two GETs, including one that is
@@ -234,41 +228,4 @@ fn cors_layer() -> CorsLayer {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use loco_lake::LakeConfig;
-
-    use super::{build_state, AppState, Config, Extensions};
-    use crate::auth::AuthConfig;
-    use crate::values::KeyStatus;
-
-    #[test]
-    fn two_servers_store_distinct_http_clients() {
-        let dir_a = tempfile::tempdir().unwrap();
-        let dir_b = tempfile::tempdir().unwrap();
-        let a = boot(dir_a.path());
-        let b = boot(dir_b.path());
-        assert!(!Arc::ptr_eq(&a.http, &b.http));
-        let again = Arc::clone(&a.http);
-        assert!(Arc::ptr_eq(&a.http, &again));
-    }
-
-    fn boot(root: &std::path::Path) -> Arc<AppState> {
-        let config = Config {
-            root: root.to_path_buf(),
-            port: 0,
-            lake: LakeConfig::Memory,
-            auth: AuthConfig::Local {
-                dir: root.join("auth"),
-                auto_create: false,
-            },
-            default_site: None,
-            secret_key: KeyStatus::Missing,
-        };
-        build_state(&config, Extensions::default())
-    }
 }

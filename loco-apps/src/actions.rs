@@ -191,29 +191,43 @@ struct BoundVariable {
     row_id: String,
 }
 
+/// Which declarations a connection is allowed to read.
+///
+/// One fact, stored once. The undeclared-name message matches on it, and the
+/// action runner prepares the same enum.
+#[derive(Clone, Debug)]
+pub enum ConnectionScope {
+    /// The owning package's loose declarations. `owner` is the action's
+    /// project, the registry key. Row ids are canonical declaration
+    /// references: bare when `owner` is the running project, `{owner}.{name}`
+    /// when it is a dependency. An undeclared name says this package does
+    /// not declare it.
+    Package { owner: String },
+    /// One integration. `integration` is the canonical qualified name from
+    /// the asking view: bare for that project's own (`sf_east`),
+    /// `{account}/{project}.{name}` for a dependency's (`alice/pkg.store`).
+    /// `type_ref` is the type's reference from that same view. Row ids are
+    /// `{integration}:{name}`. An undeclared name names `type_ref`.
+    Integration {
+        integration: String,
+        type_ref: String,
+    },
+}
+
 /// Values and the server's HTTP client for one call.
 ///
 /// An integration connection reads that integration's rows on
 /// [`Self::dataset_id`] and nothing else. A loose declaration of the same
 /// bare name, and another integration's row, are not returned. A package
-/// connection reads the owning project's loose declarations. The row id is
-/// the canonical declaration reference (bare, or `{project}.{name}`), and an
-/// undeclared name says the package does not declare it. The secret store
-/// and the variable store stay private: a caller receives this connection,
-/// not every value on the dataset.
+/// connection reads the owning project's loose declarations. The secret
+/// store and the variable store stay private: a caller receives this
+/// connection, not every value on the dataset.
 #[derive(Clone)]
 pub struct Connection {
     pub dataset_id: String,
-    /// Canonical qualified integration when this connection is one
-    /// integration. Bare for that project's own integration (`sf_east`),
-    /// `{account}/{project}.{name}` for a dependency's (`alice/pkg.store`).
-    /// Empty when this connection is a package's loose declarations.
-    pub integration: String,
+    pub scope: ConnectionScope,
     secrets: Arc<dyn SecretStore>,
     variables: Arc<dyn VariableStore>,
-    /// Set for an integration. Absent for a package, whose undeclared-name
-    /// message does not name a type.
-    type_ref: Option<String>,
     secret_decls: Vec<BoundSecret>,
     variable_decls: Vec<BoundVariable>,
     http: reqwest::Client,
@@ -234,31 +248,35 @@ impl Connection {
         http: reqwest::Client,
     ) -> Self {
         let integration = spec.integration;
+        let secret_decls = spec
+            .secrets
+            .into_iter()
+            .map(|secret| BoundSecret {
+                row_id: format!("{integration}:{}", secret.name),
+                name: secret.name,
+                required: secret.required,
+            })
+            .collect();
+        let variable_decls = spec
+            .variables
+            .into_iter()
+            .map(|variable| BoundVariable {
+                row_id: format!("{integration}:{}", variable.name),
+                name: variable.name,
+                required: variable.required,
+                default_value: variable.default_value,
+            })
+            .collect();
         Self {
             dataset_id,
-            secret_decls: spec
-                .secrets
-                .into_iter()
-                .map(|secret| BoundSecret {
-                    row_id: format!("{integration}:{}", secret.name),
-                    name: secret.name,
-                    required: secret.required,
-                })
-                .collect(),
-            variable_decls: spec
-                .variables
-                .into_iter()
-                .map(|variable| BoundVariable {
-                    row_id: format!("{integration}:{}", variable.name),
-                    name: variable.name,
-                    required: variable.required,
-                    default_value: variable.default_value,
-                })
-                .collect(),
-            integration,
+            scope: ConnectionScope::Integration {
+                integration,
+                type_ref: spec.type_ref,
+            },
             secrets,
             variables,
-            type_ref: Some(spec.type_ref),
+            secret_decls,
+            variable_decls,
             http,
         }
     }
@@ -299,10 +317,11 @@ impl Connection {
             .collect();
         Self {
             dataset_id,
-            integration: String::new(),
+            scope: ConnectionScope::Package {
+                owner: owner.to_string(),
+            },
             secrets,
             variables,
-            type_ref: None,
             secret_decls,
             variable_decls,
             http,
@@ -353,10 +372,14 @@ impl Connection {
     }
 
     fn undeclared(&self, kind: &'static str, name: &str) -> ConfigReadError {
+        let type_ref = match &self.scope {
+            ConnectionScope::Package { .. } => None,
+            ConnectionScope::Integration { type_ref, .. } => Some(type_ref.clone()),
+        };
         ConfigReadError::Undeclared {
             kind,
             name: name.to_string(),
-            type_ref: self.type_ref.clone(),
+            type_ref,
         }
     }
 
@@ -547,6 +570,7 @@ impl ActionRegistry {
         );
     }
 
+    #[cfg(test)]
     pub fn contains(&self, key: &ActionKey) -> bool {
         self.handlers.contains_key(key)
     }
@@ -600,13 +624,8 @@ pub enum Dispatch {
 
 struct Prepared {
     key: ActionKey,
-    scope: Scope,
+    scope: ConnectionScope,
     input: HashMap<String, Value>,
-}
-
-enum Scope {
-    Package { owner: String },
-    Integration(ConnectionDeclarations),
 }
 
 /// Validate `address`'s input, refuse a run whose connection is missing a
@@ -635,22 +654,16 @@ pub async fn dispatch(
     let Some(handler) = registry.get(&prepared.key) else {
         return no_handler(&prepared.key);
     };
-    let connection = match prepared.scope {
-        Scope::Package { owner } => Connection::for_package(
-            dataset_id.to_string(),
-            schema,
-            &owner,
-            deps.secrets,
-            deps.variables,
-            deps.http,
-        ),
-        Scope::Integration(spec) => Connection::new(
-            dataset_id.to_string(),
-            spec,
-            deps.secrets,
-            deps.variables,
-            deps.http,
-        ),
+    let connection = match connect(
+        schema,
+        dataset_id,
+        prepared.scope,
+        deps.secrets,
+        deps.variables,
+        deps.http,
+    ) {
+        Ok(connection) => connection,
+        Err(outcome) => return outcome,
     };
     let missing = match connection.missing_required() {
         Ok(missing) => missing,
@@ -697,7 +710,7 @@ fn prepare(
                     project: owner.clone(),
                     name: action.name().to_string(),
                 },
-                scope: Scope::Package { owner },
+                scope: ConnectionScope::Package { owner },
                 input,
             })
         }
@@ -724,9 +737,50 @@ fn prepare(
                     type_name: type_name.clone(),
                     name: action.name().to_string(),
                 },
-                scope: Scope::Integration(spec),
+                scope: ConnectionScope::Integration {
+                    integration: spec.integration,
+                    type_ref: spec.type_ref,
+                },
                 input,
             })
+        }
+    }
+}
+
+/// Build the connection `prepare` named.
+///
+/// An integration's declarations are read again from `schema`. The canonical
+/// name on the scope is what [`VersionSchema::split`] turns back into the
+/// project and the bare name, including a bare name that itself contains `.`.
+fn connect(
+    schema: &VersionSchema,
+    dataset_id: &str,
+    scope: ConnectionScope,
+    secrets: Arc<dyn SecretStore>,
+    variables: Arc<dyn VariableStore>,
+    http: reqwest::Client,
+) -> Result<Connection, Dispatch> {
+    match scope {
+        ConnectionScope::Package { owner } => Ok(Connection::for_package(
+            dataset_id.to_string(),
+            schema,
+            &owner,
+            secrets,
+            variables,
+            http,
+        )),
+        ConnectionScope::Integration { integration, .. } => {
+            let (project, name) = schema.split(&integration);
+            let Some(spec) = schema.connection_declarations(project, name) else {
+                return Err(Dispatch::NotFound);
+            };
+            Ok(Connection::new(
+                dataset_id.to_string(),
+                spec,
+                secrets,
+                variables,
+                http,
+            ))
         }
     }
 }

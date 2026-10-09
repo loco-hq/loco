@@ -547,7 +547,7 @@ fn connect(
         spec.clone(),
         state.secrets.clone(),
         Arc::clone(&state.variables),
-        reqwest::Client::clone(state.http.as_ref()),
+        state.http.clone(),
     );
     match connection.missing_required() {
         Ok(missing) if missing.is_empty() => Ok(connection),
