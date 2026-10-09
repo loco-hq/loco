@@ -10,9 +10,11 @@ jsonpath "$.name" == "loco"
 jsonpath "$.version" isString
 jsonpath "$.docs" count == 0
 jsonpath "$.discovery" == "/.well-known/loco.json"
+jsonpath "$.signup.handle" contains "1-63"
 jsonpath "$.signup.handle" contains "a-z"
-jsonpath "$.signup.rejected_handle" contains "invalid credentials"
-jsonpath "$.signup.missing_field" contains "422"
+jsonpath "$.signup.rejected_handle" contains "400"
+jsonpath "$.signup.rejected_handle" contains "1-63"
+jsonpath "$.signup.missing_field" contains "400"
 jsonpath "$.signup.missing_field" contains "password is required"
 jsonpath "$.routes" count == 51
 jsonpath "$.routes[0].method" == "GET"
@@ -75,23 +77,26 @@ HTTP 400
 [Asserts]
 jsonpath "$.error" contains "missing project"
 
-# Signup, as main answers it. A hyphen in the handle is rejected with the
-# same text as a bad login. A missing field is 422 text. An empty password
-# is 400. A taken handle is 409.
+# Signup, as main answers it. A hyphen in the handle is 400 naming the
+# account-name rule. A missing field is 400 JSON naming the field. An empty
+# password is 400. A taken handle is 409. A wrong password at login is 401.
 POST http://127.0.0.1:{{port}}/auth/users
 Content-Type: application/json
 {"username": "lego-reseller", "name": "Lego Reseller", "password": "pass-word-1"}
-HTTP 401
+HTTP 400
 [Asserts]
+header "Content-Type" contains "application/json"
 jsonpath "$.ok" == false
-jsonpath "$.error" == "invalid credentials"
+jsonpath "$.error" == "handle name \"lego-reseller\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _"
 
 POST http://127.0.0.1:{{port}}/auth/users
 Content-Type: application/json
 {}
-HTTP 422
+HTTP 400
 [Asserts]
-body contains "username"
+header "Content-Type" contains "application/json"
+jsonpath "$.ok" == false
+jsonpath "$.error" contains "username"
 
 POST http://127.0.0.1:{{port}}/auth/users
 Content-Type: application/json
@@ -116,6 +121,23 @@ Content-Type: application/json
 HTTP 409
 [Asserts]
 jsonpath "$.error" == "user already exists"
+
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{"username": "reseller", "password": "wrong-password"}
+HTTP 401
+[Asserts]
+jsonpath "$.ok" == false
+jsonpath "$.error" == "invalid credentials"
+
+POST http://127.0.0.1:{{port}}/auth/login
+Content-Type: application/json
+{}
+HTTP 400
+[Asserts]
+header "Content-Type" contains "application/json"
+jsonpath "$.ok" == false
+jsonpath "$.error" contains "username"
 
 POST http://127.0.0.1:{{port}}/auth/login
 Content-Type: application/json

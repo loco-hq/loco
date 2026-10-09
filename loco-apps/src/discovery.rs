@@ -6,12 +6,13 @@
 //! entry, and the unit tests refuse a guide step that names a path the
 //! table does not list.
 //!
-//! Signup below describes the server as it answers today. A handle that
-//! fails `LocalAuthAdapter::is_valid_handle` is 401 `invalid credentials`,
-//! the same text as a failed login. A body missing `username` or `name` is
-//! 422 text/plain from the JSON extractor. If #147 / PR #149 merges first,
-//! change `rejected_handle` to the 400 rule sentence and `missing_field` to
-//! the 400 JSON missing-field error, then rebase.
+//! Signup below matches main. An illegal handle on `POST /auth/users` is
+//! 400 naming the account-name rule (`http/names.rs`: 1–63 characters of
+//! `a-z`, `0-9`, and `_`, starting with a letter or `_`). A JSON body that
+//! does not parse, or that omits a required field, on `POST /auth/login`,
+//! `POST /auth/users`, `PUT /auth/users/{id}`, or `POST /auth/api-keys` is
+//! 400 JSON naming the field. A taken handle is 409. Login of a wrong
+//! password or an unknown user stays 401.
 
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -509,12 +510,12 @@ fn document_value() -> Value {
             "content_type": "application/json",
             "body": {"username": "lego_reseller", "password": "the password from signup"},
             "success": "200. data.token is the session. data.user.username is the handle. data.user.id is the same UUID as signup. Use the token as Authorization: Bearer <token>.",
-            "failure": "401 {\"ok\": false, \"error\": \"invalid credentials\"} for a wrong password or an unknown handle. Login does not create an account. An empty password on login is that same 401, not \"password is required\".",
+            "failure": "401 {\"ok\": false, \"error\": \"invalid credentials\"} for a wrong password, an empty password, or an unknown handle. Login does not create an account. A body that is not JSON, or that omits username, is 400 {\"ok\": false, \"error\": \"...\"} and the error names the field. That 400 is the body check. It is not the signup error \"password is required\".",
             "session": "A session lasts 7 days. There is no refresh. Log in again. POST /auth/logout with the bearer token ends it.",
             "api_key": "Optional. POST /auth/api-keys with {\"label\": \"agent\"} returns data.key once and data.id. GET /auth/api-keys/list does not show the secret. DELETE /auth/api-keys/{id} revokes it, using data.id. A key does not expire until it is revoked. Send it as the same Bearer token. Org accounts cannot log in and are not needed for a first app."
         },
         "names": {
-            "handle": "The username you sign up with. Non-empty, not the reserved word public, no '/', only a-z, 0-9, and _, starting with a letter or _. There is no length cap. lego_reseller is legal. lego-reseller, Lego, and 1lego are not. The display name may contain spaces and capitals. The project account is the handle, not the user UUID.",
+            "handle": "The username you sign up with. 1-63 characters of a-z, 0-9, and _, starting with a letter or _. public is reserved. lego_reseller is legal. lego-reseller, Lego, and 1lego are not. The display name may contain spaces and capitals. The project account is the handle, not the user UUID.",
             "project_dataset_site": "1-63 characters of a-z, 0-9, and _, starting with a letter or _. A bad name is 400 and the error quotes this rule. inventory, dev, and www are legal.",
             "version": "1-63 characters of a-z, 0-9, '.', '_', and '-', not starting with '.'. No '@'. A name that ends in -dev is a draft and accepts /schema writes. Any other name is published and refuses /schema writes. 0.0.1-dev and 0.0.1 are the names this guide uses.",
             "collection": "One or more of a-z, 0-9, '_', '.', and '-'. '$' is reserved and is rejected. parts is legal.",
@@ -541,9 +542,9 @@ fn signup() -> Value {
             "name": "Lego Reseller",
             "password": "any-non-empty"
         },
-        "handle": "username is the handle. It must be non-empty, not the reserved word public, contain no '/', and use only a-z, 0-9, and _, starting with a letter or _. lego_reseller is legal. lego-reseller, Lego, and 1lego are not. name may contain spaces and capitals. There is no length cap on a handle. There is no password complexity rule. A hyphen in the password is fine.",
-        "rejected_handle": "401 {\"ok\": false, \"error\": \"invalid credentials\"}. On signup this means the handle was rejected, including the reserved word public. It does not mean the password was wrong. Change the handle and retry. The same error text on POST /auth/login means the handle and password did not match.",
-        "missing_field": "A body missing username or name is 422 text/plain, not the JSON envelope, and the text names the missing field. Send both. A missing, empty, or whitespace-only password is 400 {\"ok\": false, \"error\": \"password is required\"}.",
+        "handle": "username is the handle. It must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. The reserved word public is refused. lego_reseller is legal. lego-reseller, Lego, 1lego, and a 64-character handle are not. name may contain spaces and capitals. There is no password complexity rule. A hyphen in the password is fine.",
+        "rejected_handle": "400. error is handle name \"lego-reseller\" must be 1-63 characters of a-z, 0-9, and _, starting with a letter or _. The message quotes the handle you sent. The reserved word public is 400 and error is handle name \"public\" is reserved. Change the handle and retry. A wrong password or an unknown user on POST /auth/login is 401 and error is invalid credentials.",
+        "missing_field": "A JSON body that does not parse, or that omits a required field, is 400 {\"ok\": false, \"error\": \"...\"} and the error names the field. On POST /auth/users the required JSON fields are username and name. Send both. The same 400 applies to POST /auth/login when username is missing, to PUT /auth/users/{id} when the body is not JSON, and to POST /auth/api-keys when label is missing. A missing, empty, or whitespace-only password on signup is 400 {\"ok\": false, \"error\": \"password is required\"}.",
         "taken": "409 {\"ok\": false, \"error\": \"user already exists\"}. Pick a different handle.",
         "success": "201. data.username is the handle. data.id is a UUID. Use that UUID only for PUT and DELETE /auth/users/{id}. There is no token in this response. Call POST /auth/login next. The project account is data.username, not data.id."
     })
@@ -563,7 +564,7 @@ fn guide() -> Value {
         {
             "n": 2,
             "title": "Create an account",
-            "do": "POST /auth/users. username is the handle (see signup.handle). name is a display name. password is any non-empty string. A 401 invalid credentials on this call means the handle was rejected: change username and retry. It does not mean the password was wrong. A 422 whose body is plain text and names username or name means that field was missing. A 400 password is required means the password was missing or blank. A 409 user already exists means the handle is taken. Success is 201 and does not include a token. Remember data.username (the account) and data.id (only for later user update or delete).",
+            "do": "POST /auth/users. username is the handle (see signup.handle). name is a display name. password is any non-empty string. A 400 whose error quotes the handle rule means the handle was rejected: change username and retry. The reserved handle public is 400 and the error says that name is reserved. A 400 whose error names username or name means that JSON field was missing, or the body was not JSON. A 400 password is required means the password was missing or blank. A 409 user already exists means the handle is taken. Success is 201 and does not include a token. Remember data.username (the account) and data.id (only for later user update or delete).",
             "requests": [
                 json_call(
                     "POST",
@@ -861,14 +862,23 @@ mod tests {
         assert_eq!(doc["discovery"], DISCOVERY_PATH);
         assert_eq!(doc["docs"].as_array().unwrap().len(), 0);
         let handle = doc["signup"]["handle"].as_str().unwrap();
+        assert!(handle.contains("1-63"), "{handle}");
         assert!(handle.contains("a-z"), "{handle}");
         assert!(handle.contains("lego_reseller"), "{handle}");
         let rejected = doc["signup"]["rejected_handle"].as_str().unwrap();
-        assert!(rejected.contains("invalid credentials"), "{rejected}");
-        assert!(rejected.contains("401"), "{rejected}");
+        assert!(rejected.contains("400"), "{rejected}");
+        assert!(rejected.contains("1-63"), "{rejected}");
+        assert!(
+            rejected.contains("handle name \"lego-reseller\""),
+            "{rejected}"
+        );
         let missing = doc["signup"]["missing_field"].as_str().unwrap();
-        assert!(missing.contains("422"), "{missing}");
+        assert!(missing.contains("400"), "{missing}");
+        assert!(missing.contains("username"), "{missing}");
         assert!(missing.contains("password is required"), "{missing}");
+        let login = doc["login"]["failure"].as_str().unwrap();
+        assert!(login.contains("401"), "{login}");
+        assert!(login.contains("invalid credentials"), "{login}");
         let routes = doc["routes"].as_array().unwrap();
         assert_eq!(routes.len(), ROUTES.len());
         for (got, expect) in routes.iter().zip(ROUTES.iter()) {
