@@ -18,6 +18,11 @@ use crate::server::AppState;
 #[derive(Debug)]
 pub enum AuthError {
     InvalidCredentials,
+    /// A new person handle failed the account-name rule. The string is that
+    /// rule, in the words `http/names.rs` uses, or that `public` is reserved.
+    /// Signup only. A handle already on disk is not re-checked, and inviting
+    /// one does not use this error.
+    InvalidHandle(String),
     SessionExpired,
     SessionNotFound,
     UserNotFound,
@@ -33,6 +38,7 @@ impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AuthError::InvalidCredentials => write!(f, "invalid credentials"),
+            AuthError::InvalidHandle(msg) => write!(f, "{msg}"),
             AuthError::SessionExpired => write!(f, "session expired"),
             AuthError::SessionNotFound => write!(f, "session not found"),
             AuthError::UserNotFound => write!(f, "user not found"),
@@ -327,6 +333,7 @@ pub fn auth_error_to_response(err: AuthError) -> Response {
         AuthError::InvalidCredentials => {
             auth_error_response(StatusCode::UNAUTHORIZED, "invalid credentials")
         }
+        AuthError::InvalidHandle(msg) => auth_error_response(StatusCode::BAD_REQUEST, &msg),
         AuthError::SessionExpired | AuthError::SessionNotFound => {
             auth_error_response(StatusCode::UNAUTHORIZED, &err.to_string())
         }

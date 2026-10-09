@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -34,9 +35,25 @@ pub struct LoginRequest {
     password: Option<String>,
 }
 
+/// A JSON body that does not parse, or that omits a required field, is 400
+/// `{"ok":false,"error":…}` naming the field. Axum's default is 422
+/// `text/plain`, which an outsider cannot tell from a transport failure.
+fn take_json<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, Response> {
+    body.map(|Json(value)| value)
+        .map_err(|rejection| error_response(StatusCode::BAD_REQUEST, &rejection.body_text()))
+}
+
 /// Global login. Does not use `SiteScope` — identity is not site-scoped.
-/// Site headers on this request are ignored.
-pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> Response {
+/// Site headers on this request are ignored. A wrong password or an unknown
+/// user stays 401 `invalid credentials`; a bad body is the JSON 400 above.
+pub async fn login(
+    State(state): State<Arc<AppState>>,
+    body: Result<Json<LoginRequest>, JsonRejection>,
+) -> Response {
+    let body = match take_json(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     let credentials = LoginCredentials {
         username: body.username,
         password: body.password,
@@ -69,12 +86,17 @@ pub struct CreateUserHttpRequest {
 }
 
 /// Self-service signup. No token. Password is required in the adapter
-/// (`CreateUserRequest.password` is a `String`); this maps a missing body
-/// field to 400 instead of 401.
+/// (`CreateUserRequest.password` is a `String`); a missing or blank password
+/// is 400. An illegal handle is 400 naming the account-name rule. A handle
+/// that already exists is 409.
 pub async fn create_user(
     State(state): State<Arc<AppState>>,
-    Json(body): Json<CreateUserHttpRequest>,
+    body: Result<Json<CreateUserHttpRequest>, JsonRejection>,
 ) -> Response {
+    let body = match take_json(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     let password = body.password.as_deref().map(str::trim).unwrap_or("");
     if password.is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "password is required");
@@ -101,8 +123,12 @@ pub async fn update_user(
     user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(body): Json<UpdateUserHttpRequest>,
+    body: Result<Json<UpdateUserHttpRequest>, JsonRejection>,
 ) -> Response {
+    let body = match take_json(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     if let Err(resp) = require_self(&user.0.user.id, &id) {
         return resp;
     }
@@ -136,8 +162,12 @@ pub struct CreateApiKeyRequest {
 pub async fn create_api_key(
     user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<CreateApiKeyRequest>,
+    body: Result<Json<CreateApiKeyRequest>, JsonRejection>,
 ) -> Response {
+    let body = match take_json(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     match state
         .auth_adapter
         .create_api_key(&user.0.user.id, &body.label)
